@@ -100,6 +100,7 @@ test('button preference controls toggle theme and language on a single click', (
   const storage = new Map();
   const location = { search: '', href: 'http://localhost/tenants', assign(value) { this.assigned = value; } };
   const context = vm.createContext({
+    NodeFilter: { SHOW_TEXT: 4 },
     window: { matchMedia: () => ({ matches: false }) },
     document: {
       documentElement: { dataset: {} },
