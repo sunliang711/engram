@@ -207,7 +207,14 @@
         </div>
         <div id="tenant-detail-view" class="hidden">
         <div class="card tenant-context">
-          <div class="section-heading"><div><p class="eyebrow">租户详情</p><h2 id="tenant-detail-title" tabindex="-1"></h2></div><span id="tenant-status" class="badge"></span></div>
+          <div class="section-heading">
+            <div><p class="eyebrow">租户详情</p><h2 id="tenant-detail-title" tabindex="-1"></h2></div>
+            <div class="button-row" style="align-items:center;">
+              <span id="tenant-status" class="badge"></span>
+              <button type="button" class="secondary small" id="btn-rename-tenant">改名</button>
+              <button type="button" class="danger-outline small" id="btn-delete-tenant">删除</button>
+            </div>
+          </div>
           <p class="desc">同一租户共享全局记忆，项目记忆按权限访问。不同租户的数据互相隔离。</p>
           <div id="tenant-summary" class="compact-stats" role="status"></div>
           <details class="identity-details"><summary>租户详情</summary><div id="tenant-identity"></div></details>
@@ -271,7 +278,15 @@
         </div>
         </div>
         <article class="card member-detail hidden" id="member-detail-card" aria-labelledby="member-detail-title">
-          <div class="section-heading"><div><p class="eyebrow" id="member-detail-context"></p><h2 id="member-detail-title" tabindex="-1"></h2></div><button type="button" class="secondary small" id="btn-close-member">返回租户详情</button></div>
+          <div class="section-heading">
+            <div><p class="eyebrow" id="member-detail-context"></p><h2 id="member-detail-title" tabindex="-1"></h2></div>
+            <div class="button-row">
+              <button type="button" class="secondary small" id="btn-rename-member">改名</button>
+              <button type="button" class="secondary small hidden" id="btn-remove-member-tenant">移出当前租户</button>
+              <button type="button" class="danger-outline small" id="btn-delete-member">删除成员</button>
+              <button type="button" class="secondary small" id="btn-close-member">返回租户详情</button>
+            </div>
+          </div>
           <p class="desc" id="member-detail-status"></p>
           <section class="member-section">
             <h3>全局记忆权限</h3>
@@ -581,12 +596,55 @@
         <div class="grid-2">
           <div class="card">
             <h2>导出迁移包</h2>
-            <p class="desc">用于整体迁移到另一台 Engram 服务。迁移包包含租户、成员与权限、项目及仓库地址、客户端密钥、全部知识（含回收站）、版本历史和变更记录；不包含管理员登录密码。</p>
+            <p class="desc">支持两种迁移模式：仅导出知识库（可多选租户），或导出全量系统（含租户、成员与客户端密钥）。</p>
             <form id="migration-export-form">
+              <div class="form-group">
+                <span class="field-label">迁移内容</span>
+                <div class="migration-mode-list">
+                  <label class="migration-mode-option">
+                    <input type="radio" name="mig-export-mode" value="knowledge" checked />
+                    <div>
+                      <strong>仅知识库</strong>
+                      <small class="field-hint">导出选中租户的知识、版本历史、项目及仓库绑定；不含租户成员与客户端密钥。</small>
+                    </div>
+                  </label>
+                  <label class="migration-mode-option">
+                    <input type="radio" name="mig-export-mode" value="system" />
+                    <div>
+                      <strong>知识库 + 租户、成员与密钥（全量系统）</strong>
+                      <small class="field-hint">导出全实例所有租户、成员与权限、项目及仓库地址、客户端密钥、全部知识、版本历史和变更记录；不含管理员登录密码。</small>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div id="mig-export-knowledge-options">
+                <div class="form-group">
+                  <div class="section-heading" style="margin-bottom:6px;">
+                    <span class="field-label" style="margin-bottom:0;">选择导出租户（可多选）</span>
+                    <div class="button-row" style="gap:6px;">
+                      <button type="button" class="secondary small" id="btn-mig-tenants-all">全选</button>
+                      <button type="button" class="secondary small" id="btn-mig-tenants-none">取消全选</button>
+                    </div>
+                  </div>
+                  <div id="mig-export-tenants-list" class="tenant-checkbox-list"></div>
+                  <small class="field-hint" id="mig-export-tenants-hint">可一次勾选一个或多个租户的知识库打包导出。</small>
+                </div>
+                <div class="form-group">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="mig-export-include-deleted" checked />
+                    <span>包含回收站中的已删除知识</span>
+                  </label>
+                </div>
+              </div>
+
               <div class="form-group">
                 <label for="mig-export-passphrase">可选：导出加密口令</label>
                 <input type="password" id="mig-export-passphrase" placeholder="留空则不加密" autocomplete="new-password" />
-                <small class="field-hint">
+                <small class="field-hint" id="mig-export-passphrase-hint-knowledge">
+                  可选使用 AES-256-GCM 整包加密保护知识内容；留空则以明文 JSON 打包。
+                </small>
+                <small class="field-hint hidden" id="mig-export-passphrase-hint-system">
                   建议设置口令（整包使用 AES-256-GCM 加密）。加密的迁移包会携带密钥明文，导入到签名密钥 <code>ENGRAM_CONTEXT_SIGN_KEY</code> 不同的服务后，仍能在控制台查看和复制客户端密钥；未加密的迁移包导入后，密钥仍可用于客户端鉴权，但不能再在控制台查看。
                 </small>
               </div>
@@ -596,7 +654,7 @@
 
           <div class="card">
             <h2>导入迁移包</h2>
-            <p class="desc">把另一台服务导出的迁移包（<code>engram-system-snapshot-*.zip</code>）完整还原到当前服务。还原在单个数据库事务内完成，失败时自动回滚，现有数据不受影响。</p>
+            <p class="desc">自动识别「仅知识库迁移包」与「全量系统迁移包」。导入在单个数据库事务内完成，失败时自动回滚。</p>
             <form id="migration-import-form">
               <div class="form-group">
                 <label for="mig-import-file">选择迁移包（.zip）</label>
@@ -604,20 +662,50 @@
               </div>
               <div class="form-group">
                 <label for="mig-import-passphrase">解密口令（导出时设置过口令才需要填写）</label>
-                <input type="password" id="mig-import-passphrase" placeholder="未加密包留空即可" autocomplete="off" />
+                <div class="filter-search">
+                  <input type="password" id="mig-import-passphrase" placeholder="未加密包留空即可" autocomplete="off" />
+                  <button type="button" class="secondary" id="btn-mig-inspect">解析迁移包</button>
+                </div>
               </div>
-              <div class="form-group">
-                <label class="checkbox-label warning-label">
-                  <input type="checkbox" id="mig-import-confirm" />
-                  <span>我确认清空当前服务的全部业务数据并用迁移包覆盖（管理员账号密码保留；当前为空库时可不勾选）</span>
-                </label>
+
+              <div id="mig-import-inspect-box" class="mig-inspect-box hidden"></div>
+
+              <div id="mig-import-knowledge-options" class="hidden">
+                <div class="form-group">
+                  <label for="mig-import-tenant-mode">目标租户映射方式</label>
+                  <select id="mig-import-tenant-mode">
+                    <option value="by_name">按原租户名称匹配（目标不存在时自动新建租户）</option>
+                    <option value="single">全部合并导入到指定租户</option>
+                  </select>
+                </div>
+                <div class="form-group hidden" id="mig-import-target-tenant-group">
+                  <label for="mig-import-target-tenant">选择目标租户</label>
+                  <select id="mig-import-target-tenant"></select>
+                </div>
+                <p class="field-hint" style="margin-bottom:14px;">
+                  仅知识库导入不会清空目标库现有租户、成员、密钥或已有知识；同作用域且内容哈希相同的条目会自动跳过，并保留版本历史。
+                </p>
               </div>
-              <button type="submit" class="danger">上传并还原</button>
+
+              <div id="mig-import-system-options" class="hidden">
+                <div class="form-group">
+                  <label class="checkbox-label warning-label">
+                    <input type="checkbox" id="mig-import-confirm" />
+                    <span>我确认清空当前服务的全部业务数据并用迁移包覆盖（管理员账号密码保留；当前为空库时可不勾选）</span>
+                  </label>
+                </div>
+              </div>
+
+              <button type="submit" id="btn-mig-import-submit">导入迁移包</button>
             </form>
 
             <div id="mig-import-result" class="hidden" style="margin-top:16px;">
-              <span class="badge success">还原成功</span>
-              <pre class="code-box" id="mig-import-result-box"></pre>
+              <span class="badge success" id="mig-import-result-badge">导入成功</span>
+              <p class="desc" id="mig-import-result-summary" style="margin-top:8px;margin-bottom:8px;"></p>
+              <details>
+                <summary>查看导入详情</summary>
+                <pre class="code-box" id="mig-import-result-box"></pre>
+              </details>
             </div>
           </div>
         </div>
@@ -734,6 +822,23 @@
         <div class="button-row confirm-actions">
           <button type="button" class="secondary" id="btn-cancel-purge">取消</button>
           <button type="submit" class="danger" id="btn-run-purge" disabled>下载备份并清空</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="rename-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+    <div class="modal-card confirm-card">
+      <h2 id="rename-title">重命名</h2>
+      <p class="desc" id="rename-desc"></p>
+      <form id="rename-form">
+        <div class="form-group">
+          <label for="rename-input" id="rename-label">新名称</label>
+          <input type="text" id="rename-input" required autocomplete="off" />
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-rename-cancel">取消</button>
+          <button type="submit" id="btn-rename-ok">保存</button>
         </div>
       </form>
     </div>

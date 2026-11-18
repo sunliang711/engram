@@ -25,6 +25,8 @@
     locationRequest: 0,
     initialized: null,
     toastTimer: null,
+    migInspect: null,
+    migExportTenantsInitialized: false,
   };
 
   function $(id) {
@@ -80,6 +82,10 @@
     [/^principal must be a member of the project's tenant/i, t("该成员还不属于这个项目所在的租户，请先绑定租户。")],
     [/^project name is required/i, t("请填写项目名称。")],
     [/^tenant name is required/i, t("请填写租户名称。")],
+    [/^display_name is required/i, t("请填写成员显示名称。")],
+    [/^tenant not found/i, t("租户不存在，请刷新后重试。")],
+    [/^principal not found/i, t("成员不存在，请刷新后重试。")],
+    [/^cannot (modify|delete) system principal/i, t("系统内置账号不允许修改或删除。")],
     [/^tenant_name, principal_subject, and principal_display_name are required/i, t("请填写租户名称、成员标识和显示名称。")],
     [/^project not found/i, t("项目不存在，请刷新后重新选择。")],
     [/^memory (is not deleted|is already deleted|is deleted|pinned state is unchanged)/i, t("这条知识的状态已经变化，请刷新后重试。")],
@@ -227,7 +233,7 @@
     renderMemoryProjectFilter();
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
-
+    renderMigrationSelectors();
   }
 
   // fillSelect rebuilds a filter list behind an "all" option, keeping a still-requested value selectable.
@@ -313,7 +319,13 @@
         <td>${escapeHtml(projectAccess)}</td>
         <td>${tokens.length}</td>
         <td><span class="badge ${p.status === "active" ? "success" : "danger"}">${statusLabel(p.status)}</span></td>
-        <td><button type="button" class="secondary small btn-manage-member" data-id="${p.id}" aria-controls="member-detail-card" aria-expanded="${p.id === state.selectedPrincipal}">${t("管理")}</button></td>
+        <td>
+          <div class="row-actions">
+            <button type="button" class="secondary small btn-manage-member" data-id="${p.id}" aria-controls="member-detail-card" aria-expanded="${p.id === state.selectedPrincipal}">${t("管理")}</button>
+            <button type="button" class="secondary small btn-rename-member" data-id="${p.id}">${t("改名")}</button>
+            <button type="button" class="danger-outline small btn-delete-member" data-id="${p.id}">${t("删除")}</button>
+          </div>
+        </td>
       </tr>`;
       })
       .join("");
@@ -326,6 +338,8 @@
     if (!principal) { state.selectedPrincipal = ""; return; }
     const tenant = state.tenants.find((item) => item.id === state.memberTenant);
     const membership = tenantMembership(principal);
+    const multiTenant = (principal.tenant_roles || []).length > 1;
+    if ($("btn-remove-member-tenant")) $("btn-remove-member-tenant").classList.toggle("hidden", !multiTenant);
     const context = state.memberTenant + ":" + principal.id;
     const sameContext = $("member-role").dataset.context === context;
     if (!sameContext || $("member-role").dataset.saved !== membership.role) $("member-role").value = membership.role;
@@ -386,7 +400,7 @@
       const members = visiblePrincipals().filter((person) => tenantMembership(person, tenant.id));
       const projects = state.projects.filter((project) => project.tenant_id === tenant.id && project.status === "active");
       const tokens = state.tokens.filter((token) => token.tenant_id === tenant.id && !token.revoked_at);
-      return `<tr><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button></td></tr>`;
+      return `<tr><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button><button type="button" class="secondary small btn-rename-tenant" data-id="${tenant.id}">${t("改名")}</button><button type="button" class="danger-outline small btn-delete-tenant" data-id="${tenant.id}">${t("删除")}</button></div></td></tr>`;
     }).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无租户，请先新建租户。")}</td></tr>`;
   }
 
@@ -1012,40 +1026,101 @@
     if (updateURL) syncLocation(true);
   }
 
-  // syncLocation stores only navigation and search state; credentials never enter URLs.
+  const TAB_PATHS = {
+    "tab-overview": "/overview",
+    "tab-memories": "/memories",
+    "tab-projects": "/projects",
+    "tab-tenants": "/tenants",
+    "tab-migration": "/migration",
+  };
+
+  // syncLocation stores navigation in URL paths and keeps only active list filters in query params.
   function syncLocation(push = false) {
     if (push) state.locationRequest++;
-    const params = new URLSearchParams({ tab: activeTab() });
-    if (activeTab() === "tab-memories") {
-      MEMORY_FILTERS.forEach(([key, id]) => { const value = $(id).value; if (value && !(key === "deleted" && value === "active")) params.set(key, value); });
-      params.set("page", state.memoryPage);
-      params.set("size", state.memoryPageSize);
-      if (state.selectedMemory) params.set("memory", state.selectedMemory.id);
+    const tab = activeTab();
+    let path = TAB_PATHS[tab] || "/overview";
+    if (tab === "tab-memories" && state.selectedMemory) {
+      path = `/memories/${encodeURIComponent(state.selectedMemory.id)}`;
+    } else if (tab === "tab-projects" && state.selectedProject) {
+      path = `/projects/${encodeURIComponent(state.selectedProject)}`;
+    } else if (tab === "tab-tenants" && state.memberTenant) {
+      path = state.selectedPrincipal
+        ? `/tenants/${encodeURIComponent(state.memberTenant)}/members/${encodeURIComponent(state.selectedPrincipal)}`
+        : `/tenants/${encodeURIComponent(state.memberTenant)}`;
     }
-    if (activeTab() === "tab-tenants" && state.memberTenant) {
-      params.set("tenant", state.memberTenant);
-      if (state.selectedPrincipal) params.set("member", state.selectedPrincipal);
+
+    const params = new URLSearchParams();
+    const currentLang = new URLSearchParams(location.search).get("lang");
+    if (currentLang) params.set("lang", currentLang);
+    if (tab === "tab-memories") {
+      MEMORY_FILTERS.forEach(([key, id]) => {
+        const value = $(id).value;
+        if (value && !(key === "deleted" && value === "active")) params.set(key, value);
+      });
+      if (state.memoryPage > 1) params.set("page", state.memoryPage);
+      if (state.memoryPageSize !== 20) params.set("size", state.memoryPageSize);
     }
-    if (activeTab() === "tab-projects" && state.selectedProject) params.set("project", state.selectedProject);
-    const hash = "#" + params.toString();
-    if (location.hash !== hash) history[push ? "pushState" : "replaceState"](null, "", hash);
+
+    const query = params.toString();
+    const nextURL = path + (query ? "?" + query : "");
+    const currentURL = location.pathname + location.search;
+    if (currentURL !== nextURL || location.hash) history[push ? "pushState" : "replaceState"](null, "", nextURL);
+  }
+
+  // parseRouteFromLocation resolves clean SPA paths and falls back to legacy hash links when present.
+  function parseRouteFromLocation() {
+    if (location.pathname === "/" && location.hash.startsWith("#tab=")) {
+      const legacy = new URLSearchParams(location.hash.slice(1));
+      const legacyTab = legacy.get("tab") === "tab-tokens" ? "tab-tenants" : legacy.get("tab");
+      return {
+        tab: legacyTab,
+        tenantID: legacyTab === "tab-tenants" ? legacy.get("tenant") || "" : "",
+        memberID: legacyTab === "tab-tenants" ? legacy.get("member") || "" : "",
+        projectID: legacyTab === "tab-projects" ? legacy.get("project") || "" : "",
+        memoryID: legacyTab === "tab-memories" ? legacy.get("memory") || "" : "",
+        queryParams: legacy,
+      };
+    }
+
+    const parts = location.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean).map((part) => {
+      try { return decodeURIComponent(part); } catch (_) { return part; }
+    });
+    const searchParams = new URLSearchParams(location.search);
+    const out = { tab: "tab-overview", tenantID: "", memberID: "", projectID: "", memoryID: "", queryParams: searchParams };
+    if (!parts.length || parts[0] === "overview") {
+      out.tab = "tab-overview";
+    } else if (parts[0] === "memories") {
+      out.tab = "tab-memories";
+      if (parts[1]) out.memoryID = parts[1];
+    } else if (parts[0] === "projects") {
+      out.tab = "tab-projects";
+      if (parts[1]) out.projectID = parts[1];
+    } else if (parts[0] === "tenants") {
+      out.tab = "tab-tenants";
+      if (parts[1]) out.tenantID = parts[1];
+      if (parts[2] === "members" && parts[3]) out.memberID = parts[3];
+    } else if (parts[0] === "migration") {
+      out.tab = "tab-migration";
+    }
+    return out;
   }
 
   // restoreLocation restores filters after selectors are populated and supports off-page detail links.
   async function restoreLocation() {
     const request = ++state.locationRequest;
-    const params = new URLSearchParams(location.hash.slice(1));
-    const tab = params.get("tab");
+    const route = parseRouteFromLocation();
+    const tab = route.tab;
+    const params = route.queryParams;
     const allowed = Array.from(document.querySelectorAll(".tab-btn")).map((button) => button.dataset.tab);
-    state.memberTenant = tab === "tab-tenants" ? params.get("tenant") || "" : "";
-    state.selectedPrincipal = tab === "tab-tenants" ? params.get("member") || "" : "";
-    const projectID = tab === "tab-projects" ? params.get("project") || "" : "";
+    state.memberTenant = route.tenantID;
+    state.selectedPrincipal = route.memberID;
+    const projectID = route.projectID;
     if (state.selectedProject !== projectID) $("add-project-remote-form").reset();
     state.selectedProject = projectID;
     $("tenant-forms-panel").classList.add("hidden");
     $("create-tenant-card").classList.add("hidden");
     $("project-forms-panel").classList.add("hidden");
-    switchMainTab(tab === "tab-tokens" ? "tab-tenants" : allowed.includes(tab) ? tab : "tab-overview", false);
+    switchMainTab(allowed.includes(tab) ? tab : "tab-overview", false);
     const filterParams = tab === "tab-memories" ? params : new URLSearchParams();
     MEMORY_FILTERS.forEach(([key, id]) => {
       const el = $(id); const fallback = key === "deleted" ? "active" : ""; const value = filterParams.get(key) || fallback;
@@ -1056,14 +1131,14 @@
       }
       el.value = value;
     });
-    const page = Number(params.get("page"));
+    const page = Number(filterParams.get("page"));
     state.memoryPage = Number.isInteger(page) && page > 0 && page <= 1000000 ? page : 1;
-    const size = Number(params.get("size"));
+    const size = Number(filterParams.get("size"));
     state.memoryPageSize = [20, 50, 100].includes(size) ? size : 20;
     $("mem-page-size").value = state.memoryPageSize;
     await loadMemories();
     if (request !== state.locationRequest) return;
-    const memoryID = params.get("memory");
+    const memoryID = route.memoryID;
     if (activeTab() === "tab-memories" && /^[a-f0-9-]{36}$/i.test(memoryID || "")) await viewMemoryDetail(memoryID, false);
     if (request === state.locationRequest) syncLocation();
   }
@@ -1119,6 +1194,31 @@
       };
       state.confirmResolve = finish;
     });
+  }
+
+  function closeRenameModal() {
+    const modal = $("rename-modal");
+    if (!modal || modal.classList.contains("hidden")) return;
+    modal.classList.add("hidden");
+    const opener = state.renameOpener;
+    state.renameTask = null;
+    state.renameOpener = null;
+    if (opener && opener.isConnected) opener.focus({ preventScroll: true });
+  }
+
+  function openRenameModal({ title, desc, label, initialValue, onSubmitValue }) {
+    const modal = $("rename-modal");
+    clearFormErrors($("rename-form"));
+    $("rename-title").textContent = title;
+    $("rename-desc").textContent = desc || "";
+    $("rename-desc").classList.toggle("hidden", !desc);
+    $("rename-label").textContent = label;
+    $("rename-input").value = initialValue || "";
+    state.renameOpener = document.activeElement;
+    state.renameTask = onSubmitValue;
+    modal.classList.remove("hidden");
+    $("rename-input").focus();
+    $("rename-input").select();
   }
 
   // FormError attaches a message to a specific field instead of the whole form.
@@ -1431,11 +1531,128 @@
     openTenant(res.id);
   });
 
+  function promptRenameTenant(tenantID) {
+    const tenant = state.tenants.find((item) => item.id === tenantID);
+    if (!tenant) return;
+    openRenameModal({
+      title: t("重命名租户"),
+      desc: t`当前租户名称：${tenant.name}`,
+      label: t("新租户名称"),
+      initialValue: tenant.name,
+      onSubmitValue: async (newName) => {
+        await api("/api/admin/tenants", {
+          method: "PATCH",
+          body: JSON.stringify({ id: tenant.id, name: newName }),
+        });
+        showToast(t("租户已重命名"));
+        await refreshAllData();
+      },
+    });
+  }
+
+  async function confirmDeleteTenant(tenantID) {
+    const tenant = state.tenants.find((item) => item.id === tenantID);
+    if (!tenant) return;
+    const confirmed = await confirmDialog({
+      title: t("删除租户？"),
+      message: t`将永久删除租户「${tenant.name}」及其全部项目、仓库关联、客户端密钥和知识库（共已关联成员不会被删除）。此操作无法撤销。`,
+      confirmText: t("确认删除"),
+    });
+    if (!confirmed) return;
+    try {
+      await api("/api/admin/tenants", {
+        method: "DELETE",
+        body: JSON.stringify({ id: tenant.id }),
+      });
+      if (state.memberTenant === tenant.id) {
+        state.memberTenant = "";
+        state.selectedPrincipal = "";
+      }
+      showToast(t`租户「${tenant.name}」已删除`);
+      await refreshAllData();
+      syncLocation(true);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  function promptRenameMember(principalID) {
+    const principal = visiblePrincipals().find((item) => item.id === principalID);
+    if (!principal) return;
+    openRenameModal({
+      title: t("修改成员名称"),
+      desc: t`成员标识：${principal.subject}`,
+      label: t("新显示名称"),
+      initialValue: principal.display_name,
+      onSubmitValue: async (newName) => {
+        await api("/api/admin/principals", {
+          method: "PATCH",
+          body: JSON.stringify({ id: principal.id, display_name: newName }),
+        });
+        showToast(t("成员名称已更新"));
+        await refreshAllData();
+      },
+    });
+  }
+
+  async function confirmRemoveMemberFromTenant(principalID) {
+    const principal = visiblePrincipals().find((item) => item.id === principalID);
+    const tenant = state.tenants.find((item) => item.id === state.memberTenant);
+    if (!principal || !tenant) return;
+    const confirmed = await confirmDialog({
+      title: t("从当前租户移除成员？"),
+      message: t`将「${principal.display_name}」移出租户「${tenant.name}」，并清除该成员在此租户下的项目权限与客户端密钥；成员账号及其他租户的权限保留不变。`,
+      confirmText: t("确认移除"),
+    });
+    if (!confirmed) return;
+    try {
+      await api("/api/admin/principals", {
+        method: "DELETE",
+        body: JSON.stringify({ id: principal.id, tenant_id: tenant.id, scope: "tenant" }),
+      });
+      if (state.selectedPrincipal === principal.id) state.selectedPrincipal = "";
+      showToast(t`已将「${principal.display_name}」移出当前租户`);
+      await refreshAllData();
+      syncLocation(true);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function confirmDeleteMember(principalID) {
+    const principal = visiblePrincipals().find((item) => item.id === principalID);
+    if (!principal) return;
+    const confirmed = await confirmDialog({
+      title: t("彻底删除成员？"),
+      message: t`将删除成员「${principal.display_name}」（${principal.subject}）及其在所有租户的权限和客户端密钥；该成员历史创建的知识与版本记录会保留并归属为「管理控制台」。此操作无法撤销。`,
+      confirmText: t("确认删除"),
+    });
+    if (!confirmed) return;
+    try {
+      await api("/api/admin/principals", {
+        method: "DELETE",
+        body: JSON.stringify({ id: principal.id, scope: "all" }),
+      });
+      if (state.selectedPrincipal === principal.id) state.selectedPrincipal = "";
+      showToast(t`成员「${principal.display_name}」已删除`);
+      await refreshAllData();
+      syncLocation(true);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
   // Parent navigation always rebuilds the scoped member and credential lists.
   $("tenants-table").addEventListener("click", (event) => {
-    const button = event.target.closest(".btn-open-tenant");
-    if (button) openTenant(button.dataset.id);
+    const openBtn = event.target.closest(".btn-open-tenant");
+    if (openBtn) { openTenant(openBtn.dataset.id); return; }
+    const renameBtn = event.target.closest(".btn-rename-tenant");
+    if (renameBtn) { promptRenameTenant(renameBtn.dataset.id); return; }
+    const deleteBtn = event.target.closest(".btn-delete-tenant");
+    if (deleteBtn) confirmDeleteTenant(deleteBtn.dataset.id);
   });
+  if ($("btn-rename-tenant")) $("btn-rename-tenant").addEventListener("click", () => state.memberTenant && promptRenameTenant(state.memberTenant));
+  if ($("btn-delete-tenant")) $("btn-delete-tenant").addEventListener("click", () => state.memberTenant && confirmDeleteTenant(state.memberTenant));
   $("btn-tenant-list").addEventListener("click", () => openTenant(""));
   $("btn-tenant-detail").addEventListener("click", () => openTenant(state.memberTenant));
   $("projects-table").addEventListener("click", (event) => {
@@ -1458,11 +1675,32 @@
   });
   $("btn-cancel-member").addEventListener("click", () => { $("tenant-forms-panel").classList.add("hidden"); $("btn-add-member").focus(); });
   $("principals-table").addEventListener("click", (event) => {
-    const button = event.target.closest(".btn-manage-member");
-    if (!button) return;
-    openTenant(state.memberTenant, button.dataset.id);
+    const manageBtn = event.target.closest(".btn-manage-member");
+    if (manageBtn) { openTenant(state.memberTenant, manageBtn.dataset.id); return; }
+    const renameBtn = event.target.closest(".btn-rename-member");
+    if (renameBtn) { promptRenameMember(renameBtn.dataset.id); return; }
+    const deleteBtn = event.target.closest(".btn-delete-member");
+    if (deleteBtn) confirmDeleteMember(deleteBtn.dataset.id);
   });
+  if ($("btn-rename-member")) $("btn-rename-member").addEventListener("click", () => state.selectedPrincipal && promptRenameMember(state.selectedPrincipal));
+  if ($("btn-remove-member-tenant")) $("btn-remove-member-tenant").addEventListener("click", () => state.selectedPrincipal && confirmRemoveMemberFromTenant(state.selectedPrincipal));
+  if ($("btn-delete-member")) $("btn-delete-member").addEventListener("click", () => state.selectedPrincipal && confirmDeleteMember(state.selectedPrincipal));
   $("btn-close-member").addEventListener("click", () => openTenant(state.memberTenant));
+  if ($("btn-rename-cancel")) $("btn-rename-cancel").addEventListener("click", closeRenameModal);
+  if ($("rename-modal")) {
+    $("rename-modal").addEventListener("click", (event) => {
+      if (event.target === $("rename-modal")) closeRenameModal();
+    });
+  }
+  onSubmit("rename-form", async (e) => {
+    e.preventDefault();
+    const val = $("rename-input").value.trim();
+    if (!val) throw new FormError(t("名称不能为空。"), "rename-input");
+    if (state.renameTask) {
+      await state.renameTask(val);
+      closeRenameModal();
+    }
+  });
   ["prin-mode", "prin-existing", "prin-role"].forEach((id) => $(id).addEventListener("change", updatePrincipalMode));
   $("member-role").addEventListener("change", () => { $("member-role-hint").textContent = tenantRoleHint($("member-role").value); });
 
@@ -1711,19 +1949,21 @@
   });
   document.addEventListener("keydown", (e) => {
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
+    const renameOpen = $("rename-modal") && !$("rename-modal").classList.contains("hidden");
     const purgeOpen = !$("purge-modal").classList.contains("hidden");
     const glossaryOpen = !$("glossary-modal").classList.contains("hidden");
     const clientConfigOpen = !$("client-config-modal").classList.contains("hidden");
     const detailOpen = !$("memory-detail-card").classList.contains("hidden");
     if (e.key === "Escape") {
       if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
+      else if (renameOpen) closeRenameModal();
       else if (purgeOpen) closePurgeModal();
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (clientConfigOpen) closeClientGuides();
       else if (detailOpen) closeMemoryDetail();
     }
-    if (e.key === "Tab" && (confirmOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen)) {
-      const dialog = $(confirmOpen ? "confirm-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
+    if (e.key === "Tab" && (confirmOpen || renameOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen)) {
+      const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
       if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
@@ -1940,15 +2180,223 @@
     }
   });
 
+  function selectedMigrationExportMode() {
+    const checked = document.querySelector('input[name="mig-export-mode"]:checked');
+    return checked ? checked.value : "knowledge";
+  }
+
+  function syncMigrationExportMode() {
+    const mode = selectedMigrationExportMode();
+    const isKnowledge = mode === "knowledge";
+    if ($("mig-export-knowledge-options")) $("mig-export-knowledge-options").classList.toggle("hidden", !isKnowledge);
+    if ($("mig-export-passphrase-hint-knowledge")) $("mig-export-passphrase-hint-knowledge").classList.toggle("hidden", !isKnowledge);
+    if ($("mig-export-passphrase-hint-system")) $("mig-export-passphrase-hint-system").classList.toggle("hidden", isKnowledge);
+  }
+
+  function renderMigrationSelectors() {
+    const list = $("mig-export-tenants-list");
+    if (list) {
+      if (!state.tenants.length) {
+        list.innerHTML = `<span class="muted">${t("尚无租户")}</span>`;
+      } else {
+        const prevChecked = new Set(Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((el) => el.value));
+        const defaultAll = !state.migExportTenantsInitialized;
+        list.innerHTML = state.tenants
+          .map((tenant) => {
+            const checked = defaultAll || prevChecked.has(tenant.id) ? "checked" : "";
+            return `<label class="checkbox-label"><input type="checkbox" value="${escapeHtml(tenant.id)}" ${checked} /><span>${escapeHtml(tenantLabel(tenant))}</span></label>`;
+          })
+          .join("");
+        state.migExportTenantsInitialized = true;
+      }
+    }
+
+    const targetSelect = $("mig-import-target-tenant");
+    if (targetSelect) {
+      const prev = targetSelect.value;
+      targetSelect.innerHTML = state.tenants
+        .map((tenant) => `<option value="${escapeHtml(tenant.id)}">${escapeHtml(tenantLabel(tenant))}</option>`)
+        .join("");
+      if (prev && Array.from(targetSelect.options).some((opt) => opt.value === prev)) {
+        targetSelect.value = prev;
+      }
+    }
+  }
+
+  function migrationFileKey(file) {
+    return file ? `${file.name}:${file.size}:${file.lastModified}` : "";
+  }
+
+  function syncMigrationImportTenantMode() {
+    const mode = $("mig-import-tenant-mode") ? $("mig-import-tenant-mode").value : "by_name";
+    if ($("mig-import-target-tenant-group")) {
+      $("mig-import-target-tenant-group").classList.toggle("hidden", mode !== "single");
+    }
+  }
+
+  function renderMigrationInspect() {
+    const box = $("mig-import-inspect-box");
+    const knowledgeOpts = $("mig-import-knowledge-options");
+    const systemOpts = $("mig-import-system-options");
+    const submitBtn = $("btn-mig-import-submit");
+    if (!box || !knowledgeOpts || !systemOpts || !submitBtn) return;
+
+    const info = state.migInspect;
+    if (!info) {
+      box.classList.add("hidden");
+      box.innerHTML = "";
+      knowledgeOpts.classList.add("hidden");
+      systemOpts.classList.add("hidden");
+      submitBtn.textContent = t("导入迁移包");
+      submitBtn.classList.remove("danger");
+      return;
+    }
+
+    const isKnowledge = info.format === "engram-knowledge-bundle";
+    const typeBadge = isKnowledge ? `<span class="badge">${t("知识库迁移包")}</span>` : `<span class="badge warning">${t("全量系统迁移包")}</span>`;
+    const encBadge = info.encrypted ? `<span class="badge">${t("已加密")}</span>` : `<span class="badge success">${t("未加密")}</span>`;
+    const c = info.counts || {};
+    const statsParts = [
+      t`${c.tenants || 0} 个租户`,
+      t`${c.projects || 0} 个项目`,
+      t`${c.memories || 0} 条知识`,
+      t`${c.memory_revisions || 0} 条版本历史`,
+    ];
+    if (!isKnowledge) {
+      statsParts.push(t`${c.principals || 0} 位成员`, t`${c.api_tokens || 0} 个密钥`);
+    }
+
+    let detailsHtml = `<div class="mig-inspect-header">${typeBadge}${encBadge}<span class="meta-text">${escapeHtml(formatDate(info.exported_at))}</span></div>`;
+    detailsHtml += `<p class="desc" style="margin-bottom:0;">${escapeHtml(statsParts.join(" · "))}</p>`;
+    if (info.needs_passphrase) {
+      detailsHtml += `<p class="field-hint" style="margin-top:8px;">${t("该迁移包已加密，请填写解密口令后点击「解析迁移包」。")}</p>`;
+      box.innerHTML = detailsHtml;
+      box.classList.remove("hidden");
+      knowledgeOpts.classList.add("hidden");
+      systemOpts.classList.add("hidden");
+      submitBtn.textContent = t("导入迁移包");
+      submitBtn.classList.remove("danger");
+      return;
+    }
+
+    if (Array.isArray(info.tenants) && info.tenants.length) {
+      detailsHtml += `<ul class="mig-inspect-tenants">${info.tenants
+        .map((item) => `<li>${escapeHtml(item.name)} · ${escapeHtml(t`${item.projects_count} 个项目`)} · ${escapeHtml(t`${item.memories_count} 条知识`)}</li>`)
+        .join("")}</ul>`;
+    }
+    box.innerHTML = detailsHtml;
+    box.classList.remove("hidden");
+
+    if (isKnowledge) {
+      knowledgeOpts.classList.remove("hidden");
+      systemOpts.classList.add("hidden");
+      syncMigrationImportTenantMode();
+      submitBtn.textContent = t("导入知识库");
+      submitBtn.classList.remove("danger");
+    } else {
+      knowledgeOpts.classList.add("hidden");
+      systemOpts.classList.remove("hidden");
+      submitBtn.textContent = t("上传并还原");
+      submitBtn.classList.add("danger");
+    }
+  }
+
+  async function inspectMigrationFile() {
+    const fileInput = $("mig-import-file");
+    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+      state.migInspect = null;
+      renderMigrationInspect();
+      return null;
+    }
+    const file = fileInput.files[0];
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("passphrase", $("mig-import-passphrase") ? $("mig-import-passphrase").value : "");
+    const resp = await fetch("/api/admin/migration/inspect", {
+      method: "POST",
+      credentials: "same-origin",
+      body: fd,
+    });
+    const text = await resp.text();
+    let data = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch (_) {
+      data = { message: text };
+    }
+    if (!resp.ok) {
+      throw new Error((data && (data.message || data.error)) || `HTTP ${resp.status}`);
+    }
+    data.fileKey = migrationFileKey(file);
+    state.migInspect = data;
+    renderMigrationInspect();
+    return data;
+  }
+
+  document.querySelectorAll('input[name="mig-export-mode"]').forEach((radio) => {
+    radio.addEventListener("change", syncMigrationExportMode);
+  });
+  syncMigrationExportMode();
+
+  if ($("btn-mig-tenants-all")) {
+    $("btn-mig-tenants-all").addEventListener("click", () => {
+      document.querySelectorAll('#mig-export-tenants-list input[type="checkbox"]').forEach((el) => { el.checked = true; });
+    });
+  }
+  if ($("btn-mig-tenants-none")) {
+    $("btn-mig-tenants-none").addEventListener("click", () => {
+      document.querySelectorAll('#mig-export-tenants-list input[type="checkbox"]').forEach((el) => { el.checked = false; });
+    });
+  }
+  if ($("mig-import-tenant-mode")) {
+    $("mig-import-tenant-mode").addEventListener("change", syncMigrationImportTenantMode);
+  }
+  if ($("mig-import-file")) {
+    $("mig-import-file").addEventListener("change", async () => {
+      state.migInspect = null;
+      if ($("mig-import-result")) $("mig-import-result").classList.add("hidden");
+      renderMigrationInspect();
+      try {
+        await inspectMigrationFile();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+  if ($("btn-mig-inspect")) {
+    $("btn-mig-inspect").addEventListener("click", async () => {
+      const fileInput = $("mig-import-file");
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        showToast(t("请先选择要导入的迁移包（.zip）。"), true);
+        return;
+      }
+      try {
+        await inspectMigrationFile();
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
   if ($("migration-export-form")) {
     onSubmit("migration-export-form", async (e) => {
       e.preventDefault();
+      const mode = selectedMigrationExportMode();
       const passphrase = $("mig-export-passphrase") ? $("mig-export-passphrase").value : "";
+      const payload = { mode, passphrase };
+      if (mode === "knowledge") {
+        const selectedTenants = Array.from(document.querySelectorAll('#mig-export-tenants-list input[type="checkbox"]:checked')).map((el) => el.value);
+        if (state.tenants.length > 0 && selectedTenants.length === 0) {
+          throw new Error(t("请至少选择一个要导出的租户。"));
+        }
+        payload.tenant_ids = selectedTenants;
+        payload.include_deleted = $("mig-export-include-deleted") ? $("mig-export-include-deleted").checked : true;
+      }
       const resp = await fetch("/api/admin/migration/export", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passphrase }),
+        body: JSON.stringify(payload),
       });
       if (!resp.ok) {
         let msg = `HTTP ${resp.status}`;
@@ -1959,12 +2407,19 @@
         throw new Error(msg);
       }
       const blob = await resp.blob();
-      const filename = parseDownloadFilename(resp, "engram-system-snapshot.zip");
+      const fallbackName = mode === "knowledge" ? "engram-knowledge-bundle.zip" : "engram-system-snapshot.zip";
+      const filename = parseDownloadFilename(resp, fallbackName);
       const saved = await saveBlobToLocal(blob, filename);
       if (saved) {
         const enc = resp.headers.get("X-Snapshot-Encrypted") === "true";
         const mems = resp.headers.get("X-Snapshot-Memories") || "0";
-        showToast(t`系统迁移包已导出（${enc ? t("已加密") : t("未加密")}，含 ${mems} 条记忆）`);
+        const tenants = resp.headers.get("X-Snapshot-Tenants") || "0";
+        const encText = enc ? t("已加密") : t("未加密");
+        showToast(
+          mode === "knowledge"
+            ? t`知识库迁移包已导出（${encText}，${tenants} 个租户，含 ${mems} 条记忆）`
+            : t`系统迁移包已导出（${encText}，含 ${mems} 条记忆）`
+        );
       }
     });
   }
@@ -1973,11 +2428,35 @@
     onSubmit("migration-import-form", async (e) => {
       e.preventDefault();
       const fileInput = $("mig-import-file");
-      if (!fileInput || !fileInput.files || fileInput.files.length === 0) throw new FormError(t("请先选择要还原的系统迁移包（.zip）。"), "mig-import-file");
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) throw new FormError(t("请先选择要导入的迁移包（.zip）。"), "mig-import-file");
+      const file = fileInput.files[0];
+      const fileKey = migrationFileKey(file);
+
+      if (!state.migInspect || state.migInspect.needs_passphrase || state.migInspect.fileKey !== fileKey) {
+        const inspected = await inspectMigrationFile();
+        if (!inspected) return;
+        if (inspected.needs_passphrase) {
+          throw new FormError(t("该迁移包已加密，请先填写解密口令。"), "mig-import-passphrase");
+        }
+        if (inspected.format === "engram-system-snapshot" && inspected.target_has_data && !($("mig-import-confirm") && $("mig-import-confirm").checked)) {
+          throw new FormError(t("已识别为全量系统迁移包，请勾选确认覆盖后再导入。"), "mig-import-confirm");
+        }
+      }
+
       const fd = new FormData();
-      fd.append("file", fileInput.files[0]);
+      fd.append("file", file);
       fd.append("passphrase", $("mig-import-passphrase") ? $("mig-import-passphrase").value : "");
-      fd.append("confirm_replace", $("mig-import-confirm") && $("mig-import-confirm").checked ? "true" : "false");
+      if (state.migInspect && state.migInspect.format === "engram-knowledge-bundle") {
+        const tenantMode = $("mig-import-tenant-mode") ? $("mig-import-tenant-mode").value : "by_name";
+        fd.append("tenant_mode", tenantMode);
+        if (tenantMode === "single") {
+          const targetTenantID = $("mig-import-target-tenant") ? $("mig-import-target-tenant").value : "";
+          if (!targetTenantID) throw new FormError(t("请选择要导入的目标租户。"), "mig-import-target-tenant");
+          fd.append("target_tenant_id", targetTenantID);
+        }
+      } else {
+        fd.append("confirm_replace", $("mig-import-confirm") && $("mig-import-confirm").checked ? "true" : "false");
+      }
 
       const resp = await fetch("/api/admin/migration/import", {
         method: "POST",
@@ -1996,11 +2475,20 @@
       }
       state.revealedTokens = {};
       if ($("mig-import-result") && $("mig-import-result-box")) {
+        const c = data.counts || {};
+        if ($("mig-import-result-badge")) {
+          $("mig-import-result-badge").textContent = data.format === "engram-knowledge-bundle" ? t("导入成功") : t("还原成功");
+        }
+        if ($("mig-import-result-summary")) {
+          $("mig-import-result-summary").textContent = data.format === "engram-knowledge-bundle"
+            ? t`匹配租户 ${c.tenants_matched || 0} 个、新建 ${c.tenants_created || 0} 个；导入知识 ${c.memories_imported || 0} 条、跳过重复 ${c.memories_skipped || 0} 条、导入版本历史 ${c.revisions_imported || 0} 条。`
+            : t`已还原 ${c.tenants || 0} 个租户、${c.projects || 0} 个项目、${c.memories || 0} 条知识、${c.api_tokens || 0} 个密钥。`;
+        }
         $("mig-import-result").classList.remove("hidden");
         $("mig-import-result-box").textContent = JSON.stringify(data, null, 2);
       }
       if ($("mig-import-passphrase")) $("mig-import-passphrase").value = "";
-      showToast(t("系统快照还原成功！"));
+      showToast(data.format === "engram-knowledge-bundle" ? t("知识库导入成功！") : t("系统快照还原成功！"));
       await refreshAllData();
     });
   }

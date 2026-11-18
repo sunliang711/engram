@@ -69,7 +69,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.Handle("/ui/", http.StripPrefix("/ui/", fileServer))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
+		if !isUIRoutePath(r.URL.Path) {
 			http.NotFound(w, r)
 			return
 		}
@@ -107,7 +107,29 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/export", h.requireActiveAdmin(h.handleExport))
 	mux.HandleFunc("/api/admin/export/archive", h.requireActiveAdmin(h.handleExportArchive))
 	mux.HandleFunc("/api/admin/migration/export", h.requireActiveAdmin(h.handleMigrationExport))
+	mux.HandleFunc("/api/admin/migration/inspect", h.requireActiveAdminMultipart(maxImportBytes, h.handleMigrationInspect))
 	mux.HandleFunc("/api/admin/migration/import", h.requireActiveAdminMultipart(maxImportBytes, h.handleMigrationImport))
+}
+
+// isUIRoutePath matches Web UI SPA paths so browser refreshes and deep links serve index.html
+// without shadowing unknown API or asset paths.
+func isUIRoutePath(p string) bool {
+	if p == "/" || p == "/overview" || p == "/memories" || p == "/projects" || p == "/tenants" || p == "/migration" {
+		return true
+	}
+	trimmed := strings.Trim(p, "/")
+	parts := strings.Split(trimmed, "/")
+	switch parts[0] {
+	case "memories", "projects":
+		return len(parts) == 2 && parts[1] != ""
+	case "tenants":
+		if len(parts) == 2 && parts[1] != "" {
+			return true
+		}
+		return len(parts) == 4 && parts[1] != "" && parts[2] == "members" && parts[3] != ""
+	default:
+		return false
+	}
 }
 
 func (h *Handler) withSafety(next http.HandlerFunc) http.HandlerFunc {
@@ -609,6 +631,131 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": strings.TrimSpace(req.Name), "status": "active"})
 
+	case http.MethodPatch:
+		var req struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+			return
+		}
+		id, err := uuid.Parse(strings.TrimSpace(req.ID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant id"))
+			return
+		}
+		newName := strings.TrimSpace(req.Name)
+		if newName == "" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "tenant name is required"))
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin rename tenant tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE)`, id).Scan(&exists); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check tenant exists", err))
+			return
+		}
+		if !exists {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "tenant not found"))
+			return
+		}
+		var dup bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE name = $1 AND id <> $2)`, newName, id).Scan(&dup); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check tenant name", err))
+			return
+		}
+		if dup {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "TENANT_EXISTS", "message": "已有同名租户，请换一个名称。"})
+			return
+		}
+		var status string
+		var createdAt time.Time
+		if err := tx.QueryRow(ctx, `
+			UPDATE tenants SET name = $2 WHERE id = $1
+			RETURNING status, created_at
+		`, id, newName).Scan(&status, &createdAt); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "rename tenant", err))
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit rename tenant tx", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": newName, "status": status, "created_at": createdAt})
+
+	case http.MethodDelete:
+		var req struct {
+			ID string `json:"id"`
+		}
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+				return
+			}
+		}
+		rawID := strings.TrimSpace(req.ID)
+		if rawID == "" {
+			rawID = strings.TrimSpace(r.URL.Query().Get("id"))
+		}
+		id, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant id"))
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin delete tenant tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		var tenantName string
+		if err := tx.QueryRow(ctx, `SELECT name FROM tenants WHERE id = $1 FOR UPDATE`, id).Scan(&tenantName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "tenant not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "lock tenant", err))
+			return
+		}
+
+		for _, stmt := range []struct {
+			sql string
+			msg string
+		}{
+			{`DELETE FROM idempotency_requests WHERE tenant_id = $1`, "delete tenant idempotency_requests"},
+			{`DELETE FROM memory_events WHERE tenant_id = $1`, "delete tenant memory_events"},
+			{`DELETE FROM memory_revisions WHERE tenant_id = $1`, "delete tenant memory_revisions"},
+			{`UPDATE memories SET source_memory_id = NULL WHERE source_memory_id IN (SELECT id FROM memories WHERE tenant_id = $1)`, "unlink tenant source_memory_id"},
+			{`DELETE FROM memories WHERE tenant_id = $1`, "delete tenant memories"},
+			{`DELETE FROM project_repositories WHERE tenant_id = $1`, "delete tenant project_repositories"},
+			{`DELETE FROM project_members WHERE project_id IN (SELECT id FROM projects WHERE tenant_id = $1)`, "delete tenant project_members"},
+			{`DELETE FROM projects WHERE tenant_id = $1`, "delete tenant projects"},
+			{`DELETE FROM api_tokens WHERE tenant_id = $1`, "delete tenant api_tokens"},
+			{`DELETE FROM tenant_members WHERE tenant_id = $1`, "delete tenant memberships"},
+			{`DELETE FROM tenants WHERE id = $1`, "delete tenant"},
+		} {
+			if _, err := tx.Exec(ctx, stmt.sql, id); err != nil {
+				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, stmt.msg, err))
+				return
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit delete tenant tx", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": id, "name": tenantName})
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -789,6 +936,180 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusOK
 		}
 		writeJSON(w, status, map[string]any{"principal_id": pid, "tenant_id": tid, "role": req.TenantRole, "mode": req.Mode})
+
+	case http.MethodPatch:
+		var req struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+			return
+		}
+		pid, err := uuid.Parse(strings.TrimSpace(req.ID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid principal id"))
+			return
+		}
+		displayName := strings.TrimSpace(req.DisplayName)
+		if displayName == "" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "display_name is required"))
+			return
+		}
+
+		var provider string
+		if err := h.pool.QueryRow(ctx, `SELECT identity_provider FROM principals WHERE id = $1`, pid).Scan(&provider); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "principal not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "query principal", err))
+			return
+		}
+		if provider == "system_webui" {
+			writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "cannot modify system principal"))
+			return
+		}
+
+		var subject, status string
+		if err := h.pool.QueryRow(ctx, `
+			UPDATE principals SET display_name = $2 WHERE id = $1
+			RETURNING subject, status
+		`, pid, displayName).Scan(&subject, &status); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "rename principal", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":                pid,
+			"identity_provider": provider,
+			"subject":           subject,
+			"display_name":      displayName,
+			"status":            status,
+		})
+
+	case http.MethodDelete:
+		var req struct {
+			ID       string `json:"id"`
+			TenantID string `json:"tenant_id"`
+			Scope    string `json:"scope"`
+		}
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+				return
+			}
+		}
+		rawID := strings.TrimSpace(req.ID)
+		if rawID == "" {
+			rawID = strings.TrimSpace(r.URL.Query().Get("id"))
+		}
+		pid, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid principal id"))
+			return
+		}
+		scope := strings.TrimSpace(req.Scope)
+		if scope == "" {
+			scope = strings.TrimSpace(r.URL.Query().Get("scope"))
+		}
+		if scope == "" {
+			scope = "all"
+		}
+		if scope != "all" && scope != "tenant" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid delete scope"))
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin delete principal tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		var provider, displayName string
+		if err := tx.QueryRow(ctx, `SELECT identity_provider, display_name FROM principals WHERE id = $1 FOR UPDATE`, pid).Scan(&provider, &displayName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "principal not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "lock principal", err))
+			return
+		}
+		if provider == "system_webui" {
+			writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "cannot delete system principal"))
+			return
+		}
+
+		if scope == "tenant" {
+			rawTID := strings.TrimSpace(req.TenantID)
+			if rawTID == "" {
+				rawTID = strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+			}
+			tid, parseErr := uuid.Parse(rawTID)
+			if parseErr != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_id"))
+				return
+			}
+			for _, stmt := range []struct {
+				sql string
+				msg string
+			}{
+				{`DELETE FROM idempotency_requests WHERE tenant_id = $1 AND principal_id = $2`, "delete tenant principal idempotency_requests"},
+				{`DELETE FROM api_tokens WHERE tenant_id = $1 AND principal_id = $2`, "delete tenant principal api_tokens"},
+				{`DELETE FROM project_members WHERE principal_id = $2 AND project_id IN (SELECT id FROM projects WHERE tenant_id = $1)`, "delete tenant principal project_members"},
+				{`DELETE FROM tenant_members WHERE tenant_id = $1 AND principal_id = $2`, "remove tenant membership"},
+			} {
+				if _, err := tx.Exec(ctx, stmt.sql, tid, pid); err != nil {
+					writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, stmt.msg, err))
+					return
+				}
+			}
+			if err := tx.Commit(ctx); err != nil {
+				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit remove principal from tenant tx", err))
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"status": "removed_from_tenant", "id": pid, "tenant_id": tid})
+			return
+		}
+
+		// Preserve historical memories, revisions, and events under the system console principal.
+		var systemPrincipalID uuid.UUID
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO principals (id, identity_provider, subject, display_name, status)
+			VALUES ($1, 'system_webui', 'admin', 'Web UI System Admin', 'active')
+			ON CONFLICT (identity_provider, subject) DO UPDATE SET status = 'active'
+			RETURNING id
+		`, uuid.New()).Scan(&systemPrincipalID); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "ensure system admin principal", err))
+			return
+		}
+		for _, stmt := range []struct {
+			sql  string
+			args []any
+			msg  string
+		}{
+			{`UPDATE memories SET created_by = $2 WHERE created_by = $1`, []any{pid, systemPrincipalID}, "reassign memory created_by"},
+			{`UPDATE memories SET updated_by = $2 WHERE updated_by = $1`, []any{pid, systemPrincipalID}, "reassign memory updated_by"},
+			{`UPDATE memory_revisions SET actor_id = $2 WHERE actor_id = $1`, []any{pid, systemPrincipalID}, "reassign memory_revisions actor_id"},
+			{`UPDATE memory_events SET actor_id = $2 WHERE actor_id = $1`, []any{pid, systemPrincipalID}, "reassign memory_events actor_id"},
+			{`DELETE FROM idempotency_requests WHERE principal_id = $1`, []any{pid}, "delete principal idempotency_requests"},
+			{`DELETE FROM api_tokens WHERE principal_id = $1`, []any{pid}, "delete principal api_tokens"},
+			{`DELETE FROM project_members WHERE principal_id = $1`, []any{pid}, "delete principal project_members"},
+			{`DELETE FROM tenant_members WHERE principal_id = $1`, []any{pid}, "delete principal tenant_members"},
+			{`DELETE FROM principals WHERE id = $1`, []any{pid}, "delete principal"},
+		} {
+			if _, err := tx.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, stmt.msg, err))
+				return
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit delete principal tx", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": pid, "display_name": displayName})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

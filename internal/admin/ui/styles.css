@@ -780,3 +780,15 @@ button.text-button:disabled { color: var(--text); opacity: 1; cursor: default; t
 #client-config-context { overflow-wrap: anywhere; }
 #project-detail-view form { margin-top: 20px; }
 body.client-config-open { overflow: hidden; }
+.field-label { display: block; font-size: 14px; color: var(--text-secondary); margin-bottom: 6px; }
+.migration-mode-list { display: grid; gap: 10px; }
+.migration-mode-option { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); cursor: pointer; margin: 0; }
+.migration-mode-option:has(input:checked) { border-color: var(--primary); background: rgba(99, 102, 241, 0.08); }
+.migration-mode-option input[type="radio"] { width: auto; margin-top: 3px; flex-shrink: 0; }
+.migration-mode-option strong { display: block; font-size: 14px; color: var(--text); }
+.tenant-checkbox-list { display: grid; gap: 6px; max-height: 180px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); }
+.tenant-checkbox-list .checkbox-label { margin: 0; font-size: 13px; cursor: pointer; }
+.tenant-checkbox-list .checkbox-label input { width: auto; }
+.mig-inspect-box { margin-bottom: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); font-size: 13px; }
+.mig-inspect-box .mig-inspect-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.mig-inspect-tenants { margin: 8px 0 0 18px; color: var(--text-secondary); font-size: 12px; line-height: 1.6; }

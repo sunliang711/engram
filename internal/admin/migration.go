@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,12 +27,16 @@ import (
 )
 
 const (
-	SnapshotFormat  = "engram-system-snapshot"
-	SnapshotVersion = 1
-	maxImportBytes  = 64 << 20 // 64 MiB
+	SnapshotFormat         = "engram-system-snapshot"
+	KnowledgeBundleFormat  = "engram-knowledge-bundle"
+	SnapshotVersion        = 1
+	KnowledgeBundleVersion = 1
+	MigrationModeSystem    = "system"
+	MigrationModeKnowledge = "knowledge"
+	maxImportBytes         = 64 << 20 // 64 MiB
 )
 
-// SnapshotManifest describes a full Engram system migration archive.
+// SnapshotManifest describes an Engram migration archive (full system or knowledge-only).
 type SnapshotManifest struct {
 	Format          string         `json:"format"`
 	SnapshotVersion int            `json:"snapshot_version"`
@@ -43,19 +48,26 @@ type SnapshotManifest struct {
 	Counts          SnapshotCounts `json:"counts"`
 }
 
-// SnapshotCounts records row counts for each exported/imported entity type.
+// SnapshotCounts records row counts for exported and imported entities.
 type SnapshotCounts struct {
 	Tenants             int `json:"tenants"`
-	Principals          int `json:"principals"`
-	TenantMembers       int `json:"tenant_members"`
+	Principals          int `json:"principals,omitempty"`
+	TenantMembers       int `json:"tenant_members,omitempty"`
 	Projects            int `json:"projects"`
-	ProjectMembers      int `json:"project_members"`
+	ProjectMembers      int `json:"project_members,omitempty"`
 	ProjectRepositories int `json:"project_repositories"`
-	APITokens           int `json:"api_tokens"`
+	APITokens           int `json:"api_tokens,omitempty"`
 	Memories            int `json:"memories"`
 	MemoryRevisions     int `json:"memory_revisions"`
-	MemoryEvents        int `json:"memory_events"`
+	MemoryEvents        int `json:"memory_events,omitempty"`
 	TokensResealed      int `json:"tokens_resealed,omitempty"`
+	TenantsCreated      int `json:"tenants_created,omitempty"`
+	TenantsMatched      int `json:"tenants_matched,omitempty"`
+	ProjectsCreated     int `json:"projects_created,omitempty"`
+	ProjectsMatched     int `json:"projects_matched,omitempty"`
+	MemoriesImported    int `json:"memories_imported,omitempty"`
+	MemoriesSkipped     int `json:"memories_skipped,omitempty"`
+	RevisionsImported   int `json:"revisions_imported,omitempty"`
 }
 
 // SnapshotPayload contains all portable system data needed to restore an Engram instance.
@@ -182,13 +194,85 @@ type snapshotMemoryEvent struct {
 	CreatedAt     time.Time  `json:"created_at"`
 }
 
+// KnowledgeBundlePayload contains portable knowledge data (tenants, projects, remotes, memories, revisions)
+// without principals, memberships, or API tokens.
+type KnowledgeBundlePayload struct {
+	Tenants             []snapshotTenant            `json:"tenants"`
+	Projects            []snapshotProject           `json:"projects"`
+	ProjectRepositories []snapshotProjectRepository `json:"project_repositories"`
+	Memories            []knowledgeMemory           `json:"memories"`
+	MemoryRevisions     []knowledgeMemoryRevision   `json:"memory_revisions"`
+}
+
+type knowledgeMemory struct {
+	ID             uuid.UUID       `json:"id"`
+	TenantID       uuid.UUID       `json:"tenant_id"`
+	Scope          string          `json:"scope"`
+	ProjectID      *uuid.UUID      `json:"project_id,omitempty"`
+	Category       string          `json:"category"`
+	Title          string          `json:"title"`
+	ContentMD      string          `json:"content_md"`
+	Tags           []string        `json:"tags"`
+	SourceRefs     json.RawMessage `json:"source_refs"`
+	IsPinned       bool            `json:"is_pinned"`
+	Status         string          `json:"status"`
+	Version        int64           `json:"version"`
+	SourceMemoryID *uuid.UUID      `json:"source_memory_id,omitempty"`
+	ContentHash    string          `json:"content_hash"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	DeletedAt      *time.Time      `json:"deleted_at,omitempty"`
+}
+
+type knowledgeMemoryRevision struct {
+	TenantID  uuid.UUID       `json:"tenant_id"`
+	MemoryID  uuid.UUID       `json:"memory_id"`
+	Version   int64           `json:"version"`
+	Operation string          `json:"operation"`
+	Snapshot  json.RawMessage `json:"snapshot"`
+	RequestID string          `json:"request_id"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// KnowledgeExportOptions configures which tenants and deletion states to export in a knowledge bundle.
+type KnowledgeExportOptions struct {
+	TenantIDs      []uuid.UUID
+	IncludeDeleted bool
+}
+
+// KnowledgeImportOptions configures how a knowledge bundle maps source tenants onto target tenants.
+type KnowledgeImportOptions struct {
+	TenantMode     string            // "by_name" (default) or "single"
+	TargetTenantID uuid.UUID         // used when TenantMode == "single"
+	TenantMap      map[string]string // optional source_tenant_id -> target_tenant_id
+}
+
+// InspectTenantSummary summarizes one tenant contained inside a migration archive.
+type InspectTenantSummary struct {
+	ID            uuid.UUID `json:"id"`
+	Name          string    `json:"name"`
+	Status        string    `json:"status"`
+	ProjectsCount int       `json:"projects_count"`
+	MemoriesCount int       `json:"memories_count"`
+}
+
+// DecodedArchive holds the parsed manifest and typed payload of either archive format.
+type DecodedArchive struct {
+	Manifest        SnapshotManifest
+	SystemPayload   *SnapshotPayload
+	KnowledgeBundle *KnowledgeBundlePayload
+}
+
 func (h *Handler) handleMigrationExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		Passphrase string `json:"passphrase"`
+		Mode           string   `json:"mode"`
+		Passphrase     string   `json:"passphrase"`
+		TenantIDs      []string `json:"tenant_ids"`
+		IncludeDeleted *bool    `json:"include_deleted"`
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -202,32 +286,165 @@ func (h *Handler) handleMigrationExport(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	payload, err := h.exportSnapshotPayload(r.Context(), req.Passphrase != "")
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" {
+		mode = MigrationModeSystem
+	}
+
+	var zipBytes []byte
+	var manifest SnapshotManifest
+	var filename string
+
+	switch mode {
+	case MigrationModeSystem:
+		payload, err := h.exportSnapshotPayload(r.Context(), req.Passphrase != "")
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		zipBytes, manifest, err = EncodeSnapshotArchive(payload, req.Passphrase, time.Now().UTC())
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "encode migration snapshot", err))
+			return
+		}
+		filename = fmt.Sprintf("engram-system-snapshot-%s.zip", manifest.ExportedAt.Format("20060102T150405Z"))
+		h.log.Info().
+			Int("tenants", manifest.Counts.Tenants).
+			Int("projects", manifest.Counts.Projects).
+			Int("memories", manifest.Counts.Memories).
+			Bool("encrypted", manifest.Encrypted).
+			Msg("exported full system migration snapshot")
+
+	case MigrationModeKnowledge:
+		tenantIDs := make([]uuid.UUID, 0, len(req.TenantIDs))
+		seen := make(map[uuid.UUID]bool, len(req.TenantIDs))
+		for _, raw := range req.TenantIDs {
+			id, parseErr := uuid.Parse(strings.TrimSpace(raw))
+			if parseErr != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_id: "+raw))
+				return
+			}
+			if !seen[id] {
+				seen[id] = true
+				tenantIDs = append(tenantIDs, id)
+			}
+		}
+		includeDeleted := true
+		if req.IncludeDeleted != nil {
+			includeDeleted = *req.IncludeDeleted
+		}
+		bundle, err := h.exportKnowledgeBundlePayload(r.Context(), KnowledgeExportOptions{
+			TenantIDs:      tenantIDs,
+			IncludeDeleted: includeDeleted,
+		})
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		zipBytes, manifest, err = EncodeKnowledgeArchive(bundle, req.Passphrase, time.Now().UTC())
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "encode knowledge bundle", err))
+			return
+		}
+		filename = fmt.Sprintf("engram-knowledge-bundle-%s.zip", manifest.ExportedAt.Format("20060102T150405Z"))
+		h.log.Info().
+			Int("tenants", manifest.Counts.Tenants).
+			Int("projects", manifest.Counts.Projects).
+			Int("memories", manifest.Counts.Memories).
+			Bool("include_deleted", includeDeleted).
+			Bool("encrypted", manifest.Encrypted).
+			Msg("exported knowledge base migration bundle")
+
+	default:
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid migration export mode"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("X-Snapshot-Format", manifest.Format)
+	w.Header().Set("X-Snapshot-Encrypted", fmt.Sprintf("%t", manifest.Encrypted))
+	w.Header().Set("X-Snapshot-Tenants", fmt.Sprintf("%d", manifest.Counts.Tenants))
+	w.Header().Set("X-Snapshot-Memories", fmt.Sprintf("%d", manifest.Counts.Memories))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(zipBytes)
+}
+
+func readUploadedZip(r *http.Request) ([]byte, error) {
+	if err := r.ParseMultipartForm(maxImportBytes); err != nil {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "invalid multipart upload or file exceeds 64MB limit")
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "snapshot file is required")
+	}
+	defer file.Close()
+
+	zipBytes, err := io.ReadAll(io.LimitReader(file, maxImportBytes+1))
+	if err != nil {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "failed to read uploaded snapshot")
+	}
+	if len(zipBytes) > maxImportBytes {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "snapshot file exceeds 64MB limit")
+	}
+	return zipBytes, nil
+}
+
+func (h *Handler) handleMigrationInspect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	zipBytes, err := readUploadedZip(r)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	passphrase := r.FormValue("passphrase")
+
+	manifest, err := InspectArchiveManifest(zipBytes)
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
 
-	zipBytes, manifest, err := EncodeSnapshotArchive(payload, req.Passphrase, time.Now().UTC())
+	targetHasData, err := h.targetHasBusinessData(r.Context())
 	if err != nil {
-		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "encode migration snapshot", err))
+		writeJSONError(w, err)
 		return
 	}
 
-	h.log.Info().
-		Int("tenants", manifest.Counts.Tenants).
-		Int("projects", manifest.Counts.Projects).
-		Int("memories", manifest.Counts.Memories).
-		Bool("encrypted", manifest.Encrypted).
-		Msg("exported full system migration snapshot")
+	if manifest.Encrypted && passphrase == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"format":           manifest.Format,
+			"snapshot_version": manifest.SnapshotVersion,
+			"exported_at":      manifest.ExportedAt,
+			"encrypted":        true,
+			"needs_passphrase": true,
+			"counts":           manifest.Counts,
+			"tenants":          []InspectTenantSummary{},
+			"target_has_data":  targetHasData,
+		})
+		return
+	}
 
-	filename := fmt.Sprintf("engram-system-snapshot-%s.zip", manifest.ExportedAt.Format("20060102T150405Z"))
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-	w.Header().Set("X-Snapshot-Encrypted", fmt.Sprintf("%t", manifest.Encrypted))
-	w.Header().Set("X-Snapshot-Memories", fmt.Sprintf("%d", manifest.Counts.Memories))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(zipBytes)
+	decoded, err := DecodeMigrationArchive(zipBytes, passphrase)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+
+	tenants := summarizeArchiveTenants(decoded)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"format":           decoded.Manifest.Format,
+		"snapshot_version": decoded.Manifest.SnapshotVersion,
+		"exported_at":      decoded.Manifest.ExportedAt,
+		"encrypted":        decoded.Manifest.Encrypted,
+		"needs_passphrase": false,
+		"counts":           decoded.Manifest.Counts,
+		"tenants":          tenants,
+		"target_has_data":  targetHasData,
+	})
 }
 
 func (h *Handler) handleMigrationImport(w http.ResponseWriter, r *http.Request) {
@@ -235,57 +452,107 @@ func (h *Handler) handleMigrationImport(w http.ResponseWriter, r *http.Request) 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	if err := r.ParseMultipartForm(maxImportBytes); err != nil {
-		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid multipart upload or file exceeds 64MB limit"))
-		return
-	}
-	file, _, err := r.FormFile("file")
+	zipBytes, err := readUploadedZip(r)
 	if err != nil {
-		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "snapshot file is required"))
-		return
-	}
-	defer file.Close()
-
-	zipBytes, err := io.ReadAll(io.LimitReader(file, maxImportBytes+1))
-	if err != nil {
-		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "failed to read uploaded snapshot"))
-		return
-	}
-	if len(zipBytes) > maxImportBytes {
-		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "snapshot file exceeds 64MB limit"))
+		writeJSONError(w, err)
 		return
 	}
 
 	passphrase := r.FormValue("passphrase")
 	confirmReplace := strings.EqualFold(strings.TrimSpace(r.FormValue("confirm_replace")), "true")
 
-	manifest, payload, err := DecodeSnapshotArchive(zipBytes, passphrase)
+	decoded, err := DecodeMigrationArchive(zipBytes, passphrase)
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
 
-	counts, err := h.importSnapshotPayload(r.Context(), payload, confirmReplace)
-	if err != nil {
-		writeJSONError(w, err)
-		return
+	switch decoded.Manifest.Format {
+	case SnapshotFormat:
+		counts, err := h.importSnapshotPayload(r.Context(), *decoded.SystemPayload, confirmReplace)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		h.log.Info().
+			Int("tenants", counts.Tenants).
+			Int("projects", counts.Projects).
+			Int("memories", counts.Memories).
+			Int("tokens_resealed", counts.TokensResealed).
+			Bool("encrypted", decoded.Manifest.Encrypted).
+			Msg("imported full system migration snapshot")
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":           "restored",
+			"format":           decoded.Manifest.Format,
+			"snapshot_version": decoded.Manifest.SnapshotVersion,
+			"exported_at":      decoded.Manifest.ExportedAt,
+			"encrypted":        decoded.Manifest.Encrypted,
+			"counts":           counts,
+		})
+
+	case KnowledgeBundleFormat:
+		opts := KnowledgeImportOptions{
+			TenantMode: strings.TrimSpace(r.FormValue("tenant_mode")),
+		}
+		if rawTarget := strings.TrimSpace(r.FormValue("target_tenant_id")); rawTarget != "" {
+			tid, parseErr := uuid.Parse(rawTarget)
+			if parseErr != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid target_tenant_id"))
+				return
+			}
+			opts.TargetTenantID = tid
+		}
+		if rawMap := strings.TrimSpace(r.FormValue("tenant_map")); rawMap != "" {
+			if err := json.Unmarshal([]byte(rawMap), &opts.TenantMap); err != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_map json"))
+				return
+			}
+		}
+
+		counts, err := h.importKnowledgeBundlePayload(r.Context(), *decoded.KnowledgeBundle, opts)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		h.log.Info().
+			Int("tenants_created", counts.TenantsCreated).
+			Int("tenants_matched", counts.TenantsMatched).
+			Int("projects_created", counts.ProjectsCreated).
+			Int("projects_matched", counts.ProjectsMatched).
+			Int("memories_imported", counts.MemoriesImported).
+			Int("memories_skipped", counts.MemoriesSkipped).
+			Int("revisions_imported", counts.RevisionsImported).
+			Bool("encrypted", decoded.Manifest.Encrypted).
+			Msg("imported knowledge base migration bundle")
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":           "imported",
+			"format":           decoded.Manifest.Format,
+			"snapshot_version": decoded.Manifest.SnapshotVersion,
+			"exported_at":      decoded.Manifest.ExportedAt,
+			"encrypted":        decoded.Manifest.Encrypted,
+			"counts":           counts,
+		})
+
+	default:
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "unsupported snapshot format"))
 	}
+}
 
-	h.log.Info().
-		Int("tenants", counts.Tenants).
-		Int("projects", counts.Projects).
-		Int("memories", counts.Memories).
-		Int("tokens_resealed", counts.TokensResealed).
-		Bool("encrypted", manifest.Encrypted).
-		Msg("imported full system migration snapshot")
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":           "restored",
-		"snapshot_version": manifest.SnapshotVersion,
-		"exported_at":      manifest.ExportedAt,
-		"encrypted":        manifest.Encrypted,
-		"counts":           counts,
-	})
+func (h *Handler) targetHasBusinessData(ctx context.Context) (bool, error) {
+	var existingRows int
+	err := h.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*)::int FROM tenants)
+		     + (SELECT count(*)::int FROM principals)
+		     + (SELECT count(*)::int FROM projects)
+		     + (SELECT count(*)::int FROM memories)
+		     + (SELECT count(*)::int FROM api_tokens)
+	`).Scan(&existingRows)
+	if err != nil {
+		return false, apperror.Wrap(apperror.CodeInternalError, "check target database state", err)
+	}
+	return existingRows > 0, nil
 }
 
 func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bool) (SnapshotPayload, error) {
@@ -676,32 +943,706 @@ func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, 
 	return counts, nil
 }
 
+func (h *Handler) exportKnowledgeBundlePayload(ctx context.Context, opts KnowledgeExportOptions) (KnowledgeBundlePayload, error) {
+	var p KnowledgeBundlePayload
+	tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return p, apperror.Wrap(apperror.CodeInternalError, "begin knowledge export tx", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 1. tenants
+	var tenantRows pgx.Rows
+	if len(opts.TenantIDs) > 0 {
+		tenantRows, err = tx.Query(ctx, `
+			SELECT id, name, status, created_at
+			FROM tenants
+			WHERE id = ANY($1)
+			ORDER BY created_at ASC, id ASC
+		`, opts.TenantIDs)
+	} else {
+		tenantRows, err = tx.Query(ctx, `
+			SELECT id, name, status, created_at
+			FROM tenants
+			ORDER BY created_at ASC, id ASC
+		`)
+	}
+	if err != nil {
+		return p, apperror.Wrap(apperror.CodeInternalError, "export bundle tenants", err)
+	}
+	tenantIDs := make([]uuid.UUID, 0)
+	for tenantRows.Next() {
+		var row snapshotTenant
+		if err := tenantRows.Scan(&row.ID, &row.Name, &row.Status, &row.CreatedAt); err != nil {
+			tenantRows.Close()
+			return p, apperror.Wrap(apperror.CodeInternalError, "scan bundle tenant", err)
+		}
+		p.Tenants = append(p.Tenants, row)
+		tenantIDs = append(tenantIDs, row.ID)
+	}
+	tenantRows.Close()
+
+	if len(opts.TenantIDs) > 0 && len(p.Tenants) != len(opts.TenantIDs) {
+		return p, apperror.New(apperror.CodeInvalidArgument, "部分选中的租户不存在，请刷新后重试")
+	}
+	if len(tenantIDs) == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return p, apperror.Wrap(apperror.CodeInternalError, "commit empty knowledge export tx", err)
+		}
+		return p, nil
+	}
+
+	// 2. projects
+	projRows, err := tx.Query(ctx, `
+		SELECT id, tenant_id, name, marker, status, created_at, updated_at
+		FROM projects
+		WHERE tenant_id = ANY($1)
+		ORDER BY created_at ASC, id ASC
+	`, tenantIDs)
+	if err != nil {
+		return p, apperror.Wrap(apperror.CodeInternalError, "export bundle projects", err)
+	}
+	for projRows.Next() {
+		var row snapshotProject
+		if err := projRows.Scan(&row.ID, &row.TenantID, &row.Name, &row.Marker, &row.Status, &row.CreatedAt, &row.UpdatedAt); err != nil {
+			projRows.Close()
+			return p, apperror.Wrap(apperror.CodeInternalError, "scan bundle project", err)
+		}
+		p.Projects = append(p.Projects, row)
+	}
+	projRows.Close()
+
+	// 3. project_repositories
+	repoRows, err := tx.Query(ctx, `
+		SELECT id, tenant_id, project_id, canonical_remote, workspace_path, is_primary, created_at
+		FROM project_repositories
+		WHERE tenant_id = ANY($1)
+		ORDER BY created_at ASC, id ASC
+	`, tenantIDs)
+	if err != nil {
+		return p, apperror.Wrap(apperror.CodeInternalError, "export bundle project_repositories", err)
+	}
+	for repoRows.Next() {
+		var row snapshotProjectRepository
+		if err := repoRows.Scan(&row.ID, &row.TenantID, &row.ProjectID, &row.CanonicalRemote, &row.WorkspacePath, &row.IsPrimary, &row.CreatedAt); err != nil {
+			repoRows.Close()
+			return p, apperror.Wrap(apperror.CodeInternalError, "scan bundle project_repository", err)
+		}
+		p.ProjectRepositories = append(p.ProjectRepositories, row)
+	}
+	repoRows.Close()
+
+	// 4. memories (without principal UUIDs)
+	memQuery := `
+		SELECT id, tenant_id, scope, project_id, category, title, content_md,
+		       tags, source_refs, is_pinned, status, version, source_memory_id,
+		       content_hash, created_at, updated_at, deleted_at
+		FROM memories
+		WHERE tenant_id = ANY($1)
+	`
+	if !opts.IncludeDeleted {
+		memQuery += ` AND deleted_at IS NULL`
+	}
+	memQuery += ` ORDER BY created_at ASC, id ASC`
+
+	memRows, err := tx.Query(ctx, memQuery, tenantIDs)
+	if err != nil {
+		return p, apperror.Wrap(apperror.CodeInternalError, "export bundle memories", err)
+	}
+	memoryIDs := make([]uuid.UUID, 0)
+	for memRows.Next() {
+		var row knowledgeMemory
+		if err := memRows.Scan(
+			&row.ID, &row.TenantID, &row.Scope, &row.ProjectID, &row.Category, &row.Title, &row.ContentMD,
+			&row.Tags, &row.SourceRefs, &row.IsPinned, &row.Status, &row.Version, &row.SourceMemoryID,
+			&row.ContentHash, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt,
+		); err != nil {
+			memRows.Close()
+			return p, apperror.Wrap(apperror.CodeInternalError, "scan bundle memory", err)
+		}
+		if row.Tags == nil {
+			row.Tags = []string{}
+		}
+		if len(row.SourceRefs) == 0 {
+			row.SourceRefs = json.RawMessage("[]")
+		}
+		p.Memories = append(p.Memories, row)
+		memoryIDs = append(memoryIDs, row.ID)
+	}
+	memRows.Close()
+
+	// 5. memory_revisions (without actor_id)
+	if len(memoryIDs) > 0 {
+		revRows, err := tx.Query(ctx, `
+			SELECT tenant_id, memory_id, version, operation, snapshot, request_id, created_at
+			FROM memory_revisions
+			WHERE memory_id = ANY($1)
+			ORDER BY memory_id ASC, version ASC, id ASC
+		`, memoryIDs)
+		if err != nil {
+			return p, apperror.Wrap(apperror.CodeInternalError, "export bundle memory_revisions", err)
+		}
+		for revRows.Next() {
+			var row knowledgeMemoryRevision
+			if err := revRows.Scan(&row.TenantID, &row.MemoryID, &row.Version, &row.Operation, &row.Snapshot, &row.RequestID, &row.CreatedAt); err != nil {
+				revRows.Close()
+				return p, apperror.Wrap(apperror.CodeInternalError, "scan bundle memory_revision", err)
+			}
+			p.MemoryRevisions = append(p.MemoryRevisions, row)
+		}
+		revRows.Close()
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return p, apperror.Wrap(apperror.CodeInternalError, "commit knowledge export tx", err)
+	}
+	return p, nil
+}
+
+func (h *Handler) importKnowledgeBundlePayload(ctx context.Context, p KnowledgeBundlePayload, opts KnowledgeImportOptions) (SnapshotCounts, error) {
+	var counts SnapshotCounts
+	mode := strings.TrimSpace(opts.TenantMode)
+	if mode == "" {
+		mode = "by_name"
+	}
+	if mode != "by_name" && mode != "single" {
+		return counts, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_mode")
+	}
+	if err := validateKnowledgeBundle(p); err != nil {
+		return counts, err
+	}
+
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return counts, apperror.Wrap(apperror.CodeInternalError, "begin knowledge import tx", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	tenantIDMap, matchedTenants, createdTenants, err := resolveKnowledgeTenants(ctx, tx, p.Tenants, mode, opts)
+	if err != nil {
+		return counts, err
+	}
+	counts.TenantsMatched = len(matchedTenants)
+	counts.TenantsCreated = len(createdTenants)
+	counts.Tenants = counts.TenantsMatched + counts.TenantsCreated
+
+	actorByTenant := make(map[uuid.UUID]uuid.UUID)
+	for _, targetTID := range tenantIDMap {
+		if _, ok := actorByTenant[targetTID]; ok {
+			continue
+		}
+		actorID, err := ensureAdminActorForTenantTx(ctx, tx, targetTID)
+		if err != nil {
+			return counts, err
+		}
+		actorByTenant[targetTID] = actorID
+	}
+
+	reposByProj := make(map[uuid.UUID][]snapshotProjectRepository)
+	for _, repo := range p.ProjectRepositories {
+		reposByProj[repo.ProjectID] = append(reposByProj[repo.ProjectID], repo)
+	}
+
+	projectIDMap, projMatched, projCreated, repoInserted, err := resolveKnowledgeProjects(ctx, tx, p.Projects, reposByProj, tenantIDMap)
+	if err != nil {
+		return counts, err
+	}
+	counts.ProjectsMatched = len(projMatched)
+	counts.ProjectsCreated = len(projCreated)
+	counts.Projects = counts.ProjectsMatched + counts.ProjectsCreated
+	counts.ProjectRepositories = repoInserted
+
+	revsByMem := make(map[uuid.UUID][]knowledgeMemoryRevision)
+	for _, rev := range p.MemoryRevisions {
+		revsByMem[rev.MemoryID] = append(revsByMem[rev.MemoryID], rev)
+	}
+	for memID := range revsByMem {
+		revs := revsByMem[memID]
+		sort.Slice(revs, func(i, j int) bool { return revs[i].Version < revs[j].Version })
+		revsByMem[memID] = revs
+	}
+
+	memoryIDMap := make(map[uuid.UUID]uuid.UUID, len(p.Memories))
+	importedSet := make(map[uuid.UUID]bool, len(p.Memories))
+
+	for _, m := range p.Memories {
+		targetTID := tenantIDMap[m.TenantID]
+		actorID := actorByTenant[targetTID]
+		var targetPID *uuid.UUID
+		if m.Scope == "project" && m.ProjectID != nil {
+			pid := projectIDMap[*m.ProjectID]
+			targetPID = &pid
+		}
+
+		// Deduplicate within the target tenant & scope by content_hash and deletion bucket.
+		var existingID uuid.UUID
+		err := tx.QueryRow(ctx, `
+			SELECT id
+			FROM memories
+			WHERE tenant_id = $1
+			  AND scope = $2
+			  AND project_id IS NOT DISTINCT FROM $3
+			  AND content_hash = $4
+			  AND (deleted_at IS NULL) = $5
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
+		`, targetTID, m.Scope, targetPID, m.ContentHash, m.DeletedAt == nil).Scan(&existingID)
+		if err == nil {
+			memoryIDMap[m.ID] = existingID
+			counts.MemoriesSkipped++
+			continue
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return counts, apperror.Wrap(apperror.CodeInternalError, "check duplicate memory", err)
+		}
+
+		newMemID, err := allocateUnusedUUID(ctx, tx, "memories", m.ID)
+		if err != nil {
+			return counts, err
+		}
+		tags := m.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		refs := m.SourceRefs
+		if len(refs) == 0 {
+			refs = json.RawMessage("[]")
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO memories (
+				id, tenant_id, scope, project_id, category, title, content_md,
+				tags, source_refs, is_pinned, status, version, source_memory_id,
+				content_hash, created_by, updated_by, created_at, updated_at, deleted_at
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7,
+				$8, $9, $10, $11, $12, NULL,
+				$13, $14, $15, $16, $17, $18
+			)
+		`, newMemID, targetTID, m.Scope, targetPID, m.Category, m.Title, m.ContentMD,
+			tags, refs, m.IsPinned, m.Status, m.Version,
+			m.ContentHash, actorID, actorID, m.CreatedAt, m.UpdatedAt, m.DeletedAt); err != nil {
+			return counts, apperror.Wrap(apperror.CodeInvalidArgument, "import memory "+m.ID.String(), err)
+		}
+		memoryIDMap[m.ID] = newMemID
+		importedSet[m.ID] = true
+		counts.MemoriesImported++
+
+		for _, rev := range revsByMem[m.ID] {
+			snap := rewriteRevisionSnapshot(rev.Snapshot, newMemID, targetTID, targetPID, actorID)
+			reqID := rev.RequestID
+			if reqID == "" {
+				reqID = "import-" + uuid.NewString()
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO memory_revisions (tenant_id, memory_id, version, operation, snapshot, actor_id, request_id, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			`, targetTID, newMemID, rev.Version, rev.Operation, snap, actorID, reqID, rev.CreatedAt); err != nil {
+				return counts, apperror.Wrap(apperror.CodeInvalidArgument, "import memory_revision", err)
+			}
+			counts.RevisionsImported++
+		}
+
+		op := "create"
+		if m.DeletedAt != nil {
+			op = "delete"
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO memory_events (tenant_id, project_id, memory_id, operation, memory_version, actor_id)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, targetTID, targetPID, newMemID, op, m.Version, actorID); err != nil {
+			return counts, apperror.Wrap(apperror.CodeInternalError, "emit import memory_event", err)
+		}
+		counts.MemoryEvents++
+	}
+
+	for _, m := range p.Memories {
+		if !importedSet[m.ID] || m.SourceMemoryID == nil {
+			continue
+		}
+		mappedSrc, ok := memoryIDMap[*m.SourceMemoryID]
+		if !ok {
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE memories SET source_memory_id = $2 WHERE id = $1`, memoryIDMap[m.ID], mappedSrc); err != nil {
+			return counts, apperror.Wrap(apperror.CodeInvalidArgument, "backfill source_memory_id", err)
+		}
+	}
+
+	counts.Memories = counts.MemoriesImported
+	counts.MemoryRevisions = counts.RevisionsImported
+
+	if err := tx.Commit(ctx); err != nil {
+		return counts, apperror.Wrap(apperror.CodeInternalError, "commit knowledge import tx", err)
+	}
+	return counts, nil
+}
+
+func validateKnowledgeBundle(p KnowledgeBundlePayload) error {
+	tenants := make(map[uuid.UUID]bool, len(p.Tenants))
+	for _, t := range p.Tenants {
+		tenants[t.ID] = true
+	}
+	projects := make(map[uuid.UUID]uuid.UUID, len(p.Projects))
+	for _, proj := range p.Projects {
+		if !tenants[proj.TenantID] {
+			return apperror.New(apperror.CodeInvalidArgument, "knowledge bundle project references unknown tenant")
+		}
+		projects[proj.ID] = proj.TenantID
+	}
+	for _, repo := range p.ProjectRepositories {
+		if !tenants[repo.TenantID] {
+			return apperror.New(apperror.CodeInvalidArgument, "knowledge bundle repository references unknown tenant")
+		}
+		if pTid, ok := projects[repo.ProjectID]; !ok || pTid != repo.TenantID {
+			return apperror.New(apperror.CodeInvalidArgument, "knowledge bundle repository references invalid project")
+		}
+	}
+	for _, m := range p.Memories {
+		if !tenants[m.TenantID] {
+			return apperror.New(apperror.CodeInvalidArgument, "knowledge bundle memory references unknown tenant")
+		}
+		if m.Scope == "project" {
+			if m.ProjectID == nil {
+				return apperror.New(apperror.CodeInvalidArgument, "project memory missing project_id")
+			}
+			if pTid, ok := projects[*m.ProjectID]; !ok || pTid != m.TenantID {
+				return apperror.New(apperror.CodeInvalidArgument, "knowledge bundle memory references invalid project")
+			}
+		}
+	}
+	return nil
+}
+
+func resolveKnowledgeTenants(
+	ctx context.Context,
+	tx pgx.Tx,
+	srcTenants []snapshotTenant,
+	mode string,
+	opts KnowledgeImportOptions,
+) (tenantMap map[uuid.UUID]uuid.UUID, matched map[uuid.UUID]bool, created map[uuid.UUID]bool, err error) {
+	tenantMap = make(map[uuid.UUID]uuid.UUID, len(srcTenants))
+	matched = make(map[uuid.UUID]bool)
+	created = make(map[uuid.UUID]bool)
+
+	if mode == "single" {
+		if opts.TargetTenantID == uuid.Nil {
+			return nil, nil, nil, apperror.New(apperror.CodeInvalidArgument, "请选择要导入的目标租户")
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1)`, opts.TargetTenantID).Scan(&exists); err != nil {
+			return nil, nil, nil, apperror.Wrap(apperror.CodeInternalError, "check target tenant", err)
+		}
+		if !exists {
+			return nil, nil, nil, apperror.New(apperror.CodeInvalidArgument, "选中的目标租户不存在，请刷新后重试")
+		}
+		for _, src := range srcTenants {
+			tenantMap[src.ID] = opts.TargetTenantID
+		}
+		if len(srcTenants) > 0 {
+			matched[opts.TargetTenantID] = true
+		}
+		return tenantMap, matched, created, nil
+	}
+
+	for _, src := range srcTenants {
+		if mappedStr, ok := opts.TenantMap[src.ID.String()]; ok && strings.TrimSpace(mappedStr) != "" && mappedStr != "auto" {
+			targetID, parseErr := uuid.Parse(strings.TrimSpace(mappedStr))
+			if parseErr != nil {
+				return nil, nil, nil, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_map target id")
+			}
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1)`, targetID).Scan(&exists); err != nil {
+				return nil, nil, nil, apperror.Wrap(apperror.CodeInternalError, "check mapped tenant", err)
+			}
+			if !exists {
+				return nil, nil, nil, apperror.New(apperror.CodeInvalidArgument, "映射的目标租户不存在")
+			}
+			tenantMap[src.ID] = targetID
+			matched[targetID] = true
+			continue
+		}
+
+		var existingID uuid.UUID
+		qErr := tx.QueryRow(ctx, `
+			SELECT id FROM tenants
+			WHERE name = $1
+			ORDER BY created_at ASC, id ASC
+			LIMIT 1
+		`, src.Name).Scan(&existingID)
+		if qErr == nil {
+			tenantMap[src.ID] = existingID
+			matched[existingID] = true
+			continue
+		}
+		if !errors.Is(qErr, pgx.ErrNoRows) {
+			return nil, nil, nil, apperror.Wrap(apperror.CodeInternalError, "lookup tenant by name", qErr)
+		}
+
+		newID, allocErr := allocateUnusedUUID(ctx, tx, "tenants", src.ID)
+		if allocErr != nil {
+			return nil, nil, nil, allocErr
+		}
+		status := src.Status
+		if status != "active" && status != "disabled" {
+			status = "active"
+		}
+		createdAt := src.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO tenants (id, name, status, created_at)
+			VALUES ($1, $2, $3, $4)
+		`, newID, src.Name, status, createdAt); err != nil {
+			return nil, nil, nil, apperror.Wrap(apperror.CodeInvalidArgument, "create tenant "+src.Name, err)
+		}
+		tenantMap[src.ID] = newID
+		created[newID] = true
+	}
+	return tenantMap, matched, created, nil
+}
+
+func resolveKnowledgeProjects(
+	ctx context.Context,
+	tx pgx.Tx,
+	srcProjects []snapshotProject,
+	reposByProj map[uuid.UUID][]snapshotProjectRepository,
+	tenantIDMap map[uuid.UUID]uuid.UUID,
+) (projMap map[uuid.UUID]uuid.UUID, matched map[uuid.UUID]bool, created map[uuid.UUID]bool, repoInserted int, err error) {
+	projMap = make(map[uuid.UUID]uuid.UUID, len(srcProjects))
+	matched = make(map[uuid.UUID]bool)
+	created = make(map[uuid.UUID]bool)
+
+	for _, proj := range srcProjects {
+		targetTID := tenantIDMap[proj.TenantID]
+		repos := reposByProj[proj.ID]
+		var targetPID uuid.UUID
+
+		// 1. Match by marker within target tenant.
+		if proj.Marker != nil {
+			qErr := tx.QueryRow(ctx, `
+				SELECT id FROM projects WHERE tenant_id = $1 AND marker = $2 LIMIT 1
+			`, targetTID, *proj.Marker).Scan(&targetPID)
+			if qErr != nil && !errors.Is(qErr, pgx.ErrNoRows) {
+				return nil, nil, nil, 0, apperror.Wrap(apperror.CodeInternalError, "match project by marker", qErr)
+			}
+		}
+
+		// 2. Match by repository remote + workspace_path within target tenant.
+		if targetPID == uuid.Nil {
+			for _, repo := range repos {
+				qErr := tx.QueryRow(ctx, `
+					SELECT project_id FROM project_repositories
+					WHERE tenant_id = $1 AND canonical_remote = $2 AND workspace_path = $3
+					LIMIT 1
+				`, targetTID, repo.CanonicalRemote, repo.WorkspacePath).Scan(&targetPID)
+				if qErr == nil {
+					break
+				}
+				if !errors.Is(qErr, pgx.ErrNoRows) {
+					return nil, nil, nil, 0, apperror.Wrap(apperror.CodeInternalError, "match project by repository", qErr)
+				}
+			}
+		}
+
+		// 3. Match by name within target tenant.
+		if targetPID == uuid.Nil {
+			qErr := tx.QueryRow(ctx, `
+				SELECT id FROM projects
+				WHERE tenant_id = $1 AND name = $2
+				ORDER BY (status = 'active') DESC, created_at ASC, id ASC
+				LIMIT 1
+			`, targetTID, proj.Name).Scan(&targetPID)
+			if qErr != nil && !errors.Is(qErr, pgx.ErrNoRows) {
+				return nil, nil, nil, 0, apperror.Wrap(apperror.CodeInternalError, "match project by name", qErr)
+			}
+		}
+
+		if targetPID != uuid.Nil {
+			matched[targetPID] = true
+		} else {
+			newPID, allocErr := allocateUnusedUUID(ctx, tx, "projects", proj.ID)
+			if allocErr != nil {
+				return nil, nil, nil, 0, allocErr
+			}
+			marker := proj.Marker
+			if marker != nil {
+				var markerUsed bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE tenant_id = $1 AND marker = $2)`, targetTID, *marker).Scan(&markerUsed); err != nil {
+					return nil, nil, nil, 0, apperror.Wrap(apperror.CodeInternalError, "check project marker", err)
+				}
+				if markerUsed {
+					marker = nil
+				}
+			}
+			status := proj.Status
+			if status != "active" && status != "disabled" {
+				status = "active"
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO projects (id, tenant_id, name, marker, status, created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+			`, newPID, targetTID, proj.Name, marker, status, proj.CreatedAt, proj.UpdatedAt); err != nil {
+				return nil, nil, nil, 0, apperror.Wrap(apperror.CodeInvalidArgument, "create project "+proj.Name, err)
+			}
+			targetPID = newPID
+			created[targetPID] = true
+		}
+
+		projMap[proj.ID] = targetPID
+
+		for _, repo := range repos {
+			newRepoID, allocErr := allocateUnusedUUID(ctx, tx, "project_repositories", repo.ID)
+			if allocErr != nil {
+				return nil, nil, nil, 0, allocErr
+			}
+			tag, execErr := tx.Exec(ctx, `
+				INSERT INTO project_repositories (id, tenant_id, project_id, canonical_remote, workspace_path, is_primary, created_at)
+				VALUES (
+					$1, $2, $3, $4, $5,
+					$6 AND NOT EXISTS (SELECT 1 FROM project_repositories WHERE project_id = $3 AND is_primary),
+					$7
+				)
+				ON CONFLICT (tenant_id, canonical_remote, workspace_path) DO NOTHING
+			`, newRepoID, targetTID, targetPID, repo.CanonicalRemote, repo.WorkspacePath, repo.IsPrimary, repo.CreatedAt)
+			if execErr != nil {
+				return nil, nil, nil, 0, apperror.Wrap(apperror.CodeInvalidArgument, "bind project_repository", execErr)
+			}
+			if tag.RowsAffected() > 0 {
+				repoInserted++
+			}
+		}
+	}
+	return projMap, matched, created, repoInserted, nil
+}
+
+func allocateUnusedUUID(ctx context.Context, tx pgx.Tx, table string, preferred uuid.UUID) (uuid.UUID, error) {
+	if preferred != uuid.Nil {
+		var exists bool
+		// table is always an internal constant from callers above.
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, preferred).Scan(&exists); err != nil {
+			return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "check uuid availability on "+table, err)
+		}
+		if !exists {
+			return preferred, nil
+		}
+	}
+	return uuid.New(), nil
+}
+
+func ensureAdminActorForTenantTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (uuid.UUID, error) {
+	var actorID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT principal_id FROM tenant_members
+		WHERE tenant_id = $1 AND role = 'admin'
+		LIMIT 1
+	`, tenantID).Scan(&actorID)
+	if err == nil {
+		return actorID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "query tenant admin principal", err)
+	}
+
+	err = tx.QueryRow(ctx, `
+		INSERT INTO principals (id, identity_provider, subject, display_name, status)
+		VALUES ($1, 'system_webui', 'admin', 'Web UI System Admin', 'active')
+		ON CONFLICT (identity_provider, subject) DO UPDATE SET status = 'active'
+		RETURNING id
+	`, uuid.New()).Scan(&actorID)
+	if err != nil {
+		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "ensure system admin principal", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO tenant_members (tenant_id, principal_id, role)
+		VALUES ($1, $2, 'admin')
+		ON CONFLICT (tenant_id, principal_id) DO UPDATE SET role = 'admin'
+	`, tenantID, actorID); err != nil {
+		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "ensure system admin tenant membership", err)
+	}
+	return actorID, nil
+}
+
+func rewriteRevisionSnapshot(raw json.RawMessage, memID, tenantID uuid.UUID, projectID *uuid.UUID, actorID uuid.UUID) json.RawMessage {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return json.RawMessage("{}")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		return raw
+	}
+	if _, ok := obj["id"]; ok {
+		obj["id"] = memID
+	}
+	if _, ok := obj["tenant_id"]; ok {
+		obj["tenant_id"] = tenantID
+	}
+	if projectID != nil {
+		obj["project_id"] = *projectID
+	} else {
+		delete(obj, "project_id")
+	}
+	if _, ok := obj["created_by"]; ok {
+		obj["created_by"] = actorID
+	}
+	if _, ok := obj["updated_by"]; ok {
+		obj["updated_by"] = actorID
+	}
+	updated, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return updated
+}
+
 // EncodeSnapshotArchive packages SnapshotPayload and its manifest into a ZIP archive.
 // When passphrase is non-empty, payload JSON is encrypted with scrypt + AES-256-GCM.
 func EncodeSnapshotArchive(payload SnapshotPayload, passphrase string, exportedAt time.Time) ([]byte, SnapshotManifest, error) {
+	counts := SnapshotCounts{
+		Tenants:             len(payload.Tenants),
+		Principals:          len(payload.Principals),
+		TenantMembers:       len(payload.TenantMembers),
+		Projects:            len(payload.Projects),
+		ProjectMembers:      len(payload.ProjectMembers),
+		ProjectRepositories: len(payload.ProjectRepositories),
+		APITokens:           len(payload.APITokens),
+		Memories:            len(payload.Memories),
+		MemoryRevisions:     len(payload.MemoryRevisions),
+		MemoryEvents:        len(payload.MemoryEvents),
+	}
+	return encodeArchive(SnapshotFormat, SnapshotVersion, counts, payload, passphrase, exportedAt)
+}
+
+// EncodeKnowledgeArchive packages KnowledgeBundlePayload and its manifest into a ZIP archive.
+// When passphrase is non-empty, payload JSON is encrypted with scrypt + AES-256-GCM.
+func EncodeKnowledgeArchive(payload KnowledgeBundlePayload, passphrase string, exportedAt time.Time) ([]byte, SnapshotManifest, error) {
+	counts := SnapshotCounts{
+		Tenants:             len(payload.Tenants),
+		Projects:            len(payload.Projects),
+		ProjectRepositories: len(payload.ProjectRepositories),
+		Memories:            len(payload.Memories),
+		MemoryRevisions:     len(payload.MemoryRevisions),
+	}
+	return encodeArchive(KnowledgeBundleFormat, KnowledgeBundleVersion, counts, payload, passphrase, exportedAt)
+}
+
+func encodeArchive(format string, version int, counts SnapshotCounts, payload any, passphrase string, exportedAt time.Time) ([]byte, SnapshotManifest, error) {
 	plainJSON, err := json.Marshal(payload)
 	if err != nil {
 		return nil, SnapshotManifest{}, err
 	}
 	sum := sha256.Sum256(plainJSON)
 	manifest := SnapshotManifest{
-		Format:          SnapshotFormat,
-		SnapshotVersion: SnapshotVersion,
+		Format:          format,
+		SnapshotVersion: version,
 		ExportedAt:      exportedAt.UTC(),
 		Encrypted:       passphrase != "",
 		PayloadSHA256:   hex.EncodeToString(sum[:]),
-		Counts: SnapshotCounts{
-			Tenants:             len(payload.Tenants),
-			Principals:          len(payload.Principals),
-			TenantMembers:       len(payload.TenantMembers),
-			Projects:            len(payload.Projects),
-			ProjectMembers:      len(payload.ProjectMembers),
-			ProjectRepositories: len(payload.ProjectRepositories),
-			APITokens:           len(payload.APITokens),
-			Memories:            len(payload.Memories),
-			MemoryRevisions:     len(payload.MemoryRevisions),
-			MemoryEvents:        len(payload.MemoryEvents),
-		},
+		Counts:          counts,
 	}
 
 	payloadEntryName := "payload.json"
@@ -752,14 +1693,17 @@ func EncodeSnapshotArchive(payload SnapshotPayload, passphrase string, exportedA
 	return buf.Bytes(), manifest, nil
 }
 
-// DecodeSnapshotArchive validates and extracts a migration ZIP archive, decrypting if encrypted.
-func DecodeSnapshotArchive(zipBytes []byte, passphrase string) (SnapshotManifest, SnapshotPayload, error) {
-	var manifest SnapshotManifest
-	var payload SnapshotPayload
+// InspectArchiveManifest reads and validates only manifest.json from a migration ZIP archive.
+func InspectArchiveManifest(zipBytes []byte) (SnapshotManifest, error) {
+	manifest, _, err := openArchiveManifest(zipBytes)
+	return manifest, err
+}
 
+func openArchiveManifest(zipBytes []byte) (SnapshotManifest, map[string]*zip.File, error) {
+	var manifest SnapshotManifest
 	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "invalid zip snapshot archive")
+		return manifest, nil, apperror.New(apperror.CodeInvalidArgument, "invalid zip snapshot archive")
 	}
 
 	files := make(map[string]*zip.File, len(zr.File))
@@ -769,58 +1713,135 @@ func DecodeSnapshotArchive(zipBytes []byte, passphrase string) (SnapshotManifest
 
 	mf, ok := files["manifest.json"]
 	if !ok {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "snapshot archive missing manifest.json")
+		return manifest, nil, apperror.New(apperror.CodeInvalidArgument, "snapshot archive missing manifest.json")
 	}
 	manifestBytes, err := readZipEntryLimited(mf, 1<<20)
 	if err != nil {
-		return manifest, payload, err
+		return manifest, nil, err
 	}
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "invalid manifest.json")
+		return manifest, nil, apperror.New(apperror.CodeInvalidArgument, "invalid manifest.json")
 	}
-	if manifest.Format != SnapshotFormat {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "unsupported snapshot format")
+	switch manifest.Format {
+	case SnapshotFormat:
+		if manifest.SnapshotVersion != SnapshotVersion {
+			return manifest, nil, apperror.New(apperror.CodeInvalidArgument, fmt.Sprintf("unsupported snapshot_version: %d", manifest.SnapshotVersion))
+		}
+	case KnowledgeBundleFormat:
+		if manifest.SnapshotVersion != KnowledgeBundleVersion {
+			return manifest, nil, apperror.New(apperror.CodeInvalidArgument, fmt.Sprintf("unsupported snapshot_version: %d", manifest.SnapshotVersion))
+		}
+	default:
+		return manifest, nil, apperror.New(apperror.CodeInvalidArgument, "unsupported snapshot format")
 	}
-	if manifest.SnapshotVersion != SnapshotVersion {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, fmt.Sprintf("unsupported snapshot_version: %d", manifest.SnapshotVersion))
+	return manifest, files, nil
+}
+
+// DecodeSnapshotArchive validates and extracts a full-system migration ZIP archive.
+func DecodeSnapshotArchive(zipBytes []byte, passphrase string) (SnapshotManifest, SnapshotPayload, error) {
+	decoded, err := DecodeMigrationArchive(zipBytes, passphrase)
+	if err != nil {
+		return decoded.Manifest, SnapshotPayload{}, err
 	}
+	if decoded.Manifest.Format != SnapshotFormat || decoded.SystemPayload == nil {
+		return decoded.Manifest, SnapshotPayload{}, apperror.New(apperror.CodeInvalidArgument, "unsupported snapshot format")
+	}
+	return decoded.Manifest, *decoded.SystemPayload, nil
+}
+
+// DecodeMigrationArchive validates and extracts either a full-system snapshot or a knowledge bundle.
+func DecodeMigrationArchive(zipBytes []byte, passphrase string) (DecodedArchive, error) {
+	var out DecodedArchive
+	manifest, files, err := openArchiveManifest(zipBytes)
+	if err != nil {
+		return out, err
+	}
+	out.Manifest = manifest
 
 	var plainJSON []byte
 	if manifest.Encrypted {
 		if passphrase == "" {
-			return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "该迁移包已加密，请输入导出时设置的加密口令")
+			return out, apperror.New(apperror.CodeInvalidArgument, "该迁移包已加密，请输入导出时设置的加密口令")
 		}
 		ef, ok := files["payload.enc"]
 		if !ok {
-			return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "encrypted snapshot archive missing payload.enc")
+			return out, apperror.New(apperror.CodeInvalidArgument, "encrypted snapshot archive missing payload.enc")
 		}
 		cipherBytes, err := readZipEntryLimited(ef, maxImportBytes)
 		if err != nil {
-			return manifest, payload, err
+			return out, err
 		}
 		plainJSON, err = unsealSnapshotPayload(cipherBytes, passphrase, manifest.KDFSalt)
 		if err != nil {
-			return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "解密失败：口令错误或迁移包已损坏")
+			return out, apperror.New(apperror.CodeInvalidArgument, "解密失败：口令错误或迁移包已损坏")
 		}
 	} else {
 		pf, ok := files["payload.json"]
 		if !ok {
-			return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "snapshot archive missing payload.json")
+			return out, apperror.New(apperror.CodeInvalidArgument, "snapshot archive missing payload.json")
 		}
 		plainJSON, err = readZipEntryLimited(pf, maxImportBytes)
 		if err != nil {
-			return manifest, payload, err
+			return out, err
 		}
 	}
 
 	sum := sha256.Sum256(plainJSON)
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), manifest.PayloadSHA256) {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "快照校验失败：payload SHA-256 不匹配")
+		return out, apperror.New(apperror.CodeInvalidArgument, "快照校验失败：payload SHA-256 不匹配")
 	}
-	if err := json.Unmarshal(plainJSON, &payload); err != nil {
-		return manifest, payload, apperror.New(apperror.CodeInvalidArgument, "invalid snapshot payload json")
+
+	switch manifest.Format {
+	case SnapshotFormat:
+		var p SnapshotPayload
+		if err := json.Unmarshal(plainJSON, &p); err != nil {
+			return out, apperror.New(apperror.CodeInvalidArgument, "invalid snapshot payload json")
+		}
+		out.SystemPayload = &p
+	case KnowledgeBundleFormat:
+		var b KnowledgeBundlePayload
+		if err := json.Unmarshal(plainJSON, &b); err != nil {
+			return out, apperror.New(apperror.CodeInvalidArgument, "invalid knowledge bundle payload json")
+		}
+		out.KnowledgeBundle = &b
 	}
-	return manifest, payload, nil
+	return out, nil
+}
+
+func summarizeArchiveTenants(decoded DecodedArchive) []InspectTenantSummary {
+	projCounts := make(map[uuid.UUID]int)
+	memCounts := make(map[uuid.UUID]int)
+	var tenants []snapshotTenant
+
+	if decoded.SystemPayload != nil {
+		tenants = decoded.SystemPayload.Tenants
+		for _, proj := range decoded.SystemPayload.Projects {
+			projCounts[proj.TenantID]++
+		}
+		for _, m := range decoded.SystemPayload.Memories {
+			memCounts[m.TenantID]++
+		}
+	} else if decoded.KnowledgeBundle != nil {
+		tenants = decoded.KnowledgeBundle.Tenants
+		for _, proj := range decoded.KnowledgeBundle.Projects {
+			projCounts[proj.TenantID]++
+		}
+		for _, m := range decoded.KnowledgeBundle.Memories {
+			memCounts[m.TenantID]++
+		}
+	}
+
+	out := make([]InspectTenantSummary, 0, len(tenants))
+	for _, t := range tenants {
+		out = append(out, InspectTenantSummary{
+			ID:            t.ID,
+			Name:          t.Name,
+			Status:        t.Status,
+			ProjectsCount: projCounts[t.ID],
+			MemoriesCount: memCounts[t.ID],
+		})
+	}
+	return out
 }
 
 func readZipEntryLimited(f *zip.File, limit int64) ([]byte, error) {

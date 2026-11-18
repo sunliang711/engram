@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"engram/internal/config"
@@ -271,4 +272,147 @@ func TestAdminUIRegression(t *testing.T) {
 			}
 		}
 	})
+	t.Run("tenant rename and delete", func(t *testing.T) {
+		nameA := "ui-rename-a-" + uuid.NewString()
+		nameB := "ui-rename-b-" + uuid.NewString()
+		var idA, idB uuid.UUID
+		createTenant := func(name string) uuid.UUID {
+			body, _ := json.Marshal(map[string]string{"name": name})
+			rec := httptest.NewRecorder()
+			handler.handleTenants(rec, httptest.NewRequest(http.MethodPost, "/api/admin/tenants", bytes.NewReader(body)))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("create tenant %s: %d %s", name, rec.Code, rec.Body.String())
+			}
+			var resp struct{ ID uuid.UUID `json:"id"` }
+			_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+			return resp.ID
+		}
+		idA = createTenant(nameA)
+		idB = createTenant(nameB)
+		defer func() {
+			_, _ = database.Pool.Exec(ctx, `DELETE FROM tenants WHERE id = ANY($1)`, []uuid.UUID{idA, idB})
+		}()
+
+		// Conflict when renaming to existing tenant name.
+		dupBody, _ := json.Marshal(map[string]string{"id": idA.String(), "name": nameB})
+		dupRec := httptest.NewRecorder()
+		handler.handleTenants(dupRec, httptest.NewRequest(http.MethodPatch, "/api/admin/tenants", bytes.NewReader(dupBody)))
+		if dupRec.Code != http.StatusConflict {
+			t.Fatalf("expected 409 on duplicate tenant rename, got %d: %s", dupRec.Code, dupRec.Body.String())
+		}
+
+		// Valid rename.
+		newNameA := nameA + "-renamed"
+		renBody, _ := json.Marshal(map[string]string{"id": idA.String(), "name": newNameA})
+		renRec := httptest.NewRecorder()
+		handler.handleTenants(renRec, httptest.NewRequest(http.MethodPatch, "/api/admin/tenants", bytes.NewReader(renBody)))
+		if renRec.Code != http.StatusOK {
+			t.Fatalf("rename tenant failed: %d %s", renRec.Code, renRec.Body.String())
+		}
+
+		// Delete tenant.
+		delBody, _ := json.Marshal(map[string]string{"id": idA.String()})
+		delRec := httptest.NewRecorder()
+		handler.handleTenants(delRec, httptest.NewRequest(http.MethodDelete, "/api/admin/tenants", bytes.NewReader(delBody)))
+		if delRec.Code != http.StatusOK {
+			t.Fatalf("delete tenant failed: %d %s", delRec.Code, delRec.Body.String())
+		}
+	})
+	t.Run("principal rename and delete preserves memories under system principal", func(t *testing.T) {
+		tempSub := "ui-del-" + uuid.NewString()
+		createBody, _ := json.Marshal(map[string]string{
+			"mode":         "create",
+			"tenant_id":    tenant.String(),
+			"subject":      tempSub,
+			"display_name": "Temp Author",
+			"tenant_role":  "global_writer",
+		})
+		cRec := httptest.NewRecorder()
+		handler.handlePrincipals(cRec, httptest.NewRequest(http.MethodPost, "/api/admin/principals", bytes.NewReader(createBody)))
+		if cRec.Code != http.StatusCreated {
+			t.Fatalf("create temp principal: %d %s", cRec.Code, cRec.Body.String())
+		}
+		var created struct {
+			PrincipalID uuid.UUID `json:"principal_id"`
+		}
+		_ = json.Unmarshal(cRec.Body.Bytes(), &created)
+
+		renBody, _ := json.Marshal(map[string]string{"id": created.PrincipalID.String(), "display_name": "Renamed Author"})
+		rRec := httptest.NewRecorder()
+		handler.handlePrincipals(rRec, httptest.NewRequest(http.MethodPatch, "/api/admin/principals", bytes.NewReader(renBody)))
+		if rRec.Code != http.StatusOK {
+			t.Fatalf("rename principal: %d %s", rRec.Code, rRec.Body.String())
+		}
+
+		memID := uuid.New()
+		if _, err := database.Pool.Exec(ctx, `
+			INSERT INTO memories (id, tenant_id, scope, category, title, content_md, content_hash, created_by, updated_by)
+			VALUES ($1, $2, 'global', 'notes', 'Authored by temp', 'body', 'hash-temp-del', $3, $3)
+		`, memID, tenant, created.PrincipalID); err != nil {
+			t.Fatal(err)
+		}
+
+		delBody, _ := json.Marshal(map[string]string{"id": created.PrincipalID.String(), "scope": "all"})
+		dRec := httptest.NewRecorder()
+		handler.handlePrincipals(dRec, httptest.NewRequest(http.MethodDelete, "/api/admin/principals", bytes.NewReader(delBody)))
+		if dRec.Code != http.StatusOK {
+			t.Fatalf("delete principal: %d %s", dRec.Code, dRec.Body.String())
+		}
+
+		var exists bool
+		if err := database.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memories WHERE id = $1)`, memID).Scan(&exists); err != nil || !exists {
+			t.Fatalf("expected authored memory to be preserved after principal delete, exists=%t err=%v", exists, err)
+		}
+	})
+}
+
+func TestUIRoutePathsAndMux(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"/", true},
+		{"/overview", true},
+		{"/memories", true},
+		{"/memories/123e4567-e89b-12d3-a456-426614174000", true},
+		{"/projects", true},
+		{"/projects/proj-1", true},
+		{"/tenants", true},
+		{"/tenants/tenant-1", true},
+		{"/tenants/tenant-1/members/member-1", true},
+		{"/migration", true},
+		{"/memories/a/b", false},
+		{"/tenants/tenant-1/members", false},
+		{"/tenants/tenant-1/other/member-1", false},
+		{"/api/admin/tenants", false},
+		{"/mcp", false},
+		{"/unknown", false},
+	} {
+		if got := isUIRoutePath(tc.path); got != tc.want {
+			t.Errorf("isUIRoutePath(%q) = %t, want %t", tc.path, got, tc.want)
+		}
+	}
+
+	mux := http.NewServeMux()
+	(&Handler{}).RegisterRoutes(mux)
+
+	for _, path := range []string{"/overview", "/memories", "/tenants/t1/members/m1", "/migration"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<div id="app-view"`) {
+			t.Fatalf("GET %s: code=%d body_len=%d", path, rec.Code, rec.Body.Len())
+		}
+	}
+
+	recFav := httptest.NewRecorder()
+	mux.ServeHTTP(recFav, httptest.NewRequest(http.MethodGet, "/ui/favicon.svg", nil))
+	if recFav.Code != http.StatusOK || !strings.Contains(recFav.Body.String(), "<svg") {
+		t.Fatalf("GET /ui/favicon.svg failed: %d", recFav.Code)
+	}
+
+	rec404 := httptest.NewRecorder()
+	mux.ServeHTTP(rec404, httptest.NewRequest(http.MethodGet, "/nonexistent-route", nil))
+	if rec404.Code != http.StatusNotFound {
+		t.Fatalf("GET /nonexistent-route = %d, want 404", rec404.Code)
+	}
 }
