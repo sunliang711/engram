@@ -23,7 +23,11 @@ services:
     environment:
       MEMORY_LISTEN_ADDR: ":8080"
       MEMORY_DATABASE_DSN: "postgres://postgres:postgres@postgres:5432/ai_memory?sslmode=disable"
-      MEMORY_CONTEXT_SIGN_KEY: "replace-with-at-least-32-byte-hmac-secret-key"
+      # Set a persistent >=32-byte secret key in production (e.g. `openssl rand -hex 32`),
+      # via shell environment or .env. Placeholder values containing "change-me",
+      # "replace-with", or "example" are rejected; when empty/unset, an ephemeral
+      # random key is generated at startup.
+      MEMORY_CONTEXT_SIGN_KEY: "${MEMORY_CONTEXT_SIGN_KEY:-}"
     ports:
       - "8080:8080"
 

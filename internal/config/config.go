@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -140,7 +141,7 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return cfg, fmt.Errorf("read config file %s: %w", path, err)
 		}
-		if err := toml.Unmarshal(data, &cfg); err != nil {
+		if err := unmarshalTOML(data, &cfg); err != nil {
 			return cfg, fmt.Errorf("unmarshal config file %s: %w", path, err)
 		}
 	}
@@ -149,6 +150,93 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// unmarshalTOML decodes TOML bytes into cfg while supporting Go duration strings
+// (e.g. "30s", "24h") for time.Duration fields.
+func unmarshalTOML(data []byte, cfg *Config) error {
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	if err := normalizeDurationFields(raw, reflect.TypeOf(*cfg), ""); err != nil {
+		return err
+	}
+	normalized, err := toml.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	return toml.Unmarshal(normalized, cfg)
+}
+
+var durationType = reflect.TypeOf(time.Duration(0))
+
+func normalizeDurationFields(raw map[string]any, structType reflect.Type, prefix string) error {
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		key := strings.Split(field.Tag.Get("toml"), ",")[0]
+		if key == "-" {
+			continue
+		}
+		if key == "" {
+			key = field.Name
+		}
+		val, exists := raw[key]
+		if !exists {
+			continue
+		}
+		fieldPath := key
+		if prefix != "" {
+			fieldPath = prefix + "." + key
+		}
+
+		ft := field.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+
+		switch {
+		case ft == durationType:
+			s, ok := val.(string)
+			if !ok {
+				continue
+			}
+			d, err := time.ParseDuration(strings.TrimSpace(s))
+			if err != nil {
+				return fmt.Errorf("invalid duration for %s (%q): %w", fieldPath, s, err)
+			}
+			raw[key] = int64(d)
+		case ft.Kind() == reflect.Struct && ft != reflect.TypeOf(time.Time{}):
+			if subMap, ok := val.(map[string]any); ok {
+				if err := normalizeDurationFields(subMap, ft, fieldPath); err != nil {
+					return err
+				}
+			}
+		case ft.Kind() == reflect.Slice:
+			elemType := ft.Elem()
+			if elemType.Kind() == reflect.Pointer {
+				elemType = elemType.Elem()
+			}
+			if elemType.Kind() == reflect.Struct {
+				if items, ok := val.([]any); ok {
+					for idx, item := range items {
+						if subMap, ok := item.(map[string]any); ok {
+							if err := normalizeDurationFields(subMap, elemType, fmt.Sprintf("%s[%d]", fieldPath, idx)); err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func applyEnvOverrides(cfg *Config) {

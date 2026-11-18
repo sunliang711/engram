@@ -615,6 +615,29 @@
     $("memory-detail-card").classList.add("hidden");
   });
 
+  function toggleGlossaryModal(open) {
+    const modal = $("glossary-modal");
+    if (!modal) return;
+    if (open) {
+      modal.classList.remove("hidden");
+    } else {
+      modal.classList.add("hidden");
+    }
+  }
+
+  $("btn-open-glossary").addEventListener("click", () => toggleGlossaryModal(true));
+  $("btn-close-glossary").addEventListener("click", () => toggleGlossaryModal(false));
+  $("glossary-modal").addEventListener("click", (e) => {
+    if (e.target === $("glossary-modal")) {
+      toggleGlossaryModal(false);
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("glossary-modal").classList.contains("hidden")) {
+      toggleGlossaryModal(false);
+    }
+  });
+
   $("btn-trigger-export").addEventListener("click", async () => {
     try {
       const res = await api("/api/admin/export", { method: "POST" });

@@ -34,3 +34,22 @@ make test
 # 5. Reset admin password if forgotten
 RESET_ADMIN=true ./bin/memory-server --config config.example.toml
 ```
+
+### Docker Compose
+
+```bash
+# Local development (generates an ephemeral random signing key if MEMORY_CONTEXT_SIGN_KEY is unset)
+docker compose up -d
+
+# Production / persistent sessions (recommended)
+MEMORY_CONTEXT_SIGN_KEY="$(openssl rand -hex 32)" docker compose up -d
+```
+
+## Configuration
+
+- Copy [config.example.toml](./config.example.toml) to `config.toml` and adjust settings as needed.
+- **Signing Key (`server.context_sign_key` / `MEMORY_CONTEXT_SIGN_KEY`)**: Set a persistent >=32-byte secret key in production, recommended via:
+  ```bash
+  openssl rand -hex 32
+  ```
+  Placeholder values containing `change-me`, `replace-with`, or `example` are rejected on startup. When omitted, an ephemeral random key is generated at startup (existing context tokens and admin sessions will be invalidated across restarts).

@@ -66,6 +66,7 @@
       </div>
       <div style="display:flex; align-items:center; gap:12px;">
         <span id="current-admin-user" style="font-size:13px; color:var(--text-muted);">admin</span>
+        <button class="secondary small" id="btn-open-glossary">术语与权限说明</button>
         <button class="secondary small" id="btn-open-change-pwd">修改密码</button>
         <button class="secondary small" id="btn-logout">退出登录</button>
       </div>
@@ -100,28 +101,33 @@
               <div class="form-group">
                 <label>租户名称 (Tenant Name)</label>
                 <input type="text" id="qs-tenant" placeholder="例如：personal 或 team-core" value="default" required />
+                <small class="field-hint">顶层隔离边界；同一 Tenant 内共享 Global 记忆，跨 Tenant 完全隔离。</small>
               </div>
               <div class="form-group">
                 <label>客户端身份标识 (Principal Subject)</label>
                 <input type="text" id="qs-subject" placeholder="例如：macbook-pro" value="agent-default" required />
+                <small class="field-hint">在当前认证方式下唯一标识此设备或 Agent（如 <code>macbook-pro</code>）。</small>
               </div>
               <div class="form-group">
                 <label>显示名称 (Display Name)</label>
                 <input type="text" id="qs-display" placeholder="例如：Eagle MacBook" value="Default AI Agent" required />
+                <small class="field-hint">控制台可读名称，用于展示和审计，不影响鉴权。</small>
               </div>
               <div class="form-group">
                 <label>Tenant 角色</label>
                 <select id="qs-tenant-role">
-                  <option value="admin">admin (全权限)</option>
+                  <option value="admin">admin (全局读写 + 自动拥有全项目 maintainer)</option>
                   <option value="global_writer" selected>global_writer (可读写全局知识)</option>
                   <option value="member">member (仅读全局知识)</option>
                 </select>
+                <small class="field-hint">控制 Global 记忆权限；若填写下方初始项目，会自动授予该项目 <code>maintainer</code>。</small>
               </div>
             </div>
             <div class="form-row">
               <div class="form-group">
                 <label>初始项目名称 (可选)</label>
                 <input type="text" id="qs-project" placeholder="例如：ai-memory" />
+                <small class="field-hint">用于隔离存放单个代码库的 Project 记忆；留空则仅创建 Tenant 与 Principal。</small>
               </div>
               <div class="form-group">
                 <label>Git Remote URL (可选)</label>
@@ -173,12 +179,14 @@
                     <option value="oidc">oidc</option>
                     <option value="mtls">mtls</option>
                   </select>
+                  <small class="field-hint">通过后台签发 Bearer Token 时选 <code>api_token</code>。</small>
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group">
                   <label>唯一标识 (Subject)</label>
                   <input type="text" id="prin-subject" placeholder="例如：claude-code-mac" required />
+                  <small class="field-hint">同一 Provider 下不可重复，用于区分不同客户端/成员。</small>
                 </div>
                 <div class="form-group">
                   <label>显示名称</label>
@@ -187,10 +195,11 @@
                 <div class="form-group">
                   <label>Tenant 角色</label>
                   <select id="prin-role">
-                    <option value="global_writer">global_writer</option>
-                    <option value="member">member</option>
-                    <option value="admin">admin</option>
+                    <option value="global_writer">global_writer (可读写全局知识)</option>
+                    <option value="member">member (仅读全局知识)</option>
+                    <option value="admin">admin (全局读写 + 全项目 maintainer)</option>
                   </select>
+                  <small class="field-hint">控制 Global 记忆权限；<code>admin</code> 自动拥有所有活跃项目的 <code>maintainer</code>。</small>
                 </div>
               </div>
               <button type="submit">创建 Principal 并授权</button>
@@ -268,10 +277,11 @@
                 <div class="form-group">
                   <label>项目角色</label>
                   <select id="pm-role">
-                    <option value="maintainer">maintainer (读写+删除恢复)</option>
-                    <option value="writer">writer (读写)</option>
-                    <option value="reader">reader (只读)</option>
+                    <option value="maintainer">maintainer (读写 + 软删除/恢复)</option>
+                    <option value="writer">writer (创建与更新，不可删除)</option>
+                    <option value="reader">reader (仅只读)</option>
                   </select>
+                  <small class="field-hint">仅控制该项目的 Project 记忆（Tenant 为 <code>admin</code> 时自动具备 <code>maintainer</code>）。</small>
                 </div>
               </div>
               <button type="submit" class="small">保存项目成员权限</button>
@@ -421,6 +431,68 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="glossary-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="glossary-modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="glossary-modal-title">术语与权限速查</h2>
+        <button type="button" class="secondary small" id="btn-close-glossary">关闭</button>
+      </div>
+
+      <div class="glossary-section">
+        <h3>1. 核心概念与层级关系</h3>
+        <ul class="glossary-list">
+          <li><strong>Tenant（租户）</strong>：最高层级的隔离边界（如 <code>default</code>、<code>personal</code>、<code>team-core</code>）。同一 Tenant 内共享 <code>global</code> 记忆，不同 Tenant 之间数据完全隔离。</li>
+          <li><strong>Principal（身份主体）</strong>：访问 MCP 服务的具体客户端、设备或成员身份（例如 MacBook 上的 Claude Code、另一台电脑上的 Codex）。</li>
+          <li><strong>Provider / Subject（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分身份的唯一 ID（如 <code>macbook-pro</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
+          <li><strong>Project（项目）&amp; Marker / Remote</strong>：归属于某个 Tenant 的独立代码库或 Monorepo 子路径（<code>workspace_path</code>），用于存放 <code>project</code> 作用域记忆。可通过 Git Remote 或根目录 <code>.ai-memory-project</code> UUID 文件自动匹配。</li>
+        </ul>
+      </div>
+
+      <div class="glossary-section">
+        <h3>2. Tenant 角色（控制租户级与 Global 记忆权限）</h3>
+        <table>
+          <thead>
+            <tr><th>角色</th><th>Global 记忆</th><th>Project 记忆</th><th>典型适用场景</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>member</code></td>
+              <td>仅只读</td>
+              <td>需在「项目与仓库识别」单独分配项目角色</td>
+              <td>普通协作者或只读全局规范的 Agent</td>
+            </tr>
+            <tr>
+              <td><code>global_writer</code></td>
+              <td>可读写、删除及 <code>promote</code> 提升至全局</td>
+              <td>需在「项目与仓库识别」单独分配项目角色</td>
+              <td>个人主力 Agent 或需要沉淀跨项目规范的成员</td>
+            </tr>
+            <tr>
+              <td><code>admin</code></td>
+              <td>可读写、删除及 <code>promote</code> 提升至全局</td>
+              <td>自动拥有该 Tenant 下所有活跃项目的 <code>maintainer</code> 权限</td>
+              <td>租户管理员 / 个人全权限主账号</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="glossary-section">
+        <h3>3. Project 角色（控制单个项目的 Project 记忆权限）</h3>
+        <table>
+          <thead>
+            <tr><th>角色</th><th>读取</th><th>创建 / 更新</th><th>软删除 / 恢复</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>reader</code></td><td>支持</td><td>不支持</td><td>不支持</td></tr>
+            <tr><td><code>writer</code></td><td>支持</td><td>支持</td><td>不支持</td></tr>
+            <tr><td><code>maintainer</code></td><td>支持</td><td>支持</td><td>支持</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast hidden"></div>
