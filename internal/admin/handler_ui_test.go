@@ -196,6 +196,43 @@ func TestAdminUIRegression(t *testing.T) {
 		}
 		create(http.StatusCreated)
 		create(http.StatusConflict)
+
+		var projectID string
+		if err := database.Pool.QueryRow(ctx, `SELECT id::text FROM projects WHERE tenant_id = $1 AND name = 'ui-regression-project'`, tenant).Scan(&projectID); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := database.Pool.Exec(ctx, `DELETE FROM project_repositories WHERE tenant_id = $1`, tenant); err != nil {
+				t.Errorf("cleanup repositories: %v", err)
+			}
+		}()
+		addRemote := func(status int) {
+			t.Helper()
+			payload, _ := json.Marshal(map[string]any{"project_id": projectID, "remote_url": "https://github.com/example/ui-regression.git"})
+			rec := httptest.NewRecorder()
+			handler.handleProjectRemotes(rec, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload)))
+			if rec.Code != status {
+				t.Fatalf("remote status %d, want %d: %s", rec.Code, status, rec.Body.String())
+			}
+		}
+		addRemote(http.StatusCreated)
+		addRemote(http.StatusConflict)
+	})
+	t.Run("tenant names stay unique", func(t *testing.T) {
+		name := "ui-regression-unique-" + uuid.NewString()
+		defer func() {
+			if _, err := database.Pool.Exec(ctx, `DELETE FROM tenants WHERE name = $1`, name); err != nil {
+				t.Errorf("cleanup tenant: %v", err)
+			}
+		}()
+		for _, status := range []int{http.StatusCreated, http.StatusConflict} {
+			payload, _ := json.Marshal(map[string]string{"name": name})
+			rec := httptest.NewRecorder()
+			handler.handleTenants(rec, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload)))
+			if rec.Code != status {
+				t.Fatalf("tenant status %d, want %d: %s", rec.Code, status, rec.Body.String())
+			}
+		}
 	})
 	// postPrincipal exercises creation and binding semantics without bypassing handler validation.
 	postPrincipal := func(body map[string]string, status int) {

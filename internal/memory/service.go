@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1347,6 +1348,168 @@ func (s *Service) AdminSetPinned(ctx context.Context, req AdminPinRequest) (*Mem
 		setArgs: []any{req.IsPinned},
 		apply:   func(m *MemoryDetail, _ time.Time) { m.IsPinned = req.IsPinned },
 	})
+}
+
+// PurgeDigest fingerprints a set of memory versions independent of order, so a purge can prove
+// it removes exactly what a backup contained.
+func PurgeDigest(items []MemoryVersion) string {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("%s:%d", item.ID, item.Version))
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// AdminPurge removes every memory matching the request in one transaction, after proving the
+// target set still matches the digest of the backup taken beforehand. Soft purges record a delete
+// revision and event per memory. Permanent purges remove the memory rows, their revision snapshots,
+// and cached idempotent responses carrying their content; memories that were still active get a
+// final delete event so change-feed clients observe the removal.
+func (s *Service) AdminPurge(ctx context.Context, req AdminPurgeRequest) (int, error) {
+	if req.Mode == "" {
+		req.Mode = PurgeSoft
+	}
+	if req.Mode != PurgeSoft && req.Mode != PurgeHard && req.Mode != PurgeTrash {
+		return 0, apperror.New(apperror.CodeInvalidArgument, "invalid purge mode")
+	}
+	if req.Scope != "" && req.Scope != "global" && req.Scope != "project" {
+		return 0, apperror.New(apperror.CodeInvalidArgument, "invalid scope")
+	}
+	if req.ProjectID != nil && req.Scope != "project" {
+		return 0, apperror.New(apperror.CodeInvalidArgument, "project purge requires project scope")
+	}
+	p, err := s.auth.VerifyPrincipalMembership(ctx, req.TenantID, req.ActorID)
+	if err != nil {
+		return 0, err
+	}
+	if p.TenantRole != "admin" {
+		return 0, apperror.New(apperror.CodeUnauthorized, "tenant admin role required to purge memories")
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "begin purge transaction", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	where := "tenant_id = $1"
+	switch req.Mode {
+	case PurgeSoft:
+		where += " AND deleted_at IS NULL"
+	case PurgeTrash:
+		where += " AND deleted_at IS NOT NULL"
+	}
+	args := []any{req.TenantID}
+	if req.Scope != "" {
+		args = append(args, req.Scope)
+		where += fmt.Sprintf(" AND scope = $%d", len(args))
+	}
+	if req.ProjectID != nil {
+		args = append(args, *req.ProjectID)
+		where += fmt.Sprintf(" AND project_id = $%d", len(args))
+	}
+	if req.MemoryID != nil {
+		args = append(args, *req.MemoryID)
+		where += fmt.Sprintf(" AND id = $%d", len(args))
+	}
+	type purgeTarget struct {
+		MemoryVersion
+		projectID *uuid.UUID
+		active    bool
+	}
+	rows, err := tx.Query(ctx, `SELECT id, version, project_id, deleted_at IS NULL FROM memories WHERE `+where+` ORDER BY id FOR UPDATE`, args...)
+	if err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "lock memories for purge", err)
+	}
+	var targets []purgeTarget
+	var versions []MemoryVersion
+	for rows.Next() {
+		var item purgeTarget
+		if err := rows.Scan(&item.ID, &item.Version, &item.projectID, &item.active); err != nil {
+			rows.Close()
+			return 0, apperror.Wrap(apperror.CodeInternalError, "scan purge target", err)
+		}
+		targets = append(targets, item)
+		versions = append(versions, item.MemoryVersion)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "iterate purge targets", err)
+	}
+	if PurgeDigest(versions) != req.Digest {
+		return 0, apperror.New(apperror.CodeVersionConflict, "memories changed after the backup was taken")
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	reqID := req.RequestID
+	if reqID == "" {
+		reqID = "cli-purge-" + uuid.NewString()
+	}
+	if req.Mode == PurgeSoft {
+		for _, target := range targets {
+			current, err := s.loadMemoryByID(ctx, tx, req.TenantID, target.ID)
+			if err != nil {
+				return 0, err
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE memories
+				SET deleted_at = $1, version = version + 1, updated_by = $2, updated_at = $1
+				WHERE id = $3 AND tenant_id = $4 AND version = $5 AND deleted_at IS NULL
+			`, now, p.PrincipalID, target.ID, req.TenantID, target.Version); err != nil {
+				return 0, apperror.Wrap(apperror.CodeInternalError, "purge memory", err)
+			}
+			deleted := *current
+			deleted.Version = target.Version + 1
+			deleted.UpdatedBy = p.PrincipalID
+			deleted.UpdatedAt = now
+			deleted.DeletedAt = &now
+			if err := insertRevision(ctx, tx, deleted, "delete", p.PrincipalID, reqID+"-"+target.ID.String()); err != nil {
+				return 0, err
+			}
+			if _, err := s.appendEventLocked(ctx, tx, deleted.TenantID, deleted.ProjectID, deleted.ID, "delete", deleted.Version, p.PrincipalID); err != nil {
+				return 0, err
+			}
+		}
+	} else {
+		ids := make([]uuid.UUID, 0, len(targets))
+		idStrings := make([]string, 0, len(targets))
+		for _, target := range targets {
+			ids = append(ids, target.ID)
+			idStrings = append(idStrings, target.ID.String())
+		}
+		for _, statement := range []struct {
+			sql  string
+			args []any
+			what string
+		}{
+			// Promotion provenance pointing at a removed memory no longer resolves.
+			{`UPDATE memories SET source_memory_id = NULL WHERE source_memory_id = ANY($1)`, []any{ids}, "clear promotion links"},
+			{`DELETE FROM memory_revisions WHERE memory_id = ANY($1)`, []any{ids}, "delete memory revisions"},
+			{`DELETE FROM idempotency_requests WHERE tenant_id = $1 AND (response_json->'memory'->>'id' = ANY($2) OR response_json->>'memory_id' = ANY($2))`, []any{req.TenantID, idStrings}, "delete cached responses"},
+			{`DELETE FROM memories WHERE tenant_id = $1 AND id = ANY($2)`, []any{req.TenantID, ids}, "delete memories"},
+		} {
+			if _, err := tx.Exec(ctx, statement.sql, statement.args...); err != nil {
+				return 0, apperror.Wrap(apperror.CodeInternalError, statement.what, err)
+			}
+		}
+		for _, target := range targets {
+			if !target.active {
+				continue
+			}
+			if _, err := s.appendEventLocked(ctx, tx, req.TenantID, target.projectID, target.ID, "delete", target.Version+1, p.PrincipalID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "commit purge transaction", err)
+	}
+	return len(targets), nil
 }
 
 // adminWriteSpec describes one management-console state change: the permission it needs,

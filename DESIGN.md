@@ -147,7 +147,7 @@ github.com/eagle/project-a
 
 项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.engram-project` Marker 以及签发 API Token）统一在 `engram-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
 
-同一 Tenant 内的有效项目名称唯一：注册同名项目会被拒绝；快速接入向导填写已有项目名称时直接复用该项目，并在其上补充成员权限与 Remote 映射，不会生成同名项目。
+Tenant 名称全局唯一，创建同名 Tenant 会被拒绝。同一 Tenant 内的有效项目名称唯一：注册同名项目会被拒绝；同一仓库地址与子目录组合在一个 Tenant 内只能关联一个项目，重复添加同样会被拒绝；快速接入向导填写已有项目名称时直接复用该项目，并在其上补充成员权限与 Remote 映射，不会生成同名项目。
 
 没有 Remote 的项目（或 Monorepo 子项目）可在 Web UI 中一键生成并复制 `.engram-project` Marker UUID。该文件只保存项目 UUID，不保存服务地址或凭证，建议提交到仓库。
 
@@ -711,6 +711,25 @@ updated_at: 2026-11-16T10:00:00Z
 - PostgreSQL 执行定期全量备份和 WAL/PITR。
 - 备份需要加密、校验、设置保留周期并定期执行恢复演练。
 - Git 快照不能替代 PostgreSQL 备份，因为它不包含完整权限、事件和幂等状态。
+
+### 13.1 批量清空与彻底删除
+
+Admin Web UI 可以按范围批量删除知识。范围为整个 Tenant、Tenant 的 Global Memory、单个 Project 或回收站中的单条 Memory。删除方式有三种：
+
+| 删除方式 | 目标 | 结果 |
+|---|---|---|
+| 移入回收站 | 范围内未删除的 Memory | 软删除，可在回收站逐条恢复 |
+| 彻底删除 | 范围内全部 Memory，包括回收站中的条目 | 永久移除，不可恢复 |
+| 清空回收站 | 范围内已软删除的 Memory | 永久移除，不可恢复 |
+
+每次删除分两步完成，第二步只接受第一步签发的凭据：
+
+1. **备份**：服务端把目标 Memory 按上述目录结构打包为 ZIP。已软删除的条目在 Front Matter 中额外带有 `deleted_at`。ZIP 附带 `manifest.json`，记录范围、删除方式、导出时间以及每条 Memory 的 ID、版本、标题、文件路径和是否已删除。服务端同时返回加密封装的删除凭据，内容包括范围、删除方式、全部 `(memory_id, version)` 组合的摘要和 30 分钟有效期。浏览器保存备份后才发起第二步；保存被取消时不删除。
+2. **删除**：服务端在单个事务内锁定目标 Memory 并重新计算摘要。摘要与凭据不一致（备份后有新增、修改、删除或恢复）时拒绝执行，返回 `PURGE_SCOPE_CHANGED`；凭据过期时返回 `PURGE_TOKEN_EXPIRED`。摘要一致时执行删除：
+   - 移入回收站：逐条软删除，每条生成 `delete` revision 和 event。
+   - 彻底删除与清空回收站：删除 Memory 行及其全部 revision 快照，删除仍缓存其内容的幂等响应，并清除其他 Memory 指向它们的提升来源引用。删除前仍处于未删除状态的 Memory 追加一条 `delete` event。
+
+`memory_events` 是只追加的变更日志，不对 `memories` 设外键约束，Memory 被永久移除后其事件仍然保留，订阅变更流的客户端据此感知删除。删除以 Tenant 管理员身份执行。
 
 ## 14. 部署方案
 

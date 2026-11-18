@@ -240,6 +240,36 @@ type RestoreRequest struct {
 // AdminDeleteRequest soft-deletes a memory from the management console.
 type AdminDeleteRequest RestoreRequest
 
+// AdminPurgeRequest soft-deletes every active memory in a tenant, a tenant's global scope, or one project,
+// provided the set still matches the digest of the backup the console downloaded first.
+//
+// Mode selects what happens to the targets: PurgeSoft moves active memories to the recycle bin,
+// PurgeHard permanently deletes active and recycled memories, and PurgeTrash permanently deletes
+// only recycled ones. MemoryID narrows the purge to a single memory.
+type AdminPurgeRequest struct {
+	TenantID  uuid.UUID
+	ActorID   uuid.UUID
+	Scope     string
+	ProjectID *uuid.UUID
+	MemoryID  *uuid.UUID
+	Mode      string
+	Digest    string
+	RequestID string
+}
+
+// Purge modes accepted by AdminPurge.
+const (
+	PurgeSoft  = "soft"
+	PurgeHard  = "hard"
+	PurgeTrash = "trash"
+)
+
+// MemoryVersion pairs a memory with the version a backup captured.
+type MemoryVersion struct {
+	ID      uuid.UUID
+	Version int64
+}
+
 // AdminPinRequest sets or clears the pinned flag of a memory from the management console.
 type AdminPinRequest struct {
 	TenantID        uuid.UUID `json:"tenant_id"`

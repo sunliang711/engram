@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -56,6 +57,7 @@ type exportRow struct {
 	version     int64
 	contentHash string
 	updatedAt   time.Time
+	deletedAt   *time.Time
 }
 
 // ExportAll writes all non-deleted memories deterministically under OutputDir and removes stale files.
@@ -68,7 +70,7 @@ func (e *Exporter) ExportAll(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("mkdir export output_dir: %w", err)
 	}
 
-	items, err := e.queryExportRows(ctx)
+	items, err := e.queryExportRows(ctx, ArchiveFilter{})
 	if err != nil {
 		return 0, err
 	}
@@ -134,17 +136,84 @@ func (e *Exporter) ExportAll(ctx context.Context) (int, error) {
 
 // ExportArchive writes all non-deleted memories as Markdown files into a ZIP archive written to w.
 func (e *Exporter) ExportArchive(ctx context.Context, w io.Writer) (int, error) {
-	items, err := e.queryExportRows(ctx)
+	items, err := e.queryExportRows(ctx, ArchiveFilter{})
 	if err != nil {
 		return 0, err
 	}
+	if err := writeArchive(w, items, nil); err != nil {
+		return 0, err
+	}
+	return len(items), nil
+}
 
-	zw := zip.NewWriter(w)
+// ArchiveFilter narrows an archive to one tenant, optionally one scope, project, or memory.
+// Deleted selects "" for active memories only, "all" to add the recycle bin, or "only" for the recycle bin.
+type ArchiveFilter struct {
+	TenantID  *uuid.UUID
+	Scope     string
+	ProjectID *uuid.UUID
+	MemoryID  *uuid.UUID
+	Deleted   string
+}
+
+// ArchivedMemory identifies one memory written into a filtered archive.
+type ArchivedMemory struct {
+	ID        uuid.UUID  `json:"id"`
+	Version   int64      `json:"version"`
+	Scope     string     `json:"scope"`
+	ProjectID *uuid.UUID `json:"project_id,omitempty"`
+	Title     string     `json:"title"`
+	Path      string     `json:"path"`
+	Deleted   bool       `json:"deleted,omitempty"`
+}
+
+// ExportFilteredArchive writes the non-deleted memories matching f as Markdown files plus a
+// manifest.json describing the archive, and returns exactly which memory versions it contains.
+func (e *Exporter) ExportFilteredArchive(ctx context.Context, w io.Writer, f ArchiveFilter, manifest map[string]any) ([]ArchivedMemory, error) {
+	items, err := e.queryExportRows(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	archived := make([]ArchivedMemory, 0, len(items))
 	for _, item := range items {
 		relPath, err := e.relativeFilePath(item)
 		if err != nil {
+			return nil, err
+		}
+		archived = append(archived, ArchivedMemory{ID: item.id, Version: item.version, Scope: item.scope, ProjectID: item.projectID, Title: item.title, Path: filepath.ToSlash(relPath), Deleted: item.deletedAt != nil})
+	}
+	if manifest == nil {
+		manifest = map[string]any{}
+	}
+	manifest["count"] = len(archived)
+	manifest["items"] = archived
+	if err := writeArchive(w, items, manifest); err != nil {
+		return nil, err
+	}
+	return archived, nil
+}
+
+// writeArchive renders memories into a ZIP stream, adding manifest.json when one is given.
+func writeArchive(w io.Writer, items []exportRow, manifest map[string]any) error {
+	zw := zip.NewWriter(w)
+	if manifest != nil {
+		data, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return fmt.Errorf("encode archive manifest: %w", err)
+		}
+		fw, err := zw.CreateHeader(&zip.FileHeader{Name: "manifest.json", Method: zip.Deflate, Modified: time.Now().UTC()})
+		if err != nil {
+			return fmt.Errorf("create manifest entry: %w", err)
+		}
+		if _, err := fw.Write(append(data, '\n')); err != nil {
+			return fmt.Errorf("write manifest entry: %w", err)
+		}
+	}
+	for _, item := range items {
+		relPath, err := archivePath(item)
+		if err != nil {
 			_ = zw.Close()
-			return 0, err
+			return err
 		}
 		hdr := &zip.FileHeader{
 			Name:     filepath.ToSlash(relPath),
@@ -154,27 +223,53 @@ func (e *Exporter) ExportArchive(ctx context.Context, w io.Writer) (int, error) 
 		fw, err := zw.CreateHeader(hdr)
 		if err != nil {
 			_ = zw.Close()
-			return 0, fmt.Errorf("create zip entry %s: %w", relPath, err)
+			return fmt.Errorf("create zip entry %s: %w", relPath, err)
 		}
 		if _, err := fw.Write(RenderMarkdown(item)); err != nil {
 			_ = zw.Close()
-			return 0, fmt.Errorf("write zip entry %s: %w", relPath, err)
+			return fmt.Errorf("write zip entry %s: %w", relPath, err)
 		}
 	}
 	if err := zw.Close(); err != nil {
-		return 0, fmt.Errorf("finalize zip archive: %w", err)
+		return fmt.Errorf("finalize zip archive: %w", err)
 	}
-	return len(items), nil
+	return nil
 }
 
-func (e *Exporter) queryExportRows(ctx context.Context) ([]exportRow, error) {
+func (e *Exporter) queryExportRows(ctx context.Context, f ArchiveFilter) ([]exportRow, error) {
+	var where []string
+	switch f.Deleted {
+	case "all":
+		where = append(where, "true")
+	case "only":
+		where = append(where, "deleted_at IS NOT NULL")
+	default:
+		where = append(where, "deleted_at IS NULL")
+	}
+	var args []any
+	if f.TenantID != nil {
+		args = append(args, *f.TenantID)
+		where = append(where, fmt.Sprintf("tenant_id = $%d", len(args)))
+	}
+	if f.Scope != "" {
+		args = append(args, f.Scope)
+		where = append(where, fmt.Sprintf("scope = $%d", len(args)))
+	}
+	if f.ProjectID != nil {
+		args = append(args, *f.ProjectID)
+		where = append(where, fmt.Sprintf("project_id = $%d", len(args)))
+	}
+	if f.MemoryID != nil {
+		args = append(args, *f.MemoryID)
+		where = append(where, fmt.Sprintf("id = $%d", len(args)))
+	}
 	rows, err := e.pool.Query(ctx, `
 		SELECT id, tenant_id, scope, project_id, category, title, content_md,
-		       tags, is_pinned, status, version, content_hash, updated_at
+		       tags, is_pinned, status, version, content_hash, updated_at, deleted_at
 		FROM memories
-		WHERE deleted_at IS NULL
+		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY tenant_id ASC, scope ASC, project_id ASC NULLS FIRST, id ASC
-	`)
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query memories for export: %w", err)
 	}
@@ -185,7 +280,7 @@ func (e *Exporter) queryExportRows(ctx context.Context) ([]exportRow, error) {
 		var r exportRow
 		if err := rows.Scan(
 			&r.id, &r.tenantID, &r.scope, &r.projectID, &r.category, &r.title, &r.contentMD,
-			&r.tags, &r.isPinned, &r.status, &r.version, &r.contentHash, &r.updatedAt,
+			&r.tags, &r.isPinned, &r.status, &r.version, &r.contentHash, &r.updatedAt, &r.deletedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan memory for export: %w", err)
 		}
@@ -221,7 +316,10 @@ func (e *Exporter) RunPeriodicLoop(ctx context.Context) {
 	}
 }
 
-func (e *Exporter) relativeFilePath(r exportRow) (string, error) {
+func (e *Exporter) relativeFilePath(r exportRow) (string, error) { return archivePath(r) }
+
+// archivePath places global memories under tenants/<tenant>/global and project memories under their project.
+func archivePath(r exportRow) (string, error) {
 	if r.scope == "global" {
 		return filepath.Join("tenants", r.tenantID.String(), "global", r.id.String()+".md"), nil
 	}
@@ -269,6 +367,9 @@ func RenderMarkdown(r exportRow) []byte {
 	fmt.Fprintf(&b, "status: %s\n", r.status)
 	fmt.Fprintf(&b, "content_hash: %s\n", r.contentHash)
 	fmt.Fprintf(&b, "updated_at: %s\n", r.updatedAt.UTC().Format(time.RFC3339))
+	if r.deletedAt != nil {
+		fmt.Fprintf(&b, "deleted_at: %s\n", r.deletedAt.UTC().Format(time.RFC3339))
+	}
 	b.WriteString("---\n\n")
 
 	body := strings.ReplaceAll(strings.TrimSpace(r.contentMD), "\r\n", "\n")

@@ -102,6 +102,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/memories/delete", h.requireActiveAdmin(h.handleDeleteMemory))
 	mux.HandleFunc("/api/admin/memories/pin", h.requireActiveAdmin(h.handlePinMemory))
 	mux.HandleFunc("/api/admin/memories/facets", h.requireActiveAdmin(h.handleMemoryFacets))
+	mux.HandleFunc("/api/admin/memories/purge/backup", h.requireActiveAdmin(h.handlePurgeBackup))
+	mux.HandleFunc("/api/admin/memories/purge", h.requireActiveAdmin(h.handlePurge))
 	mux.HandleFunc("/api/admin/export", h.requireActiveAdmin(h.handleExport))
 	mux.HandleFunc("/api/admin/export/archive", h.requireActiveAdmin(h.handleExportArchive))
 	mux.HandleFunc("/api/admin/migration/export", h.requireActiveAdmin(h.handleMigrationExport))
@@ -309,7 +311,7 @@ func (h *Handler) handleOverview(w http.ResponseWriter, r *http.Request) {
 	err := h.pool.QueryRow(r.Context(), `
 		SELECT
 			(SELECT count(*)::int FROM tenants),
-			(SELECT count(*)::int FROM principals),
+			(SELECT count(*)::int FROM principals WHERE identity_provider <> 'system_webui'),
 			(SELECT count(*)::int FROM projects),
 			(SELECT count(*)::int FROM memories WHERE deleted_at IS NULL),
 			(SELECT count(*)::int FROM memories WHERE deleted_at IS NOT NULL),
@@ -585,6 +587,16 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
 			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "tenant name is required"))
+			return
+		}
+		// Quickstart finds tenants by name, so names stay unique to keep that lookup unambiguous.
+		var exists bool
+		if err := h.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE name = $1)`, strings.TrimSpace(req.Name)).Scan(&exists); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check tenant name", err))
+			return
+		}
+		if exists {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "TENANT_EXISTS", "message": "已有同名租户，请换一个名称。"})
 			return
 		}
 		id := uuid.New()
@@ -1064,10 +1076,15 @@ func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	repoID := uuid.New()
-	_, err = h.pool.Exec(r.Context(), `
+	tag, err := h.pool.Exec(r.Context(), `
 		INSERT INTO project_repositories (id, tenant_id, project_id, canonical_remote, workspace_path, is_primary)
 		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (tenant_id, canonical_remote, workspace_path) DO NOTHING
 	`, repoID, tid, pid, canonRemote, wsPath, req.IsPrimary)
+	if err == nil && tag.RowsAffected() == 0 {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "REPOSITORY_EXISTS", "message": "该仓库地址（含子目录）已关联到本租户的项目，无需重复添加。"})
+		return
+	}
 	if err != nil {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "insert project_repository", err))
 		return
@@ -1659,6 +1676,198 @@ func (h *Handler) handleMemoryFacets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"categories": categories, "tags": tags})
+}
+
+// purgeTokenTTL bounds how long a downloaded backup can authorize the matching purge.
+const purgeTokenTTL = 30 * time.Minute
+
+// purgeScope is the set of memories a bulk purge targets: a tenant, optionally narrowed to its
+// global scope or to one project.
+type purgeScope struct {
+	TenantID  uuid.UUID  `json:"tenant_id"`
+	Scope     string     `json:"scope,omitempty"`
+	ProjectID *uuid.UUID `json:"project_id,omitempty"`
+	MemoryID  *uuid.UUID `json:"memory_id,omitempty"`
+	Mode      string     `json:"mode"`
+}
+
+// purgeArchiveDeleted maps a purge mode to the recycle-bin selection of its backup archive.
+var purgeArchiveDeleted = map[string]string{memory.PurgeSoft: "", memory.PurgeHard: "all", memory.PurgeTrash: "only"}
+
+// purgeTicket travels to the browser sealed with the server key; it binds a purge to the exact
+// memory versions contained in the backup the browser saved.
+type purgeTicket struct {
+	purgeScope
+	Digest    string    `json:"digest"`
+	Count     int       `json:"count"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// resolvePurgeScope validates the requested scope and returns display names for the backup manifest.
+func (h *Handler) resolvePurgeScope(ctx context.Context, tenantIDStr, scope, projectIDStr, memoryIDStr, mode string) (purgeScope, string, string, error) {
+	var ps purgeScope
+	ps.Mode = strings.TrimSpace(mode)
+	if ps.Mode == "" {
+		ps.Mode = memory.PurgeSoft
+	}
+	if _, ok := purgeArchiveDeleted[ps.Mode]; !ok {
+		return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "invalid purge mode")
+	}
+	tid, err := uuid.Parse(strings.TrimSpace(tenantIDStr))
+	if err != nil {
+		return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "invalid tenant_id")
+	}
+	ps.TenantID = tid
+	var tenantName string
+	if err := h.pool.QueryRow(ctx, `SELECT name FROM tenants WHERE id = $1`, tid).Scan(&tenantName); err != nil {
+		return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "tenant not found")
+	}
+	var projectName string
+	switch strings.TrimSpace(scope) {
+	case "":
+	case "global":
+		ps.Scope = "global"
+	case "project":
+		ps.Scope = "project"
+		pid, err := uuid.Parse(strings.TrimSpace(projectIDStr))
+		if err != nil {
+			return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "invalid project_id")
+		}
+		if err := h.pool.QueryRow(ctx, `SELECT name FROM projects WHERE id = $1 AND tenant_id = $2`, pid, tid).Scan(&projectName); err != nil {
+			return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "project not found")
+		}
+		ps.ProjectID = &pid
+	default:
+		return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "invalid scope")
+	}
+	if strings.TrimSpace(memoryIDStr) != "" {
+		mid, err := uuid.Parse(strings.TrimSpace(memoryIDStr))
+		if err != nil {
+			return ps, "", "", apperror.New(apperror.CodeInvalidArgument, "invalid memory_id")
+		}
+		var exists bool
+		if err := h.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memories WHERE id = $1 AND tenant_id = $2)`, mid, tid).Scan(&exists); err != nil || !exists {
+			return ps, "", "", apperror.New(apperror.CodeMemoryNotFound, "memory not found")
+		}
+		ps.MemoryID = &mid
+	}
+	return ps, tenantName, projectName, nil
+}
+
+// handlePurgeBackup returns a Markdown archive of every active memory in the requested scope,
+// together with a sealed ticket that authorizes purging exactly those memory versions.
+func (h *Handler) handlePurgeBackup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TenantID  string `json:"tenant_id"`
+		Scope     string `json:"scope"`
+		ProjectID string `json:"project_id"`
+		MemoryID  string `json:"memory_id"`
+		Mode      string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	ps, tenantName, projectName, err := h.resolvePurgeScope(r.Context(), req.TenantID, req.Scope, req.ProjectID, req.MemoryID, req.Mode)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	manifest := map[string]any{
+		"purpose":     "purge-backup",
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"tenant_id":   ps.TenantID,
+		"tenant_name": tenantName,
+		"scope":       ps.Scope,
+		"mode":        ps.Mode,
+	}
+	if ps.MemoryID != nil {
+		manifest["memory_id"] = ps.MemoryID
+	}
+	if ps.ProjectID != nil {
+		manifest["project_id"] = ps.ProjectID
+		manifest["project_name"] = projectName
+	}
+	var buf bytes.Buffer
+	archived, err := h.exporter.ExportFilteredArchive(r.Context(), &buf, exporter.ArchiveFilter{TenantID: &ps.TenantID, Scope: ps.Scope, ProjectID: ps.ProjectID, MemoryID: ps.MemoryID, Deleted: purgeArchiveDeleted[ps.Mode]}, manifest)
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "export purge backup", err))
+		return
+	}
+	versions := make([]memory.MemoryVersion, 0, len(archived))
+	for _, item := range archived {
+		versions = append(versions, memory.MemoryVersion{ID: item.ID, Version: item.Version})
+	}
+	ticket, err := json.Marshal(purgeTicket{purgeScope: ps, Digest: memory.PurgeDigest(versions), Count: len(versions), ExpiresAt: time.Now().UTC().Add(purgeTokenTTL)})
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "encode purge ticket", err))
+		return
+	}
+	sealed, err := h.authMgr.SealToken(string(ticket))
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "seal purge ticket", err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="engram-purge-backup.zip"`)
+	w.Header().Set("X-Purge-Token", sealed)
+	w.Header().Set("X-Purge-Count", strconv.Itoa(len(versions)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
+}
+
+// handlePurge soft-deletes the memories captured by a backup ticket; it refuses when the scope
+// changed after the backup, so nothing is removed without being in the saved archive.
+func (h *Handler) handlePurge(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		PurgeToken string `json:"purge_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.PurgeToken) == "" {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "purge_token is required"))
+		return
+	}
+	raw, err := h.authMgr.UnsealToken(req.PurgeToken)
+	var ticket purgeTicket
+	if err != nil || json.Unmarshal([]byte(raw), &ticket) != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid purge_token"))
+		return
+	}
+	if time.Now().UTC().After(ticket.ExpiresAt) {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "PURGE_TOKEN_EXPIRED", "message": "备份已超过 30 分钟，请重新下载备份后再清空。"})
+		return
+	}
+	actorID, err := h.ensureAdminActorForTenant(r.Context(), ticket.TenantID)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	purged, err := h.memSvc.AdminPurge(r.Context(), memory.AdminPurgeRequest{
+		TenantID:  ticket.TenantID,
+		ActorID:   actorID,
+		Scope:     ticket.Scope,
+		ProjectID: ticket.ProjectID,
+		MemoryID:  ticket.MemoryID,
+		Mode:      ticket.Mode,
+		Digest:    ticket.Digest,
+		RequestID: "webui-purge-" + uuid.NewString(),
+	})
+	if err != nil {
+		if appErr := apperror.AsError(err, ""); appErr.Code == apperror.CodeVersionConflict {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "PURGE_SCOPE_CHANGED", "message": "备份下载后这些知识又有变化，为避免误删未备份的内容，本次没有清空。请重新下载备份后再试。"})
+			return
+		}
+		writeJSONError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"purged": purged})
 }
 
 func (h *Handler) ensureAdminActorForTenant(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, error) {

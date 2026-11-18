@@ -1,10 +1,12 @@
 package memory_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -936,8 +938,11 @@ func TestV1AcceptanceSuite(t *testing.T) {
 			t.Fatalf("quickstart request: %v", err)
 		}
 		var qsOut struct {
-			TokenID string `json:"token_id"`
-			Token   string `json:"token"`
+			TokenID     string `json:"token_id"`
+			Token       string `json:"token"`
+			TenantID    string `json:"tenant_id"`
+			PrincipalID string `json:"principal_id"`
+			ProjectID   string `json:"project_id"`
 		}
 		_ = json.NewDecoder(qsResp.Body).Decode(&qsOut)
 		qsResp.Body.Close()
@@ -961,6 +966,155 @@ func TestV1AcceptanceSuite(t *testing.T) {
 		revResp.Body.Close()
 		if revResp.StatusCode != http.StatusOK || revOut.Token != qsOut.Token {
 			t.Fatalf("expected revealed token %q, got status=%d token=%q", qsOut.Token, revResp.StatusCode, revOut.Token)
+		}
+
+		// Bulk purge: the backup archive and the purge must cover exactly the same memory versions.
+		for i, scope := range []string{"project", "project", "global"} {
+			var projectID any
+			if scope == "project" {
+				projectID = qsOut.ProjectID
+			}
+			if _, err := env.database.Pool.Exec(env.ctx, `
+				INSERT INTO memories (id, tenant_id, scope, project_id, category, title, content_md, content_hash, created_by, updated_by)
+				VALUES (gen_random_uuid(), $1, $2, $3, 'note', $4, 'purge fixture body', 'purge-fixture', $5, $5)
+			`, qsOut.TenantID, scope, projectID, fmt.Sprintf("purge fixture %d", i), qsOut.PrincipalID); err != nil {
+				t.Fatalf("insert purge fixture: %v", err)
+			}
+		}
+		adminPost := func(path string, body any) *http.Response {
+			t.Helper()
+			payload, _ := json.Marshal(body)
+			req, _ := http.NewRequest(http.MethodPost, env.mcpServer.URL+path, bytes.NewReader(payload))
+			req.Header.Set("Authorization", "Bearer "+newSessCookie)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("POST %s: %v", path, err)
+			}
+			return resp
+		}
+		backupScope := func(body map[string]string, wantCount string) (string, []string) {
+			t.Helper()
+			resp := adminPost("/api/admin/memories/purge/backup", body)
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Purge-Count") != wantCount || resp.Header.Get("X-Purge-Token") == "" {
+				t.Fatalf("purge backup: status=%d count=%q body=%s", resp.StatusCode, resp.Header.Get("X-Purge-Count"), data)
+			}
+			zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("read purge backup zip: %v", err)
+			}
+			var names []string
+			for _, f := range zr.File {
+				names = append(names, f.Name)
+			}
+			return resp.Header.Get("X-Purge-Token"), names
+		}
+		backup := func() (string, []string) {
+			t.Helper()
+			return backupScope(map[string]string{"tenant_id": qsOut.TenantID, "scope": "project", "project_id": qsOut.ProjectID}, "2")
+		}
+		purge := func(token string) int {
+			t.Helper()
+			resp := adminPost("/api/admin/memories/purge", map[string]string{"purge_token": token})
+			defer resp.Body.Close()
+			var out struct {
+				Purged int `json:"purged"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&out)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("purge status=%d", resp.StatusCode)
+			}
+			return out.Purged
+		}
+		token, names := backup()
+		if len(names) != 3 || names[0] != "manifest.json" {
+			t.Fatalf("purge backup entries = %v", names)
+		}
+		// A memory changed after the backup blocks the purge so nothing unbacked-up is removed.
+		if _, err := env.database.Pool.Exec(env.ctx, `UPDATE memories SET version = version + 1 WHERE tenant_id = $1 AND title = 'purge fixture 0'`, qsOut.TenantID); err != nil {
+			t.Fatal(err)
+		}
+		if resp := adminPost("/api/admin/memories/purge", map[string]string{"purge_token": token}); resp.StatusCode != http.StatusConflict {
+			t.Fatalf("stale purge status=%d, want 409", resp.StatusCode)
+		}
+		token, _ = backup()
+		purgeResp := adminPost("/api/admin/memories/purge", map[string]string{"purge_token": token})
+		var purgeOut struct {
+			Purged int `json:"purged"`
+		}
+		_ = json.NewDecoder(purgeResp.Body).Decode(&purgeOut)
+		purgeResp.Body.Close()
+		if purgeResp.StatusCode != http.StatusOK || purgeOut.Purged != 2 {
+			t.Fatalf("purge status=%d purged=%d", purgeResp.StatusCode, purgeOut.Purged)
+		}
+		var activeProject, activeGlobal, deleteRevisions int
+		if err := env.database.Pool.QueryRow(env.ctx, `
+			SELECT count(*) FILTER (WHERE scope = 'project' AND deleted_at IS NULL),
+			       count(*) FILTER (WHERE scope = 'global' AND deleted_at IS NULL),
+			       (SELECT count(*) FROM memory_revisions r JOIN memories m ON m.id = r.memory_id WHERE m.tenant_id = $1 AND r.operation = 'delete')
+			FROM memories WHERE tenant_id = $1 AND title LIKE 'purge fixture %'
+		`, qsOut.TenantID).Scan(&activeProject, &activeGlobal, &deleteRevisions); err != nil {
+			t.Fatal(err)
+		}
+		if activeProject != 0 || activeGlobal != 1 || deleteRevisions != 2 {
+			t.Fatalf("after purge: project=%d global=%d delete revisions=%d", activeProject, activeGlobal, deleteRevisions)
+		}
+		if resp := adminPost("/api/admin/memories/purge", map[string]string{"purge_token": token}); resp.StatusCode != http.StatusConflict {
+			t.Fatalf("replayed purge status=%d, want 409", resp.StatusCode)
+		}
+
+		// Emptying the project's recycle bin removes rows and snapshots but keeps change events.
+		var purgedIDs []uuid.UUID
+		idRows, err := env.database.Pool.Query(env.ctx, `SELECT id FROM memories WHERE tenant_id = $1 AND scope = 'project' AND title LIKE 'purge fixture %'`, qsOut.TenantID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for idRows.Next() {
+			var id uuid.UUID
+			_ = idRows.Scan(&id)
+			purgedIDs = append(purgedIDs, id)
+		}
+		idRows.Close()
+		trashToken, _ := backupScope(map[string]string{"tenant_id": qsOut.TenantID, "scope": "project", "project_id": qsOut.ProjectID, "mode": "trash"}, "2")
+		if n := purge(trashToken); n != 2 {
+			t.Fatalf("trash purge removed %d, want 2", n)
+		}
+		var leftRows, leftRevisions, keptEvents int
+		if err := env.database.Pool.QueryRow(env.ctx, `
+			SELECT (SELECT count(*) FROM memories WHERE id = ANY($1)),
+			       (SELECT count(*) FROM memory_revisions WHERE memory_id = ANY($1)),
+			       (SELECT count(*) FROM memory_events WHERE memory_id = ANY($1))
+		`, purgedIDs).Scan(&leftRows, &leftRevisions, &keptEvents); err != nil {
+			t.Fatal(err)
+		}
+		if leftRows != 0 || leftRevisions != 0 || keptEvents < 2 {
+			t.Fatalf("after trash purge: rows=%d revisions=%d events=%d", leftRows, leftRevisions, keptEvents)
+		}
+
+		// Permanently deleting one active memory leaves a final delete event for change-feed clients.
+		var globalID uuid.UUID
+		if err := env.database.Pool.QueryRow(env.ctx, `SELECT id FROM memories WHERE tenant_id = $1 AND title = 'purge fixture 2'`, qsOut.TenantID).Scan(&globalID); err != nil {
+			t.Fatal(err)
+		}
+		hardToken, hardNames := backupScope(map[string]string{"tenant_id": qsOut.TenantID, "mode": "hard", "memory_id": globalID.String()}, "1")
+		if len(hardNames) != 2 {
+			t.Fatalf("single-memory backup entries = %v", hardNames)
+		}
+		if n := purge(hardToken); n != 1 {
+			t.Fatalf("hard purge removed %d, want 1", n)
+		}
+		var stillThere int
+		var lastOp string
+		if err := env.database.Pool.QueryRow(env.ctx, `
+			SELECT (SELECT count(*) FROM memories WHERE id = $1),
+			       (SELECT operation FROM memory_events WHERE memory_id = $1 ORDER BY revision DESC LIMIT 1)
+		`, globalID).Scan(&stillThere, &lastOp); err != nil {
+			t.Fatal(err)
+		}
+		if stillThere != 0 || lastOp != "delete" {
+			t.Fatalf("after hard purge: rows=%d last event=%q", stillThere, lastOp)
 		}
 
 		// Export full encrypted system migration snapshot and re-import with confirm_replace=true

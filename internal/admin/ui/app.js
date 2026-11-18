@@ -51,11 +51,57 @@
       }
     }
     if (!resp.ok) {
-      const messages = { UNAUTHENTICATED: "登录已过期或账号密码不正确，请重新登录。", INTERNAL_ERROR: "暂时无法完成操作，请稍后重试。", RATE_LIMITED: "操作过于频繁，请稍后重试。" };
-      const msg = messages[data && data.code] || (data && (data.message || data.error)) || `请求失败（${resp.status}），请重试。`;
+      const raw = (data && (data.message || data.error)) || "";
+      const msg = ERROR_CODES[data && data.code] || translateError(raw) || raw || `请求失败（${resp.status}），请重试。`;
       throw new Error(msg);
     }
     return data;
+  }
+
+  const ERROR_CODES = {
+    UNAUTHENTICATED: "登录已过期或账号密码不正确，请重新登录。",
+    UNAUTHORIZED: "权限不足，无法完成这个操作。",
+    INTERNAL_ERROR: "暂时无法完成操作，请稍后重试。",
+    RATE_LIMITED: "操作过于频繁，请稍后重试。",
+    VERSION_CONFLICT: "这条知识刚被其他客户端修改，请刷新后重试。",
+    MEMORY_NOT_FOUND: "这条知识不存在或已被删除，请刷新后重试。",
+  };
+
+  // ERROR_MESSAGES translates validation messages the management API returns in English.
+  const ERROR_MESSAGES = [
+    [/^(invalid remote url|remote host cannot be empty|invalid repository path)/i, "仓库地址格式不正确，请填写 SSH 或 HTTPS 形式的 Git 地址。"],
+    [/^(path must be relative|relative path must not contain)/i, "子目录请填写相对仓库根目录的路径，不能以 / 开头，也不能包含 . 或 ..。"],
+    [/^principal is not a member of the specified tenant/i, "该成员还不属于所选租户，请先在「租户与成员」页把成员绑定到这个租户。"],
+    [/^principal must be a member of the project's tenant/i, "该成员还不属于这个项目所在的租户，请先绑定租户。"],
+    [/^project name is required/i, "请填写项目名称。"],
+    [/^tenant name is required/i, "请填写租户名称。"],
+    [/^tenant_name, principal_subject, and principal_display_name are required/i, "请填写租户名称、成员标识和显示名称。"],
+    [/^project not found/i, "项目不存在，请刷新后重新选择。"],
+    [/^memory (is not deleted|is already deleted|is deleted|pinned state is unchanged)/i, "这条知识的状态已经变化，请刷新后重试。"],
+    [/^invalid (tenant_id|principal_id|project_id)/i, "请先选择租户、成员或项目。"],
+    [/^invalid (json body|tenant role|principal mode|identity provider)/i, "提交的内容不正确，请刷新页面后重试。"],
+    [/admin password change required/i, "请先修改管理员密码。"],
+  ];
+
+  function translateError(message) {
+    const hit = ERROR_MESSAGES.find(([pattern]) => pattern.test(message));
+    return hit ? hit[1] : "";
+  }
+
+  const TENANT_ROLES = { member: "全局只读成员", global_writer: "全局读写者", admin: "租户管理员" };
+  const PROJECT_ROLES = { reader: "只读成员", writer: "编辑者", maintainer: "维护者" };
+
+  // isSystemPrincipal marks the internal identity the console uses to act on a tenant's behalf.
+  function isSystemPrincipal(principal) { return principal && principal.identity_provider === "system_webui"; }
+
+  // visiblePrincipals hides the console's internal identity from member lists and pickers.
+  function visiblePrincipals() { return state.principals.filter((principal) => !isSystemPrincipal(principal)); }
+
+  // actorName names the author of a revision, describing console actions as such.
+  function actorName(actorID) {
+    const actor = state.principals.find((person) => person.id === actorID);
+    if (!actor) return actorID.slice(0, 8);
+    return isSystemPrincipal(actor) ? "管理控制台" : actor.display_name;
   }
 
   // renderView separates first activation from an authenticated administration session.
@@ -172,12 +218,12 @@
       if (!sel) return;
       const prev = sel.value;
       sel.innerHTML = state.tenants
-        .map((t) => `<option value="${t.id}">${escapeHtml(t.name)} (${t.id.slice(0, 8)})</option>`)
+        .map((t) => `<option value="${t.id}">${escapeHtml(tenantLabel(t))}</option>`)
         .join("");
       if (prev && Array.from(sel.options).some((option) => option.value === prev)) sel.value = prev;
     });
 
-    fillSelect("mem-filter-tenant", state.tenants.map((t) => [t.id, t.name]));
+    fillSelect("mem-filter-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
     renderMemoryProjectFilter();
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, `${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, `${f.value}（${f.count}）`]));
@@ -187,8 +233,8 @@
       const sel = $(id);
       if (!sel) return;
       const prev = sel.value;
-      sel.innerHTML = state.principals
-        .map((p) => `<option value="${p.id}">${escapeHtml(p.display_name)} [${escapeHtml(p.subject)}]</option>`)
+      sel.innerHTML = visiblePrincipals()
+        .map((p) => `<option value="${p.id}">${escapeHtml(p.display_name)}（${escapeHtml(p.subject)}）</option>`)
         .join("");
       if (prev && Array.from(sel.options).some((option) => option.value === prev)) sel.value = prev;
     });
@@ -223,6 +269,11 @@
     fillSelect("mem-filter-project", state.projects.filter((p) => !tenant || p.tenant_id === tenant).map((p) => [p.id, projectLabel(p)]));
   }
 
+  // tenantLabel adds a short identifier only when two tenants share a name.
+  function tenantLabel(t) {
+    return state.tenants.filter((other) => other.name === t.name).length > 1 ? `${t.name}（${t.id.slice(0, 6)}）` : t.name;
+  }
+
   // projectLabel names a project with its tenant and, when names repeat, a short identifier.
   function projectLabel(p) {
     const twins = state.projects.filter((other) => other.name === p.name && other.tenant_id === p.tenant_id).length > 1;
@@ -247,22 +298,25 @@
       .join("");
   }
 
+  const PROVIDERS = { api_token: "客户端密钥", oidc: "单点登录", mtls: "双向 TLS 证书" };
+
   // renderPrincipalsTable presents identities with their explicit tenant memberships.
   function renderPrincipalsTable() {
     const tbody = $("principals-table").querySelector("tbody");
-    if (!state.principals.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-state">尚无成员，请先创建租户和成员。</td></tr>'; return; }
-    tbody.innerHTML = state.principals
+    const principals = visiblePrincipals();
+    if (!principals.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-state">尚无成员，请先创建租户和成员。</td></tr>'; return; }
+    tbody.innerHTML = principals
       .map((p) => {
         const roles = (p.tenant_roles || [])
-          .map((r) => `<span class="badge">${escapeHtml(r.tenant_name)}: ${escapeHtml(r.role)}</span>`)
+          .map((r) => `<span class="badge">${escapeHtml(r.tenant_name)} · ${escapeHtml(TENANT_ROLES[r.role] || r.role)}</span>`)
           .join(" ");
         return `
       <tr>
         <td>${identifier(p.id)}</td>
         <td><strong>${escapeHtml(p.display_name)}</strong></td>
-        <td><code>${escapeHtml(p.identity_provider)} / ${escapeHtml(p.subject)}</code></td>
+        <td>${escapeHtml(PROVIDERS[p.identity_provider] || p.identity_provider)}<div class="field-hint"><code>${escapeHtml(p.subject)}</code></div></td>
         <td><span class="badge ${p.status === "active" ? "success" : "danger"}">${statusLabel(p.status)}</span></td>
-        <td>${roles || '<span style="color:var(--text-muted)">无</span>'}</td>
+        <td>${roles || '<span class="muted">未加入任何租户</span>'}</td>
       </tr>`;
       })
       .join("");
@@ -276,25 +330,25 @@
       .map((p) => {
         const markerHtml = p.marker
           ? `${identifier(p.marker)}`
-          : `<span style="color:var(--text-muted)">未设置</span>`;
+          : `<span class="muted">未生成</span>`;
         const reposHtml = (p.repositories || [])
           .map(
             (r) =>
               `<div><code>${escapeHtml(r.canonical_remote)}</code> ${
-                r.workspace_path ? `<span class="badge">ws: ${escapeHtml(r.workspace_path)}</span>` : ""
+                r.workspace_path ? `<span class="badge">子目录 ${escapeHtml(r.workspace_path)}</span>` : ""
               }</div>`
           )
           .join("");
         const membersHtml = (p.members || [])
-          .map((m) => `<span class="badge">${escapeHtml(m.display_name)}: ${escapeHtml(m.role)}</span>`)
+          .map((m) => `<span class="badge">${escapeHtml(m.display_name)} · ${escapeHtml(PROJECT_ROLES[m.role] || m.role)}</span>`)
           .join(" ");
         return `
       <tr>
         <td><strong>${escapeHtml(p.name)}</strong><br/>${identifier(p.id)}</td>
         <td>${escapeHtml(p.tenant_name)}</td>
         <td>${markerHtml}</td>
-        <td>${reposHtml || '<span style="color:var(--text-muted)">无 Remote</span>'}</td>
-        <td>${membersHtml || '<span style="color:var(--text-muted)">仅 Tenant Admin</span>'}</td>
+        <td>${reposHtml || '<span class="muted">未关联仓库，通过标记文件识别</span>'}</td>
+        <td>${membersHtml || '<span class="muted">仅租户管理员</span>'}</td>
       </tr>`;
       })
       .join("");
@@ -312,7 +366,7 @@
       state.revealedTokens[tokenId] = res.token;
       return res.token;
     }
-    throw new Error("未获取到 Token 明文");
+    throw new Error("未能获取密钥明文。");
   }
 
   // renderTokensTable lists client credentials and exposes their configuration actions.
@@ -325,8 +379,8 @@
         const revealed = state.revealedTokens[tk.id];
         const tokenCell = revealed
           ? `<code>${escapeHtml(revealed)}</code>`
-          : `<code>${escapeHtml(tk.token_prefix)}...</code>${
-              tk.can_reveal ? "" : ' <small style="color:var(--text-muted)">(不可还原)</small>'
+          : `<code>${escapeHtml(tk.token_prefix)}…</code>${
+              tk.can_reveal ? "" : ' <small class="muted" title="服务端签名密钥变更后无法再解密这个密钥，它仍可正常鉴权；需要明文时请重新签发。">（无法查看明文）</small>'
             }`;
         const revealBtns = tk.can_reveal
           ? `
@@ -396,7 +450,7 @@
           const card = $("client-guides-card");
           card.open = true;
           if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
-          showToast("已将 Token 填入客户端接入配置");
+          showToast("已把密钥填入客户端接入配置");
         } catch (err) {
           showToast(err.message, true);
         }
@@ -417,7 +471,7 @@
             method: "POST",
             body: JSON.stringify({ id: btn.dataset.id }),
           });
-          showToast("API Token 已吊销");
+          showToast("客户端密钥已吊销");
           refreshAllData();
         } catch (err) {
           showToast(err.message, true);
@@ -568,7 +622,7 @@
     $("detail-preview").textContent = "正在加载正文与历史…";
     $("detail-revisions").textContent = "";
     $("detail-content").textContent = "";
-    ["btn-pin-memory", "btn-delete-memory", "btn-restore-memory"].forEach((id) => $(id).classList.add("hidden"));
+    ["btn-pin-memory", "btn-delete-memory", "btn-restore-memory", "btn-hard-delete-memory"].forEach((id) => $(id).classList.add("hidden"));
     $("btn-detail-preview").click();
     $("btn-close-detail").focus();
     try {
@@ -599,16 +653,16 @@
       $("btn-pin-memory").classList.toggle("hidden", deleted);
       $("btn-delete-memory").classList.toggle("hidden", deleted);
       $("btn-restore-memory").classList.toggle("hidden", !deleted);
+      $("btn-hard-delete-memory").classList.toggle("hidden", !deleted);
       const revisions = revRes.items || [];
       $("detail-revisions").innerHTML = revisions.map((revision, index) => {
         const previous = revisions[index + 1];
         const snap = revision.snapshot || {};
         const old = previous ? previous.snapshot || {} : {};
-        const actor = state.principals.find((person) => person.id === revision.actor_id);
         const operation = { create: "创建", update: "更新", delete: "删除", restore: "恢复", promote: "提升至全局" }[revision.operation] || revision.operation;
         const meta = previous ? Object.keys(REVISION_FIELDS).filter((key) => JSON.stringify(snap[key] ?? null) !== JSON.stringify(old[key] ?? null)).map((key) => `${REVISION_FIELDS[key]}：${revisionValue(key, old[key])} → ${revisionValue(key, snap[key])}`).join("\n") : "";
         const diff = previous || revision.operation === "create" ? window.EngramMarkdown.diff(revisionContent(old), revisionContent(snap)) : "";
-        return `<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actor ? actor.display_name : revision.actor_id.slice(0, 8))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
+        return `<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actorName(revision.actor_id))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
       }).join("") || '<p class="empty-state">暂无版本历史</p>';
       if (updateURL) syncLocation(true);
     } catch (err) {
@@ -945,7 +999,7 @@
     $("prin-existing").required = !creating;
     const principal = state.principals.find((item) => item.id === $("prin-existing").value);
     const membership = principal && (principal.tenant_roles || []).find((role) => role.tenant_id === $("prin-tenant").value);
-    $("prin-existing-hint").textContent = principal ? `成员：${principal.display_name} · 当前租户角色：${membership ? membership.role : "尚未绑定"}。${mode === "update_role" ? "提交将明确替换此租户角色。" : "绑定不会修改成员名称或已有角色。"}` : "请先创建成员。";
+    $("prin-existing-hint").textContent = principal ? `成员：${principal.display_name} · 当前租户角色：${membership ? TENANT_ROLES[membership.role] || membership.role : "尚未绑定"}。${mode === "update_role" ? "提交将明确替换此租户角色。" : "绑定不会修改成员名称或已有角色。"}` : "请先创建成员。";
     $("btn-save-principal").textContent = { create: "创建新成员", bind: "绑定到当前租户", update_role: "保存租户角色变更" }[mode];
   }
 
@@ -1191,7 +1245,7 @@
       body: JSON.stringify({ name: $("tenant-name").value }),
     });
     $("tenant-name").value = "";
-    showToast("Tenant 创建成功");
+    showToast("租户已创建");
     refreshAllData();
   });
 
@@ -1262,7 +1316,7 @@
     });
     $("pr-remote").value = "";
     $("pr-workspace").value = "";
-    showToast("仓库 Remote 映射已添加");
+    showToast("仓库地址已添加");
     refreshAllData();
   });
 
@@ -1363,20 +1417,21 @@
     const output = $("mcp-check-result");
     const button = $("btn-check-mcp");
     const token = $("guide-token-input").value.trim();
-    if (!token) { output.textContent = "请先选择或生成客户端密钥。"; return; }
+    const report = (text, kind) => { output.textContent = text; output.className = "check-result " + (kind || ""); };
+    if (!token) { report("请先选择或生成客户端密钥。", "warn"); return; }
     renderClientGuides();
     if (!$("guide-server-input").checkValidity()) { $("guide-server-input").reportValidity(); return; }
     const origin = new URL($("guide-server-input").value.trim() || location.origin).origin;
-    if (origin !== location.origin) { output.textContent = "跨地址检查请在 AI 客户端完成；此页面仅检查当前服务，避免将密钥发送到其他地址。"; return; }
+    if (origin !== location.origin) { report("跨地址检查请在 AI 客户端完成；此页面只检查当前服务，避免把密钥发送到其他地址。", "warn"); return; }
     button.disabled = true;
-    output.textContent = "正在检查 MCP 连接…";
+    report("正在检查 MCP 连接…");
     try {
       const response = await fetch("/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "engram-web-check", version: "1" } } }), signal: AbortSignal.timeout(10000) });
       if (!response.ok) throw new Error("连接失败，请检查密钥是否有效以及服务是否可用。");
       const body = await response.text();
       if (!body.includes('"protocolVersion"') || body.includes('"error"')) throw new Error("服务未返回有效的 MCP 初始化结果。");
-      output.textContent = "当前服务与密钥连接正常。请继续在实际 AI 客户端验证配置。";
-    } catch (err) { output.textContent = err.name === "TimeoutError" ? "连接超时，请稍后重试。" : err.message; }
+      report("✓ 服务与密钥连接正常。接下来在 AI 客户端里重新连接 Engram，让它查询一次记忆即可。", "ok");
+    } catch (err) { report("✕ " + (err.name === "TimeoutError" ? "连接超时，请稍后重试。" : err.message), "error"); }
     finally { button.disabled = false; }
   });
 
@@ -1403,15 +1458,17 @@
   });
   document.addEventListener("keydown", (e) => {
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
+    const purgeOpen = !$("purge-modal").classList.contains("hidden");
     const glossaryOpen = !$("glossary-modal").classList.contains("hidden");
     const detailOpen = !$("memory-detail-card").classList.contains("hidden");
     if (e.key === "Escape") {
       if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
+      else if (purgeOpen) closePurgeModal();
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (detailOpen) closeMemoryDetail();
     }
-    if (e.key === "Tab" && (confirmOpen || glossaryOpen || detailOpen)) {
-      const dialog = $(confirmOpen ? "confirm-modal" : glossaryOpen ? "glossary-modal" : "memory-detail-card");
+    if (e.key === "Tab" && (confirmOpen || purgeOpen || glossaryOpen || detailOpen)) {
+      const dialog = $(confirmOpen ? "confirm-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
       if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
@@ -1483,6 +1540,150 @@
       }
     });
   }
+
+  // Bulk purge: preview the scope, save a backup, then clear exactly what the backup contains.
+  function purgeSelection() {
+    const tenant = state.tenants.find((t) => t.id === $("purge-tenant").value);
+    const scope = $("purge-scope").value;
+    const project = scope === "project" ? state.projects.find((p) => p.id === $("purge-project").value) : null;
+    return { tenant, scope, project, mode: $("purge-mode").value };
+  }
+
+  const PURGE_MODES = {
+    soft: { deleted: "active", verb: "清空", effect: "备份保存后才会清空。清空的条目进入回收站，之后仍可逐条恢复；", button: "下载备份并清空" },
+    hard: { deleted: "all", verb: "彻底删除", effect: "备份保存后才会删除。条目连同版本历史从数据库中移除，无法恢复，只能依靠这份备份；", button: "下载备份并彻底删除" },
+    trash: { deleted: "deleted", verb: "彻底删除", effect: "只处理回收站里的条目，正常条目不受影响。删除后无法恢复，只能依靠这份备份；", button: "下载备份并彻底删除" },
+  };
+
+  // refreshPurgePreview counts the active memories in scope and names the word the person must type.
+  async function refreshPurgePreview() {
+    const { tenant, scope, project, mode } = purgeSelection();
+    const modeInfo = PURGE_MODES[mode];
+    $("purge-step-effect").textContent = modeInfo.effect;
+    $("btn-run-purge").textContent = modeInfo.button;
+    $("purge-summary").classList.toggle("danger-summary", mode !== "soft");
+    const request = (state.purgePreviewRequest = (state.purgePreviewRequest || 0) + 1);
+    state.purgeCount = 0;
+    $("btn-run-purge").disabled = true;
+    $("purge-project-group").classList.toggle("hidden", scope !== "project");
+    $("purge-confirm-word").textContent = project ? project.name : tenant ? tenant.name : "";
+    if (!tenant || (scope === "project" && !project)) { $("purge-summary").textContent = scope === "project" ? "这个租户下还没有项目。" : "请先选择租户。"; return; }
+    $("purge-summary").textContent = "正在统计…";
+    const params = new URLSearchParams({ page_size: 1, deleted: modeInfo.deleted, tenant_id: tenant.id });
+    if (scope) params.set("scope", scope);
+    if (project) params.set("project_id", project.id);
+    try {
+      const res = await api("/api/admin/memories?" + params.toString());
+      if (request !== state.purgePreviewRequest) return;
+      state.purgeCount = res.total;
+      const target = (project ? `项目「${escapeHtml(project.name)}」` : `租户「${escapeHtml(tenant.name)}」${scope === "global" ? "的全局记忆" : "（全局记忆和所有项目）"}`) + (mode === "trash" ? "回收站里" : mode === "hard" ? "（含回收站）" : "");
+      $("purge-summary").innerHTML = res.total ? `将${modeInfo.verb}${target}的知识，共 <strong>${res.total}</strong> 条。` : `${target}没有需要${modeInfo.verb}的知识。`;
+      updatePurgeButton();
+    } catch (err) {
+      if (request === state.purgePreviewRequest) $("purge-summary").textContent = err.message;
+    }
+  }
+
+  function updatePurgeButton() {
+    $("btn-run-purge").disabled = !state.purgeCount || $("purge-confirm").value.trim() !== $("purge-confirm-word").textContent;
+  }
+
+  function renderPurgeProjects() {
+    const tenant = $("purge-tenant").value;
+    const prev = $("purge-project").value;
+    const projects = state.projects.filter((p) => p.tenant_id === tenant);
+    $("purge-project").innerHTML = projects.map((p) => `<option value="${p.id}">${escapeHtml(projectLabel(p))}</option>`).join("");
+    if (projects.some((p) => p.id === prev)) $("purge-project").value = prev;
+  }
+
+  // openPurgeModal starts from the knowledge-base filters so the scope matches what is on screen.
+  function openPurgeModal() {
+    if (!state.tenants.length) { showToast("还没有租户，无需清空。", true); return; }
+    const project = state.projects.find((p) => p.id === $("mem-filter-project").value);
+    const tenantID = project ? project.tenant_id : $("mem-filter-tenant").value || state.tenants[0].id;
+    $("purge-tenant").innerHTML = state.tenants.map((t) => `<option value="${t.id}">${escapeHtml(tenantLabel(t))}</option>`).join("");
+    $("purge-tenant").value = tenantID;
+    renderPurgeProjects();
+    if (project) { $("purge-scope").value = "project"; $("purge-project").value = project.id; }
+    else $("purge-scope").value = $("mem-filter-scope").value === "global" ? "global" : "";
+    $("purge-confirm").value = "";
+    $("purge-mode").value = $("mem-filter-deleted").value === "deleted" ? "trash" : "soft";
+    clearFormErrors($("purge-form"));
+    state.purgeOpener = document.activeElement;
+    $("purge-modal").classList.remove("hidden");
+    $("purge-tenant").focus();
+    refreshPurgePreview();
+  }
+
+  function closePurgeModal() {
+    $("purge-modal").classList.add("hidden");
+    if (state.purgeOpener && state.purgeOpener.isConnected) state.purgeOpener.focus({ preventScroll: true });
+  }
+
+  // backupFilename names the archive after its scope and time so several backups stay distinguishable.
+  function backupFilename({ tenant, scope, project, memory, mode }) {
+    const clean = (value) => String(value).replace(/[\\/:*?"<>|\s]+/g, "-").replace(/^-+|-+$/g, "") || "unnamed";
+    const stamp = new Date().toLocaleString("sv-SE", { hour12: false }).replace(/[-: ]/g, "").replace(/^(\d{8})(\d{6}).*/, "$1-$2");
+    const part = memory ? "memory-" + memory.id.slice(0, 8) : project ? clean(project.name) : scope === "global" ? "global" : "all";
+    return `engram-backup-${clean(tenant.name)}-${part}${mode === "trash" ? "-trash" : ""}-${stamp}.zip`;
+  }
+
+  // runPurge saves the backup first and only then asks the server to remove what it contains.
+  async function runPurge(selection) {
+    const body = { tenant_id: selection.tenant.id, scope: selection.scope || "", project_id: selection.project ? selection.project.id : "", memory_id: selection.memory ? selection.memory.id : "", mode: selection.mode };
+    const resp = await fetch("/api/admin/memories/purge/backup", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!resp.ok) {
+      let message = `备份失败（${resp.status}），本次没有删除任何知识。`;
+      try { const data = await resp.json(); message = ERROR_CODES[data.code] || translateError(data.message || "") || data.message || message; } catch (_) {}
+      throw new Error(message);
+    }
+    const token = resp.headers.get("X-Purge-Token");
+    const count = Number(resp.headers.get("X-Purge-Count") || 0);
+    const filename = backupFilename(selection);
+    const saved = await saveBlobToLocal(await resp.blob(), filename);
+    if (!saved) throw new Error("已取消保存备份，本次没有删除任何知识。");
+    if (!count) return { purged: 0, filename };
+    const res = await api("/api/admin/memories/purge", { method: "POST", body: JSON.stringify({ purge_token: token }) });
+    return { purged: res.purged, filename };
+  }
+
+  $("btn-open-purge").addEventListener("click", openPurgeModal);
+  $("btn-close-purge").addEventListener("click", closePurgeModal);
+  $("btn-cancel-purge").addEventListener("click", closePurgeModal);
+  $("purge-modal").addEventListener("click", (event) => { if (event.target === $("purge-modal")) closePurgeModal(); });
+  $("purge-tenant").addEventListener("change", () => { renderPurgeProjects(); $("purge-confirm").value = ""; refreshPurgePreview(); });
+  $("purge-scope").addEventListener("change", () => { $("purge-confirm").value = ""; refreshPurgePreview(); });
+  $("purge-project").addEventListener("change", () => { $("purge-confirm").value = ""; refreshPurgePreview(); });
+  $("purge-mode").addEventListener("change", refreshPurgePreview);
+  $("purge-confirm").addEventListener("input", updatePurgeButton);
+
+  onSubmit("purge-form", async (e) => {
+    e.preventDefault();
+    const selection = purgeSelection();
+    const { purged, filename } = await runPurge(selection);
+    closePurgeModal();
+    if (!purged) { showToast("范围内没有需要删除的知识。"); return; }
+    showToast(selection.mode === "soft"
+      ? `已清空 ${purged} 条知识，备份已保存为 ${filename}。需要时可在回收站恢复。`
+      : `已彻底删除 ${purged} 条知识，备份已保存为 ${filename}。`);
+    await refreshAllData();
+  });
+
+  $("btn-hard-delete-memory").addEventListener("click", async () => {
+    const mem = state.selectedMemory;
+    if (!mem) return;
+    const confirmed = await confirmDialog({ title: "彻底删除这条知识？", message: `「${mem.title}」会先下载为 Markdown 备份，然后连同版本历史从数据库中移除，无法再恢复。`, confirmText: "下载备份并彻底删除" });
+    if (!confirmed) return;
+    const tenant = state.tenants.find((t) => t.id === mem.tenant_id) || { id: mem.tenant_id, name: mem.tenant_id.slice(0, 8) };
+    try {
+      const { purged, filename } = await runPurge({ tenant, memory: mem, mode: "trash" });
+      closeMemoryDetail();
+      showToast(purged ? `「${mem.title}」已彻底删除，备份已保存为 ${filename}。` : "这条知识已不在回收站，未删除。");
+      await refreshAllData({ quiet: true });
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  });
 
   if ($("migration-export-form")) {
     onSubmit("migration-export-form", async (e) => {

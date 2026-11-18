@@ -63,7 +63,7 @@
     <header class="topbar">
       <div class="brand">
         <span>Engram</span>
-        <span class="badge">V1 Admin Console</span>
+        <span class="badge">管理控制台</span>
       </div>
       <div class="topbar-actions">
         <span id="last-refresh" class="refresh-status" role="status" aria-live="polite"></span>
@@ -143,7 +143,7 @@
               </div>
             </div>
             <details class="advanced-options">
-              <summary>高级选项 · 权限与 Monorepo</summary>
+              <summary>高级选项 · 权限与 Monorepo 子目录</summary>
               <div class="form-row">
                 <div class="form-group">
                   <label for="qs-tenant-role">租户角色</label>
@@ -151,8 +151,8 @@
                   <small class="field-hint">初始项目将自动授予维护者权限。</small>
                 </div>
                 <div class="form-group">
-                  <label for="qs-workspace">Monorepo 子路径（可选）</label>
-                  <input type="text" id="qs-workspace" placeholder="services/api（根目录留空）" />
+                  <label for="qs-workspace">Monorepo 子目录（可选）</label>
+                  <input type="text" id="qs-workspace" placeholder="如 services/api，根目录留空" />
                 </div>
               </div>
             </details>
@@ -230,22 +230,22 @@
                 <div class="form-group" id="prin-provider-group">
                   <label for="prin-provider">认证方式</label>
                   <select id="prin-provider">
-                    <option value="api_token">api_token</option>
-                    <option value="oidc">oidc</option>
-                    <option value="mtls">mtls</option>
+                    <option value="api_token">客户端密钥（api_token）</option>
+                    <option value="oidc">单点登录（oidc）</option>
+                    <option value="mtls">双向 TLS 证书（mtls）</option>
                   </select>
-                  <small class="field-hint">通过后台签发 Bearer Token 时选 <code>api_token</code>。</small>
+                  <small class="field-hint">在本控制台签发客户端密钥时选「客户端密钥」。</small>
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group" id="prin-subject-group">
                   <label for="prin-subject">成员标识</label>
                   <input type="text" id="prin-subject" placeholder="例如：eagle 或 ci-bot" required />
-                  <small class="field-hint">同一 Provider 下不可重复，用于区分不同成员或自动化角色。</small>
+                  <small class="field-hint">同一认证方式下不可重复。</small>
                 </div>
                 <div class="form-group" id="prin-name-group">
                   <label for="prin-name">显示名称</label>
-                  <input type="text" id="prin-name" placeholder="例如：Eagle 或 CI 只读机器人" required />
+                  <input type="text" id="prin-name" placeholder="例如：Eagle" required />
                 </div>
                 <div class="form-group">
                   <label for="prin-role">租户角色</label>
@@ -254,7 +254,7 @@
                     <option value="member">全局只读成员</option>
                     <option value="admin">租户管理员</option>
                   </select>
-                  <small class="field-hint">控制 Global 记忆权限；<code>admin</code> 自动拥有所有活跃项目的 <code>maintainer</code>。</small>
+                  <small class="field-hint">控制全局记忆的读写；租户管理员自动成为所有项目的维护者。</small>
                 </div>
               </div>
               <button type="submit" id="btn-save-principal">创建新成员</button>
@@ -273,20 +273,20 @@
               <tr>
                 <th>项目名称</th>
                 <th>所属租户</th>
-                <th><code>.engram-project</code> Marker</th>
-                <th>标准化 Remote &amp; workspace_path</th>
-                <th>项目成员角色</th>
+                <th>标记文件 UUID</th>
+                <th>仓库地址 / 子目录</th>
+                <th>项目成员</th>
               </tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
         <details class="card setup-panel" id="project-forms-panel">
-          <summary><span>注册项目或调整权限</span><span class="summary-hint">注册项目 · 分配项目角色 · 添加仓库映射</span></summary>
+          <summary><span>注册项目或调整权限</span><span class="summary-hint">注册项目 · 分配项目角色 · 添加仓库地址</span></summary>
           <div class="grid-2 nested-grid">
             <section class="sub-panel">
               <h3>注册项目</h3>
-              <p class="desc">注册逻辑项目、绑定标准化 Git Remote、Monorepo 子路径或生成 <code>.engram-project</code> Marker UUID。</p>
+              <p class="desc">项目通过 Git 仓库地址或仓库里的 <code>.engram-project</code> 标记文件识别；没有仓库地址的项目请勾选生成标记文件。</p>
               <form id="create-project-form">
                 <div class="form-row">
                   <div class="form-group">
@@ -300,16 +300,16 @@
                 </div>
                 <div class="form-row">
                   <div class="form-group">
-                    <label for="proj-remote">Git Remote URL (可选)</label>
-                    <input type="text" id="proj-remote" placeholder="git@github.com:eagle/project-a.git" />
+                    <label for="proj-remote">Git 仓库地址（可选）</label>
+                    <input type="text" id="proj-remote" placeholder="git@github.com:team/repo.git" />
                   </div>
                   <div class="form-group">
-                    <label for="proj-workspace">Monorepo workspace_path (可选)</label>
+                    <label for="proj-workspace">Monorepo 子目录（可选）</label>
                     <input type="text" id="proj-workspace" placeholder="例如：services/api" />
                   </div>
                 </div>
                 <div class="form-group">
-                  <label><input type="checkbox" id="proj-with-marker" checked /> 同时生成 <code>.engram-project</code> Marker UUID</label>
+                  <label class="checkbox-label"><input type="checkbox" id="proj-with-marker" checked /> 同时生成 <code>.engram-project</code> 标记文件 UUID</label>
                 </div>
                 <button type="submit">注册项目</button>
               </form>
@@ -334,7 +334,7 @@
                       <option value="writer">编辑者 · 创建与更新</option>
                       <option value="reader">只读成员</option>
                     </select>
-                    <small class="field-hint">仅控制该项目的 Project 记忆（Tenant 为 <code>admin</code> 时自动具备 <code>maintainer</code>）。</small>
+                    <small class="field-hint">只影响该项目的项目记忆；租户管理员自动拥有维护者权限。</small>
                   </div>
                 </div>
                 <button type="submit" class="small">保存项目成员权限</button>
@@ -347,15 +347,15 @@
                     <select id="pr-project" required></select>
                   </div>
                   <div class="form-group">
-                    <label for="pr-remote">Git Remote URL (支持 SSH/HTTPS/别名)</label>
-                    <input type="text" id="pr-remote" placeholder="https://github.com/eagle/project-a.git" required />
+                    <label for="pr-remote">Git 仓库地址（SSH 或 HTTPS）</label>
+                    <input type="text" id="pr-remote" placeholder="https://github.com/team/repo" required />
                   </div>
                   <div class="form-group">
-                    <label for="pr-workspace">workspace_path (可选)</label>
-                    <input type="text" id="pr-workspace" placeholder="services/api" />
+                    <label for="pr-workspace">Monorepo 子目录（可选）</label>
+                    <input type="text" id="pr-workspace" placeholder="如 services/api" />
                   </div>
                 </div>
-                <button type="submit" class="small">添加仓库映射 / Remote 别名</button>
+                <button type="submit" class="small">添加仓库地址</button>
               </form>
             </section>
           </div>
@@ -369,7 +369,7 @@
           <h2>客户端密钥</h2>
           <table id="tokens-table">
             <thead>
-              <tr><th>客户端名称</th><th>Token / 前缀</th><th>租户 / 成员</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>客户端名称</th><th>密钥</th><th>租户 / 成员</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -396,7 +396,7 @@
           </form>
 
           <div id="new-token-box" class="hidden" style="margin-top:16px;">
-            <span class="badge success">API Token 已签发 — 后续可在上方列表中随时查看、复制或一键填入配置</span>
+            <span class="badge success">密钥已签发，之后可在上方列表中随时查看、复制或填入配置</span>
             <pre class="code-box" id="new-token-content"></pre>
           </div>
         </details>
@@ -405,12 +405,12 @@
           <summary><span>客户端接入配置</span><span class="summary-hint">选择客户端 · 复制配置 · 验证连接</span></summary>
           <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
             <div>
-              <h2>客户端接入配置建议（Codex / Claude Code / Gemini）</h2>
-              <p class="desc" style="margin-bottom:0;">按三个步骤完成：配置 MCP、加入记忆使用说明，再检查连接。</p>
+              <h2>为 Codex / Claude Code / Gemini 生成配置</h2>
+              <p class="desc" style="margin-bottom:0;">三步完成：添加 MCP 服务、加入记忆使用说明、检查连接。</p>
             </div>
             <div class="guide-credentials">
-              <label for="guide-token-input" style="margin-bottom:4px;">当前预览用 API Token（签发后自动填入，也可手动粘贴）</label>
-              <input type="text" id="guide-token-input" placeholder="aim_...（留空则显示占位符 &lt;YOUR_API_TOKEN&gt;）" />
+              <label for="guide-token-input" style="margin-bottom:4px;">用于生成配置的客户端密钥（签发后自动填入，也可粘贴）</label>
+              <input type="text" id="guide-token-input" placeholder="aim_…，留空则显示占位符" />
             </div>
           </div>
 
@@ -428,7 +428,7 @@
           <!-- Codex Guide -->
           <div id="client-pane-codex" class="client-pane">
             <div class="guide-step">
-              <h3>第 1 步：添加 Engram MCP Server</h3>
+              <h3>第 1 步：添加 Engram MCP 服务</h3>
               <p class="guide-note">编辑全局配置文件 <code>~/.codex/config.toml</code>（推荐 <code>http_headers</code>，在 Desktop App 与 CLI 中均生效；若仅在终端使用，也可用 <code>bearer_token_env_var = "ENGRAM_API_TOKEN"</code>）。</p>
               <div class="code-header">
                 <span><code>~/.codex/config.toml</code></span>
@@ -437,7 +437,7 @@
               <pre class="code-box" id="guide-codex-mcp"></pre>
             </div>
             <div class="guide-step">
-              <h3>第 2 步：配置全局记忆使用规范</h3>
+              <h3>第 2 步：加入记忆使用说明</h3>
               <p class="guide-note">将下方说明追加到 <code>~/.codex/AGENTS.md</code>，引导 Codex 在会话开始时先识别项目并复用 <code>project_context</code>。</p>
               <div class="code-header">
                 <span><code>~/.codex/AGENTS.md</code></span>
@@ -450,7 +450,7 @@
           <!-- Claude Code Guide -->
           <div id="client-pane-claude" class="client-pane hidden">
             <div class="guide-step">
-              <h3>第 1 步：添加 Engram MCP Server</h3>
+              <h3>第 1 步：添加 Engram MCP 服务</h3>
               <p class="guide-note">用户级全局配置位于 <code>~/.claude.json</code>（或项目根目录 <code>.mcp.json</code>，注意不是 <code>~/.claude/settings.json</code>）；也可直接运行下方 CLI 命令添加。</p>
               <div class="code-header">
                 <span><code>~/.claude.json</code>（或项目级 <code>.mcp.json</code>）</span>
@@ -464,7 +464,7 @@
               <pre class="code-box" id="guide-claude-cli"></pre>
             </div>
             <div class="guide-step">
-              <h3>第 2 步：配置全局记忆使用规范</h3>
+              <h3>第 2 步：加入记忆使用说明</h3>
               <p class="guide-note">将下方说明追加到 <code>~/.claude/CLAUDE.md</code>。</p>
               <div class="code-header">
                 <span><code>~/.claude/CLAUDE.md</code></span>
@@ -488,7 +488,7 @@
           <!-- Gemini Guide -->
           <div id="client-pane-gemini" class="client-pane hidden">
             <div class="guide-step">
-              <h3>第 1 步：添加 Engram MCP Server</h3>
+              <h3>第 1 步：添加 Engram MCP 服务</h3>
               <p class="guide-note">根据使用的工具选择对应配置文件：<strong>Gemini CLI</strong> 写入 <code>~/.gemini/settings.json</code>；<strong>Antigravity</strong> 写入 <code>~/.gemini/config/mcp_config.json</code>（<code>~/.gemini/antigravity/mcp_config.json</code> 的全局配置目标）。</p>
               <div class="code-header">
                 <span>Gemini CLI：<code>~/.gemini/settings.json</code></span>
@@ -502,7 +502,7 @@
               <pre class="code-box" id="guide-gemini-agy-mcp"></pre>
             </div>
             <div class="guide-step">
-              <h3>第 2 步：配置全局记忆使用规范</h3>
+              <h3>第 2 步：加入记忆使用说明</h3>
               <p class="guide-note"><strong>Gemini CLI</strong> 请追加到 <code>~/.gemini/GEMINI.md</code>；<strong>Antigravity</strong> 请保存为全局规则 <code>~/.gemini/config/rules/engram.md</code>（或在具体工作区放置 <code>GEMINI.md</code> / <code>AGENTS.md</code>）。</p>
               <div class="code-header">
                 <span><code>~/.gemini/GEMINI.md</code> 或 <code>~/.gemini/config/rules/engram.md</code></span>
@@ -511,7 +511,7 @@
               <pre class="code-box" id="guide-gemini-rules"></pre>
             </div>
           </div>
-          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">保存配置后重新连接客户端中的 Engram MCP，尝试查询共享记忆。连接成功后即可开始使用。</p><button type="button" class="secondary small" id="btn-check-mcp">检查服务端 MCP 连接</button><p id="mcp-check-result" class="field-hint" role="status"></p></div>
+          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">先在这里确认服务和密钥可用，再在 AI 客户端里重新连接 Engram 并查询一次记忆。客户端真正连上后，客户端列表中对应密钥的「最近使用」会显示为刚刚。</p><button type="button" class="secondary small" id="btn-check-mcp">检查服务与密钥</button><p id="mcp-check-result" class="check-result" role="status"></p></div>
         </details>
 
       </section>
@@ -524,7 +524,10 @@
               <h2>知识库</h2>
               <p class="desc" style="margin-bottom:0;">浏览所有租户和项目的知识，查看修订历史，从回收站恢复条目，或导出为 Markdown 压缩包。</p>
             </div>
-            <button type="button" id="btn-download-export-zip" class="secondary">📦 导出并下载 Markdown (.zip)</button>
+            <div class="button-row">
+              <button type="button" id="btn-download-export-zip" class="secondary">📦 导出 Markdown（.zip）</button>
+              <button type="button" id="btn-open-purge" class="danger-outline">批量清空…</button>
+            </div>
           </div>
 
           <form id="filter-memories-form" class="filter-bar">
@@ -572,6 +575,7 @@
                 <button type="button" id="btn-pin-memory" class="secondary small hidden">置顶</button>
                 <button type="button" id="btn-restore-memory" class="small hidden">恢复</button>
                 <button type="button" id="btn-delete-memory" class="danger-outline small hidden">删除</button>
+                <button type="button" id="btn-hard-delete-memory" class="danger small hidden">彻底删除</button>
               </div>
             </div>
             <div id="detail-frontmatter" class="frontmatter hidden"></div>
@@ -587,43 +591,43 @@
       <section id="tab-migration" class="tab-pane hidden">
         <div class="grid-2">
           <div class="card">
-            <h2>📦 导出系统全量迁移包</h2>
-            <p class="desc">用于完整迁移到另一台 Engram 服务。导出内容包含：Tenants、Principals、成员权限、Projects、Git Remote / Marker、API Tokens、全部记忆（含已软删除）、历史 Revisions 与 Events；不包含管理员登录密码。</p>
+            <h2>📦 导出迁移包</h2>
+            <p class="desc">用于整体迁移到另一台 Engram 服务。迁移包包含租户、成员与权限、项目及仓库地址、客户端密钥、全部知识（含回收站）、版本历史和变更记录；不包含管理员登录密码。</p>
             <form id="migration-export-form">
               <div class="form-group">
                 <label for="mig-export-passphrase">可选：导出加密口令</label>
-                <input type="password" id="mig-export-passphrase" placeholder="留空则不加密；设置口令后整包使用 AES-256-GCM 加密" autocomplete="new-password" />
+                <input type="password" id="mig-export-passphrase" placeholder="留空则不加密" autocomplete="new-password" />
                 <small class="field-hint">
-                  推荐设置口令：加密导出时会安全携带 API Token 明文，导入到<strong>不同</strong> <code>ENGRAM_CONTEXT_SIGN_KEY</code> 的新服务后仍可继续在 Web UI 查看 Token（未加密导出若更换签名密钥，仅保留 Token 鉴权能力）。
+                  建议设置口令（整包使用 AES-256-GCM 加密）。加密的迁移包会携带密钥明文，导入到签名密钥 <code>ENGRAM_CONTEXT_SIGN_KEY</code> 不同的服务后，仍能在控制台查看和复制客户端密钥；未加密的迁移包导入后，密钥仍可用于客户端鉴权，但不能再在控制台查看。
                 </small>
               </div>
-              <button type="submit">📦 导出并保存系统迁移包 (.zip)</button>
+              <button type="submit">📦 导出迁移包（.zip）</button>
             </form>
           </div>
 
           <div class="card">
-            <h2>📥 导入系统全量迁移包</h2>
-            <p class="desc">将从源服务导出的迁移包（<code>engram-system-snapshot-*.zip</code>）完整还原到当前服务。导入在单个数据库事务内完成，若失败将自动回滚。</p>
+            <h2>📥 导入迁移包</h2>
+            <p class="desc">把另一台服务导出的迁移包（<code>engram-system-snapshot-*.zip</code>）完整还原到当前服务。还原在单个数据库事务内完成，失败时自动回滚，现有数据不受影响。</p>
             <form id="migration-import-form">
               <div class="form-group">
-                <label for="mig-import-file">选择系统迁移包 (.zip)</label>
+                <label for="mig-import-file">选择迁移包（.zip）</label>
                 <input type="file" id="mig-import-file" accept=".zip,application/zip" required />
               </div>
               <div class="form-group">
-                <label for="mig-import-passphrase">解密口令（若导出时设置了口令则必填）</label>
+                <label for="mig-import-passphrase">解密口令（导出时设置过口令才需要填写）</label>
                 <input type="password" id="mig-import-passphrase" placeholder="未加密包留空即可" autocomplete="off" />
               </div>
               <div class="form-group">
-                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; color:#fcd34d;">
-                  <input type="checkbox" id="mig-import-confirm" style="width:auto; margin-top:3px;" />
-                  <span>确认清空当前服务已有业务数据并全量覆盖还原（保留当前管理员账号密码；空库可直接还原或勾选）</span>
+                <label class="checkbox-label warning-label">
+                  <input type="checkbox" id="mig-import-confirm" />
+                  <span>我确认清空当前服务的全部业务数据并用迁移包覆盖（管理员账号密码保留；当前为空库时可不勾选）</span>
                 </label>
               </div>
-              <button type="submit" class="danger">📥 上传并还原系统快照</button>
+              <button type="submit" class="danger">📥 上传并还原</button>
             </form>
 
             <div id="mig-import-result" class="hidden" style="margin-top:16px;">
-              <span class="badge success">系统迁移还原成功</span>
+              <span class="badge success">还原成功</span>
               <pre class="code-box" id="mig-import-result-box"></pre>
             </div>
           </div>
@@ -640,57 +644,109 @@
       </div>
 
       <div class="glossary-section">
-        <h3>1. 核心概念与层级关系</h3>
+        <h3>1. 核心概念</h3>
         <ul class="glossary-list">
-          <li><strong>Tenant（租户）</strong>：最高层级的隔离边界（如 <code>default</code>、<code>personal</code>、<code>team-core</code>）。同一 Tenant 内共享 <code>global</code> 记忆，不同 Tenant 之间数据完全隔离。</li>
-          <li><strong>Principal（成员 / 权限主体）</strong>：代表使用 Engram 的<strong>人或独立自动化角色</strong>（例如开发者 <code>eagle</code>、只读机器人 <code>ci-bot</code>），决定权限范围与审计归属（<code>created_by</code>/<code>updated_by</code>）。个人的多台设备、多种 Agent（MacBook 上的 Codex、Mac mini 上的 Claude 等）可共用同一个 Principal，并分别签发多张 <strong>API Token</strong> 来区分各客户端凭证。</li>
-          <li><strong>认证方式 / 成员标识（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分成员或自动化角色的唯一 ID（如 <code>eagle</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
-          <li><strong>Project（项目）&amp; Marker / Remote</strong>：归属于某个 Tenant 的独立代码库或 Monorepo 子路径（<code>workspace_path</code>），用于存放 <code>project</code> 作用域记忆。可通过 Git Remote 或根目录 <code>.engram-project</code> UUID 文件自动匹配。</li>
+          <li><strong>租户（Tenant）</strong>：最外层的隔离边界，例如 <code>default</code>、<code>personal</code>、<code>team-core</code>。同一租户内共享全局记忆，不同租户之间数据完全隔离。</li>
+          <li><strong>成员（Principal）</strong>：使用 Engram 的人或独立的自动化角色，例如开发者 <code>eagle</code>、只读机器人 <code>ci-bot</code>。成员决定权限范围，也记录在每条知识的创建人和修改人中。同一个人的多台设备、多种 Agent 共用一个成员，再为每个客户端分别签发<strong>客户端密钥</strong>。</li>
+          <li><strong>认证方式与成员标识（Provider / Subject）</strong>：认证方式是身份来源，可以是客户端密钥（<code>api_token</code>）、单点登录（<code>oidc</code>）或双向 TLS 证书（<code>mtls</code>）；成员标识是该来源下的唯一 ID。两者组合唯一确定一个成员。</li>
+          <li><strong>项目（Project）</strong>：租户下的一个代码库或 Monorepo 子目录，用于存放项目记忆。客户端通过 Git 仓库地址，或仓库中 <code>.engram-project</code> 标记文件里的 UUID 识别所在项目。</li>
+          <li><strong>全局记忆与项目记忆（global / project）</strong>：全局记忆在整个租户内跨项目共享，适合通用约定；项目记忆只属于一个项目。</li>
         </ul>
       </div>
 
       <div class="glossary-section">
-        <h3>2. 租户角色（控制租户级与 Global 记忆权限）</h3>
+        <h3>2. 租户角色：控制全局记忆</h3>
         <table>
           <thead>
-            <tr><th>角色</th><th>Global 记忆</th><th>Project 记忆</th><th>典型适用场景</th></tr>
+            <tr><th>角色</th><th>全局记忆</th><th>项目记忆</th><th>适用场景</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td><code>member</code></td>
-              <td>仅只读</td>
-              <td>需在「项目与仓库识别」单独分配项目角色</td>
-              <td>普通协作者或只读全局规范的 Agent</td>
+              <td>全局只读成员<br><code>member</code></td>
+              <td>只读</td>
+              <td>需要在「项目」页单独分配项目角色</td>
+              <td>普通协作者，或只需读取全局规范的 Agent</td>
             </tr>
             <tr>
-              <td><code>global_writer</code></td>
-              <td>可读写、删除及 <code>promote</code> 提升至全局</td>
-              <td>需在「项目与仓库识别」单独分配项目角色</td>
-              <td>个人主力 Agent 或需要沉淀跨项目规范的成员</td>
+              <td>全局读写者<br><code>global_writer</code></td>
+              <td>读写、删除，可把项目记忆提升为全局</td>
+              <td>需要在「项目」页单独分配项目角色</td>
+              <td>个人主力 Agent，或负责沉淀跨项目规范的成员</td>
             </tr>
             <tr>
-              <td><code>admin</code></td>
-              <td>可读写、删除及 <code>promote</code> 提升至全局</td>
-              <td>自动拥有该 Tenant 下所有活跃项目的 <code>maintainer</code> 权限</td>
-              <td>租户管理员 / 个人全权限主账号</td>
+              <td>租户管理员<br><code>admin</code></td>
+              <td>读写、删除，可把项目记忆提升为全局</td>
+              <td>自动成为租户下所有项目的维护者</td>
+              <td>租户管理员，或个人的全权限主账号</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <div class="glossary-section">
-        <h3>3. Project 角色（控制单个项目的 Project 记忆权限）</h3>
+        <h3>3. 项目角色：控制单个项目的项目记忆</h3>
         <table>
           <thead>
-            <tr><th>角色</th><th>读取</th><th>创建 / 更新</th><th>软删除 / 恢复</th></tr>
+            <tr><th>角色</th><th>读取</th><th>创建 / 更新</th><th>删除 / 恢复</th></tr>
           </thead>
           <tbody>
-            <tr><td><code>reader</code></td><td>支持</td><td>不支持</td><td>不支持</td></tr>
-            <tr><td><code>writer</code></td><td>支持</td><td>支持</td><td>不支持</td></tr>
-            <tr><td><code>maintainer</code></td><td>支持</td><td>支持</td><td>支持</td></tr>
+            <tr><td>只读成员 <code>reader</code></td><td>✓</td><td>—</td><td>—</td></tr>
+            <tr><td>编辑者 <code>writer</code></td><td>✓</td><td>✓</td><td>—</td></tr>
+            <tr><td>维护者 <code>maintainer</code></td><td>✓</td><td>✓</td><td>✓</td></tr>
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <div id="purge-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="purge-title">
+    <div class="modal-card purge-card">
+      <div class="modal-header">
+        <h2 id="purge-title">批量清空知识</h2>
+        <button type="button" class="secondary small" id="btn-close-purge">关闭</button>
+      </div>
+      <form id="purge-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="purge-tenant">租户</label>
+            <select id="purge-tenant" required></select>
+          </div>
+          <div class="form-group">
+            <label for="purge-scope">清空范围</label>
+            <select id="purge-scope">
+              <option value="">整个租户（全局记忆 + 所有项目）</option>
+              <option value="global">仅全局记忆</option>
+              <option value="project">指定项目</option>
+            </select>
+          </div>
+          <div class="form-group hidden" id="purge-project-group">
+            <label for="purge-project">项目</label>
+            <select id="purge-project"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="purge-mode">删除方式</label>
+          <select id="purge-mode">
+            <option value="soft">移入回收站（之后可以恢复）</option>
+            <option value="hard">彻底删除，连同回收站里的条目（无法恢复）</option>
+            <option value="trash">只彻底删除回收站里的条目（无法恢复）</option>
+          </select>
+        </div>
+        <div id="purge-summary" class="purge-summary" role="status">正在统计…</div>
+        <ol class="purge-steps">
+          <li>先把要删除的知识打包成 Markdown 备份（附 manifest.json 清单），保存到本地；</li>
+          <li id="purge-step-effect">备份保存后才会清空。清空的条目进入回收站，之后仍可逐条恢复；</li>
+          <li>如果下载备份后这些知识又有变化，本次不会删除，需要重新备份。</li>
+        </ol>
+        <div class="form-group">
+          <label for="purge-confirm">请输入「<strong id="purge-confirm-word"></strong>」确认清空</label>
+          <input type="text" id="purge-confirm" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-cancel-purge">取消</button>
+          <button type="submit" class="danger" id="btn-run-purge" disabled>下载备份并清空</button>
+        </div>
+      </form>
     </div>
   </div>
 
