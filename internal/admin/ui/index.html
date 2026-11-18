@@ -190,66 +190,46 @@
 
       <!-- TAB 2: Tenants & Principals -->
       <section id="tab-tenants" class="tab-pane hidden">
-        <div class="card">
-          <h2>租户列表</h2>
-          <table id="tenants-table">
-            <thead>
-              <tr><th>ID</th><th>名称</th><th>状态</th><th>创建时间</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <div class="card tenant-context">
+          <div class="section-heading">
+            <div><p class="eyebrow">租户与成员</p><h2>先选择租户，再管理成员的访问权限</h2></div>
+            <button type="button" class="secondary" id="btn-new-tenant">新建租户</button>
+          </div>
+          <div class="tenant-picker"><label for="member-tenant">当前租户</label><select id="member-tenant"></select><span id="tenant-status" class="badge"></span></div>
+          <p class="desc">同一租户共享全局记忆，项目记忆按权限访问。不同租户的数据互相隔离。</p>
+          <div id="tenant-summary" class="compact-stats" role="status"></div>
+          <details class="identity-details"><summary>租户详情</summary><div id="tenant-identity"></div></details>
         </div>
-
+        <div class="card hidden" id="create-tenant-card">
+          <div class="section-heading"><h2>新建租户</h2><button type="button" class="secondary small" id="btn-cancel-tenant">取消</button></div>
+          <form id="create-tenant-form">
+            <div class="form-group"><label for="tenant-name">租户名称</label><input type="text" id="tenant-name" placeholder="例如：engineering" required /></div>
+            <button type="submit">创建租户</button>
+          </form>
+        </div>
         <div class="card">
-          <h2>成员与已绑定角色</h2>
+          <div class="section-heading"><div><h2>当前租户的成员</h2><p class="desc">选择“管理”，集中查看全局权限、项目授权和客户端密钥。</p></div><button type="button" id="btn-add-member">添加成员</button></div>
           <table id="principals-table">
             <thead>
-              <tr><th>ID</th><th>显示名称</th><th>认证方式 / 成员标识</th><th>状态</th><th>租户角色</th></tr>
+              <tr><th>成员名称</th><th>租户角色</th><th>项目访问</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
-        <details class="card setup-panel" id="tenant-forms-panel">
-          <summary><span>新建租户或成员</span><span class="summary-hint">创建租户 · 创建或绑定成员 · 调整租户角色</span></summary>
-          <div class="grid-2 nested-grid">
-            <section class="sub-panel">
-              <h3>创建租户</h3>
-              <p class="desc">同一租户内的全局记忆跨项目共享，不同租户之间数据隔离。</p>
-            <form id="create-tenant-form">
-              <div class="form-group">
-                <label for="tenant-name">租户名称</label>
-                <input type="text" id="tenant-name" placeholder="例如：engineering" required />
-              </div>
-              <button type="submit">创建租户</button>
-            </form>
-            </section>
-            <section class="sub-panel">
-              <h3>成员与租户权限</h3>
-              <p class="desc">为人或独立的自动化角色（如 CI 机器人）创建成员并授予租户角色；同一个人的多台设备、多种 Agent 可共用一个成员。</p>
+        <div class="card hidden" id="tenant-forms-panel">
+          <div class="section-heading"><h2>添加成员</h2><button type="button" class="secondary small" id="btn-cancel-member">取消</button></div>
+          <p class="desc" id="member-form-context"></p>
+          <p class="desc">同一个成员可以加入多个租户，并在不同租户拥有不同角色。每个客户端密钥绑定一个租户和一个成员。</p>
             <form id="create-principal-form">
+              <input type="hidden" id="prin-tenant" />
               <div class="form-group">
-                <label for="prin-mode">操作</label>
-                <select id="prin-mode"><option value="create">创建新成员</option><option value="bind">绑定已有成员</option><option value="update_role">调整已有成员的租户角色</option></select>
+                <label for="prin-mode">添加方式</label>
+                <select id="prin-mode"><option value="create">创建新成员</option><option value="bind">将已有成员加入当前租户</option></select>
               </div>
               <div class="form-group hidden" id="prin-existing-group">
                 <label for="prin-existing">已有成员</label>
                 <select id="prin-existing"></select>
                 <small id="prin-existing-hint" class="field-hint"></small>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="prin-tenant">所属租户</label>
-                  <select id="prin-tenant" required></select>
-                </div>
-                <div class="form-group" id="prin-provider-group">
-                  <label for="prin-provider">认证方式</label>
-                  <select id="prin-provider">
-                    <option value="api_token">客户端密钥（api_token）</option>
-                    <option value="oidc">单点登录（oidc）</option>
-                    <option value="mtls">双向 TLS 证书（mtls）</option>
-                  </select>
-                  <small class="field-hint">在本控制台签发客户端密钥时选「客户端密钥」。</small>
-                </div>
               </div>
               <div class="form-row">
                 <div class="form-group" id="prin-subject-group">
@@ -268,14 +248,45 @@
                     <option value="member">全局只读成员</option>
                     <option value="admin">租户管理员</option>
                   </select>
-                  <small class="field-hint">控制全局记忆的读写；租户管理员自动成为所有项目的维护者。</small>
+                  <small class="field-hint" id="prin-role-hint"></small>
                 </div>
               </div>
+              <details class="advanced-options" id="prin-provider-group">
+                <summary>高级设置 · 认证方式</summary>
+                <label for="prin-provider">认证方式</label>
+                <select id="prin-provider">
+                  <option value="api_token">客户端密钥（api_token）</option>
+                  <option value="oidc">单点登录（oidc）</option>
+                  <option value="mtls">双向 TLS 证书（mtls）</option>
+                </select>
+                <small class="field-hint">在本控制台签发客户端密钥时选「客户端密钥」。</small>
+              </details>
               <button type="submit" id="btn-save-principal">创建新成员</button>
             </form>
-            </section>
-          </div>
-        </details>
+        </div>
+        <article class="card member-detail hidden" id="member-detail-card" aria-labelledby="member-detail-title">
+          <div class="section-heading"><div><p class="eyebrow" id="member-detail-context"></p><h2 id="member-detail-title" tabindex="-1"></h2></div><button type="button" class="secondary small" id="btn-close-member">关闭详情</button></div>
+          <p class="desc" id="member-detail-status"></p>
+          <section class="member-section">
+            <h3>全局记忆权限</h3>
+            <form id="member-role-form">
+              <div class="form-group"><label for="member-role">租户角色</label><select id="member-role"><option value="member">全局只读成员</option><option value="global_writer">全局读写者</option><option value="admin">租户管理员</option></select><small class="field-hint" id="member-role-hint"></small></div>
+              <button type="submit" class="secondary">保存租户角色变更</button>
+            </form>
+          </section>
+          <section class="member-section">
+            <h3>项目权限</h3>
+            <p class="desc">全局读写权限不会自动授予项目访问权限。下方展示该成员在当前租户的项目授权。</p>
+            <table id="member-projects-table"><thead><tr><th>项目</th><th>当前权限</th><th>调整授权</th></tr></thead><tbody></tbody></table>
+          </section>
+          <section class="member-section">
+            <h3>客户端密钥</h3>
+            <p class="desc">这里仅展示该成员在当前租户下的密钥。新密钥沿用成员权限，旧密钥不会自动失效。</p>
+            <form id="member-token-form" class="member-token-form"><div class="form-group"><label for="member-token-name">客户端名称</label><input type="text" id="member-token-name" placeholder="例如：macbook-codex 或 macmini-claude" required /></div><button type="submit">签发新密钥</button></form>
+            <table id="member-tokens-table"><thead><tr><th>客户端名称</th><th>密钥</th><th>租户 / 成员</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+          </section>
+          <details class="identity-details"><summary>身份详情 · 标识与认证方式</summary><div id="member-identity"></div></details>
+        </article>
       </section>
 
       <!-- TAB 3: Projects & Repositories -->

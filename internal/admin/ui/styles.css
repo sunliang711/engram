@@ -632,6 +632,31 @@ button.danger-outline { background: transparent; color: var(--text-danger); bord
 button.danger-outline:hover { background: #ef44441f; color: var(--text-danger-strong); }
 .setup-panel:not([open]) { padding-top: 16px; padding-bottom: 16px; }
 .nested-grid { margin-bottom: 0; }
+/* Tenant context stays visible while member details group permissions and client keys. */
+.tenant-context .section-heading, #tab-tenants .section-heading { align-items: flex-start; flex-wrap: wrap; }
+#tab-tenants .section-heading .desc { margin-bottom: 0; }
+.tenant-context h2 { margin-top: 6px; }
+.tenant-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+.tenant-picker label { margin: 0; }
+.tenant-picker select { width: min(340px, 100%); }
+.tenant-context .compact-stats { padding: 0; margin-bottom: 14px; color: var(--text-muted); font-size: 13px; }
+.identity-details { font-size: 13px; color: var(--text-muted); }
+.identity-details > div { padding: 8px 0; }
+.member-selected { background: var(--bg-hover); }
+.member-detail { border-color: var(--primary); scroll-margin-top: 80px; }
+.member-detail h2 { font-size: 22px; margin-top: 5px; }
+.member-section { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 20px; }
+.member-section h3 { font-size: 15px; margin-bottom: 10px; }
+.member-section .form-group { max-width: 520px; }
+.member-detail .identity-details { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 16px; }
+.member-token-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-bottom: 16px; }
+.member-token-form .form-group { flex: 1 1 230px; margin-bottom: 0; }
+.member-token-form button { flex-shrink: 0; }
+#member-projects-table { min-width: 520px; }
+#member-projects-table select { width: auto; min-width: 110px; padding: 6px 10px; }
+#member-projects-table td:last-child { width: 260px; }
+#tenant-forms-panel form { max-width: 900px; }
+#create-tenant-form { max-width: 520px; }
 .sub-panel { background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; min-width: 0; }
 .sub-panel h3 { font-size: 15px; margin-bottom: 6px; }
 .sub-panel p.desc { color: var(--text-muted); font-size: 13px; margin-bottom: 16px; }

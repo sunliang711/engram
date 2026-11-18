@@ -6,6 +6,8 @@
     principals: [],
     projects: [],
     tokens: [],
+    memberTenant: "",
+    selectedPrincipal: "",
     memories: [],
     facets: { categories: [], tags: [] },
     lastRefresh: 0,
@@ -187,8 +189,9 @@
       }
       state.initialized = initialized;
       renderSelectors();
-      renderTenantsTable();
+      renderTenantContext();
       renderPrincipalsTable();
+      renderMemberDetail();
       renderProjectsTable();
       renderTokensTable();
       if (!state.locationReady) {
@@ -214,7 +217,7 @@
 
   // renderSelectors preserves valid selections when shared administration data refreshes.
   function renderSelectors() {
-    const tenantSelects = ["prin-tenant", "proj-tenant", "tok-tenant"];
+    const tenantSelects = ["member-tenant", "proj-tenant", "tok-tenant"];
     tenantSelects.forEach((id) => {
       const sel = $(id);
       if (!sel) return;
@@ -230,7 +233,7 @@
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
 
-    const prinSelects = ["pm-principal", "tok-principal", "prin-existing"];
+    const prinSelects = ["pm-principal", "tok-principal"];
     prinSelects.forEach((id) => {
       const sel = $(id);
       if (!sel) return;
@@ -251,7 +254,7 @@
         .join("");
       if (prev && Array.from(sel.options).some((option) => option.value === prev)) sel.value = prev;
     });
-    updatePrincipalMode();
+    renderClientMemberOptions();
   }
 
   // fillSelect rebuilds a filter list behind an "all" option, keeping a still-requested value selectable.
@@ -282,22 +285,44 @@
     return t`${p.name}（${p.tenant_name}${twins ? " · " + p.id.slice(0, 6) : ""}）`;
   }
 
-  // renderTenantsTable shows tenant status and copyable compact identifiers.
-  function renderTenantsTable() {
-    const tbody = $("tenants-table").querySelector("tbody");
-    if (!state.tenants.length) { tbody.innerHTML = t('<tr><td colspan="4" class="empty-state">尚无租户，请先在概览完成快速接入。</td></tr>'); return; }
-    tbody.innerHTML = state.tenants
-      .map(
-        (t) => `
-      <tr>
-        <td>${identifier(t.id)}</td>
-        <td><strong>${escapeHtml(t.name)}</strong></td>
-        <td><span class="badge ${t.status === "active" ? "success" : "danger"}">${statusLabel(t.status)}</span></td>
-        <td>${formatDate(t.created_at)}</td>
-      </tr>
-    `
-      )
-      .join("");
+  // tenantMembership resolves a shared identity's role only within the selected tenant.
+  function tenantMembership(principal, tenantID = state.memberTenant) {
+    return principal && (principal.tenant_roles || []).find((role) => role.tenant_id === tenantID);
+  }
+
+  // selectedMember rejects identities that no longer belong to the current tenant.
+  function selectedMember() {
+    return visiblePrincipals().find((principal) => principal.id === state.selectedPrincipal && tenantMembership(principal));
+  }
+
+  // tenantRoleHint explains effective abilities without requiring knowledge of role names.
+  function tenantRoleHint(role) {
+    if (role === "admin") return t("可以读写全局记忆，并维护当前租户下的所有项目。");
+    if (role === "global_writer") return t("可以读写当前租户的全局记忆。访问项目记忆仍需单独授权。");
+    return t("可以读取当前租户的全局记忆。访问项目记忆仍需单独授权。");
+  }
+
+  // renderTenantContext keeps member operations scoped to one tenant across refreshes.
+  function renderTenantContext() {
+    if (!state.tenants.some((tenant) => tenant.id === state.memberTenant)) {
+      state.memberTenant = $("member-tenant").value;
+      state.selectedPrincipal = "";
+    }
+    $("member-tenant").value = state.memberTenant;
+    $("prin-tenant").value = state.memberTenant;
+    const tenant = state.tenants.find((item) => item.id === state.memberTenant);
+    const active = tenant && tenant.status === "active";
+    $("btn-add-member").disabled = !active;
+    $("member-tenant").disabled = !state.tenants.length;
+    $("tenant-status").textContent = tenant ? statusLabel(tenant.status) : t("尚无租户");
+    $("tenant-status").className = "badge " + (active ? "success" : "danger");
+    const members = visiblePrincipals().filter((principal) => tenantMembership(principal));
+    const projects = state.projects.filter((project) => project.tenant_id === state.memberTenant && project.status === "active");
+    const tokens = state.tokens.filter((token) => token.tenant_id === state.memberTenant && !token.revoked_at);
+    $("tenant-summary").textContent = tenant ? t`${members.length} 位成员 · ${projects.length} 个有效项目 · ${tokens.length} 个未吊销密钥` : t("请先新建租户，再添加成员。");
+    $("tenant-identity").innerHTML = tenant ? `${identifier(tenant.id)}<p class="field-hint">${t("创建时间")} · ${formatDate(tenant.created_at)}</p>` : "";
+    $("member-form-context").textContent = tenant ? t`添加到租户「${tenant.name}」` : "";
+    updatePrincipalMode();
   }
 
   const PROVIDERS = { api_token: t("客户端密钥"), oidc: t("单点登录"), mtls: t("双向 TLS 证书") };
@@ -305,23 +330,73 @@
   // renderPrincipalsTable presents identities with their explicit tenant memberships.
   function renderPrincipalsTable() {
     const tbody = $("principals-table").querySelector("tbody");
-    const principals = visiblePrincipals();
-    if (!principals.length) { tbody.innerHTML = t('<tr><td colspan="5" class="empty-state">尚无成员，请先创建租户和成员。</td></tr>'); return; }
+    const principals = visiblePrincipals().filter((principal) => tenantMembership(principal));
+    if (!principals.length) { tbody.innerHTML = t('<tr><td colspan="6" class="empty-state">当前租户还没有成员，请点击“添加成员”。</td></tr>'); return; }
     tbody.innerHTML = principals
       .map((p) => {
-        const roles = (p.tenant_roles || [])
-          .map((r) => `<span class="badge">${escapeHtml(r.tenant_name)} · ${escapeHtml(TENANT_ROLES[r.role] || r.role)}</span>`)
-          .join(" ");
+        const membership = tenantMembership(p);
+        const projects = state.projects.filter((project) => project.tenant_id === state.memberTenant && project.status === "active" && (membership.role === "admin" || (project.members || []).some((member) => member.principal_id === p.id)));
+        const tokens = state.tokens.filter((token) => token.tenant_id === state.memberTenant && token.principal_id === p.id && !token.revoked_at);
+        const projectAccess = membership.role === "admin" ? t("所有有效项目（自动授权）") : projects.length ? t`已授权 ${projects.length} 个项目` : t("未授权任何项目");
         return `
-      <tr>
-        <td>${identifier(p.id)}</td>
+      <tr class="${p.id === state.selectedPrincipal ? "member-selected" : ""}">
         <td><strong>${escapeHtml(p.display_name)}</strong></td>
-        <td>${escapeHtml(PROVIDERS[p.identity_provider] || p.identity_provider)}<div class="field-hint"><code>${escapeHtml(p.subject)}</code></div></td>
+        <td><span class="badge">${escapeHtml(TENANT_ROLES[membership.role] || membership.role)}</span></td>
+        <td>${escapeHtml(projectAccess)}</td>
+        <td>${tokens.length}</td>
         <td><span class="badge ${p.status === "active" ? "success" : "danger"}">${statusLabel(p.status)}</span></td>
-        <td>${roles || t('<span class="muted">未加入任何租户</span>')}</td>
+        <td><button type="button" class="secondary small btn-manage-member" data-id="${p.id}" aria-controls="member-detail-card" aria-expanded="${p.id === state.selectedPrincipal}">${t("管理")}</button></td>
       </tr>`;
       })
       .join("");
+  }
+
+  // renderMemberDetail joins effective roles, project grants, and tenant-bound credentials.
+  function renderMemberDetail() {
+    const principal = selectedMember();
+    $("member-detail-card").classList.toggle("hidden", !principal);
+    if (!principal) { state.selectedPrincipal = ""; return; }
+    const tenant = state.tenants.find((item) => item.id === state.memberTenant);
+    const membership = tenantMembership(principal);
+    const context = state.memberTenant + ":" + principal.id;
+    const sameContext = $("member-role").dataset.context === context;
+    if (!sameContext || $("member-role").dataset.saved !== membership.role) $("member-role").value = membership.role;
+    $("member-role").dataset.context = context;
+    $("member-role").dataset.saved = membership.role;
+    const active = tenant.status === "active" && principal.status === "active";
+    $("member-role").disabled = !active;
+    $("member-role-form").querySelector('button[type="submit"]').disabled = !active;
+    $("member-token-name").disabled = !active;
+    $("member-token-form").querySelector('button[type="submit"]').disabled = !active;
+    if (!sameContext) { $("member-token-name").value = ""; clearFormErrors($("member-role-form")); clearFormErrors($("member-token-form")); }
+    $("member-detail-context").textContent = t`当前租户：${tenant.name}`;
+    $("member-detail-title").textContent = principal.display_name;
+    $("member-detail-status").textContent = t`当前角色：${TENANT_ROLES[membership.role] || membership.role} · 成员状态：${statusLabel(principal.status)}`;
+    $("member-role-hint").textContent = tenantRoleHint($("member-role").value);
+    $("member-identity").innerHTML = `${identifier(principal.id)}<p class="field-hint">${escapeHtml(PROVIDERS[principal.identity_provider] || principal.identity_provider)} · <code>${escapeHtml(principal.subject)}</code></p><p class="field-hint">${t("创建时间")} · ${formatDate(principal.created_at)}</p>`;
+    const tbody = $("member-projects-table").querySelector("tbody");
+    const drafts = sameContext ? new Map(Array.from(tbody.querySelectorAll("select[data-project]")).filter((select) => select.value !== select.dataset.saved).map((select) => [select.dataset.project, select.value])) : new Map();
+    const projects = state.projects.filter((project) => project.tenant_id === state.memberTenant);
+    tbody.innerHTML = projects.map((project) => {
+      const member = (project.members || []).find((item) => item.principal_id === principal.id);
+      const inherited = membership.role === "admin";
+      const enabled = active && project.status === "active";
+      const role = inherited ? "maintainer" : member ? member.role : "";
+      const label = project.status !== "active" ? t("项目已停用，无法访问") : inherited ? t("维护者 · 由租户管理员角色自动获得") : PROJECT_ROLES[role] || t("未授权");
+      const options = Object.entries(PROJECT_ROLES).map(([value, name]) => `<option value="${value}"${(drafts.get(project.id) || role || "reader") === value ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
+      return `<tr><td><strong>${escapeHtml(project.name)}</strong></td><td>${escapeHtml(label)}</td><td>${inherited ? `<span class="field-hint">${t("无需单独授权")}</span>` : `<div class="row-actions"><select data-project="${project.id}" data-saved="${role || "reader"}" aria-label="${escapeHtml(t`项目「${project.name}」的权限`)}"${enabled ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-member-project" data-project="${project.id}"${enabled ? "" : " disabled"}>${role ? t("保存授权") : t("授予权限")}</button></div>`}</td></tr>`;
+    }).join("") || t('<tr><td colspan="3" class="empty-state">当前租户还没有项目，可前往“项目”页注册。</td></tr>');
+  }
+
+  // renderClientMemberOptions prevents issuing a token for an unrelated tenant identity.
+  function renderClientMemberOptions() {
+    const select = $("tok-principal");
+    const previous = select.value;
+    const principals = visiblePrincipals().filter((principal) => principal.status === "active" && tenantMembership(principal, $("tok-tenant").value));
+    select.innerHTML = principals.map((principal) => `<option value="${principal.id}">${escapeHtml(principal.display_name)}（${escapeHtml(principal.subject)}）</option>`).join("");
+    if (principals.some((principal) => principal.id === previous)) select.value = previous;
+    select.disabled = !principals.length;
+    $("create-token-form").querySelector('button[type="submit"]').disabled = !principals.length;
   }
 
   // renderProjectsTable keeps project names primary and technical identifiers compact.
@@ -373,9 +448,15 @@
 
   // renderTokensTable lists client credentials and exposes their configuration actions.
   function renderTokensTable() {
-    const tbody = $("tokens-table").querySelector("tbody");
-    if (!state.tokens.length) { tbody.innerHTML = t('<tr><td colspan="7" class="empty-state">尚无客户端密钥，可在下方为客户端生成密钥。</td></tr>'); return; }
-    tbody.innerHTML = state.tokens
+    renderTokenRows("tokens-table", state.tokens);
+    renderTokenRows("member-tokens-table", state.tokens.filter((token) => token.tenant_id === state.memberTenant && token.principal_id === state.selectedPrincipal));
+  }
+
+  // renderTokenRows shares credential actions between the client list and member detail.
+  function renderTokenRows(tableID, tokens) {
+    const tbody = $(tableID).querySelector("tbody");
+    if (!tokens.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("尚无客户端密钥，可签发新密钥连接客户端。")}</td></tr>`; return; }
+    tbody.innerHTML = tokens
       .map((tk) => {
         const active = !tk.revoked_at;
         const revealed = state.revealedTokens[tk.id];
@@ -449,6 +530,7 @@
             $("guide-token-input").value = tok;
           }
           renderClientGuides();
+          switchMainTab("tab-tokens");
           const card = $("client-guides-card");
           card.open = true;
           if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -990,19 +1072,27 @@
   // shellQuote protects copied CLI arguments from expansion by POSIX shells.
   function shellQuote(value) { return "'" + value.replace(/'/g, "'\"'\"'") + "'"; }
 
-  // updatePrincipalMode exposes identity creation and tenant permission changes as distinct actions.
+  // updatePrincipalMode exposes creation and adding an existing identity as distinct actions.
   function updatePrincipalMode() {
     const mode = $("prin-mode").value;
     const creating = mode === "create";
     ["provider", "subject", "name"].forEach((field) => $("prin-" + field + "-group").classList.toggle("hidden", !creating));
     $("prin-subject").required = creating;
     $("prin-name").required = creating;
+    $("prin-provider").disabled = !creating;
     $("prin-existing-group").classList.toggle("hidden", creating);
     $("prin-existing").required = !creating;
-    const principal = state.principals.find((item) => item.id === $("prin-existing").value);
-    const membership = principal && (principal.tenant_roles || []).find((role) => role.tenant_id === $("prin-tenant").value);
-    $("prin-existing-hint").textContent = principal ? t`成员：${principal.display_name} · 当前租户角色：${membership ? TENANT_ROLES[membership.role] || membership.role : t("尚未绑定")}。${mode === "update_role" ? t("提交将明确替换此租户角色。") : t("绑定不会修改成员名称或已有角色。")}` : t("请先创建成员。");
-    $("btn-save-principal").textContent = { create: t("创建新成员"), bind: t("绑定到当前租户"), update_role: t("保存租户角色变更") }[mode];
+    const select = $("prin-existing");
+    const previous = select.value;
+    const available = visiblePrincipals().filter((principal) => principal.status === "active" && !tenantMembership(principal));
+    select.innerHTML = available.map((principal) => `<option value="${principal.id}">${escapeHtml(principal.display_name)}（${escapeHtml(principal.subject)}）</option>`).join("");
+    if (available.some((principal) => principal.id === previous)) select.value = previous;
+    select.disabled = creating || !available.length;
+    $("prin-existing-hint").textContent = available.length ? t("加入当前租户不会修改该成员在其他租户的角色和权限。") : t("没有可加入的已有成员，请选择“创建新成员”。");
+    const tenant = state.tenants.find((item) => item.id === state.memberTenant);
+    $("btn-save-principal").disabled = !tenant || tenant.status !== "active" || (!creating && !available.length);
+    $("btn-save-principal").textContent = creating ? t("创建新成员") : t("加入当前租户");
+    $("prin-role-hint").textContent = tenantRoleHint($("prin-role").value);
   }
 
   async function copyText(text) {
@@ -1242,25 +1332,72 @@
 
   onSubmit("create-tenant-form", async (e) => {
     e.preventDefault();
-    await api("/api/admin/tenants", {
+    const res = await api("/api/admin/tenants", {
       method: "POST",
       body: JSON.stringify({ name: $("tenant-name").value }),
     });
+    state.memberTenant = res.id;
+    state.selectedPrincipal = "";
     $("tenant-name").value = "";
+    $("create-tenant-card").classList.add("hidden");
+    $("tenant-forms-panel").classList.add("hidden");
     showToast(t("租户已创建"));
-    refreshAllData();
+    await refreshAllData();
   });
 
-  ["prin-mode", "prin-existing", "prin-tenant"].forEach((id) => $(id).addEventListener("change", updatePrincipalMode));
+  // Tenant changes clear member context before rebuilding any permission or token view.
+  $("member-tenant").addEventListener("change", () => {
+    state.memberTenant = $("member-tenant").value;
+    state.selectedPrincipal = "";
+    $("tenant-forms-panel").classList.add("hidden");
+    renderTenantContext();
+    renderPrincipalsTable();
+    renderMemberDetail();
+    renderTokensTable();
+  });
+  $("btn-new-tenant").addEventListener("click", () => { $("create-tenant-card").classList.remove("hidden"); $("tenant-name").focus(); });
+  $("btn-cancel-tenant").addEventListener("click", () => { $("create-tenant-card").classList.add("hidden"); $("btn-new-tenant").focus(); });
+  $("btn-add-member").addEventListener("click", () => {
+    $("tenant-forms-panel").classList.remove("hidden");
+    clearFormErrors($("create-principal-form"));
+    updatePrincipalMode();
+    $("prin-mode").focus();
+  });
+  $("btn-cancel-member").addEventListener("click", () => { $("tenant-forms-panel").classList.add("hidden"); $("btn-add-member").focus(); });
+  $("principals-table").addEventListener("click", (event) => {
+    const button = event.target.closest(".btn-manage-member");
+    if (!button) return;
+    state.selectedPrincipal = button.dataset.id;
+    $("tenant-forms-panel").classList.add("hidden");
+    renderPrincipalsTable();
+    renderMemberDetail();
+    renderTokensTable();
+    $("member-detail-title").focus();
+  });
+  $("btn-close-member").addEventListener("click", () => {
+    const previous = state.selectedPrincipal;
+    state.selectedPrincipal = "";
+    renderPrincipalsTable();
+    renderMemberDetail();
+    renderTokensTable();
+    const button = Array.from($("principals-table").querySelectorAll(".btn-manage-member")).find((item) => item.dataset.id === previous);
+    if (button) button.focus();
+  });
+  ["prin-mode", "prin-existing", "prin-role"].forEach((id) => $(id).addEventListener("change", updatePrincipalMode));
+  $("member-role").addEventListener("change", () => { $("member-role-hint").textContent = tenantRoleHint($("member-role").value); });
+  $("tok-tenant").addEventListener("change", renderClientMemberOptions);
 
   onSubmit("create-principal-form", async (e) => {
     e.preventDefault();
-    await api("/api/admin/principals", {
+    const tenantID = state.memberTenant;
+    const mode = $("prin-mode").value;
+    if (!tenantID || (mode === "bind" && !$("prin-existing").value)) throw new Error(t("请先选择租户和有效成员。"));
+    const res = await api("/api/admin/principals", {
       method: "POST",
       body: JSON.stringify({
         mode: $("prin-mode").value,
         principal_id: $("prin-existing").value,
-        tenant_id: $("prin-tenant").value,
+        tenant_id: tenantID,
         identity_provider: $("prin-provider").value,
         subject: $("prin-subject").value,
         display_name: $("prin-name").value,
@@ -1269,8 +1406,63 @@
     });
     $("prin-subject").value = "";
     $("prin-name").value = "";
-    showToast({ create: t("新成员已创建并授权"), bind: t("已有成员已绑定，名称和其他权限未变更"), update_role: t("当前租户角色已更新") }[$("prin-mode").value]);
-    refreshAllData();
+    if (state.memberTenant === tenantID) {
+      state.selectedPrincipal = res.principal_id;
+      $("tenant-forms-panel").classList.add("hidden");
+    }
+    showToast(mode === "create" ? t("新成员已创建并授权") : t("已有成员已加入当前租户，其他租户的权限未变更"));
+    await refreshAllData();
+    if (selectedMember() && state.memberTenant === tenantID) $("member-detail-title").focus();
+  });
+
+  onSubmit("member-role-form", async (e) => {
+    e.preventDefault();
+    const principal = selectedMember();
+    if (!principal) throw new Error(t("请先选择租户和有效成员。"));
+    await api("/api/admin/principals", {
+      method: "POST",
+      body: JSON.stringify({ mode: "update_role", tenant_id: state.memberTenant, principal_id: principal.id, tenant_role: $("member-role").value }),
+    });
+    showToast(t("当前租户角色已更新"));
+    await refreshAllData();
+  });
+
+  // Project updates capture the current identity before awaiting the scoped write.
+  $("member-projects-table").addEventListener("click", async (event) => {
+    const button = event.target.closest(".btn-save-member-project");
+    const principal = selectedMember();
+    if (!button || button.disabled || !principal) return;
+    const select = button.closest("tr").querySelector("select");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    try {
+      await api("/api/admin/projects/members", {
+        method: "POST",
+        body: JSON.stringify({ project_id: button.dataset.project, principal_id: principal.id, role: select.value }),
+      });
+      showToast(t("项目成员角色已更新"));
+      await refreshAllData();
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  });
+
+  onSubmit("member-token-form", async (e) => {
+    e.preventDefault();
+    const principal = selectedMember();
+    if (!principal) throw new Error(t("请先选择租户和有效成员。"));
+    const context = state.memberTenant + ":" + principal.id;
+    const res = await api("/api/admin/tokens", {
+      method: "POST",
+      body: JSON.stringify({ tenant_id: state.memberTenant, principal_id: principal.id, name: $("member-token-name").value }),
+    });
+    if (res.id && res.token) state.revealedTokens[res.id] = res.token;
+    if (context === state.memberTenant + ":" + state.selectedPrincipal) $("member-token-name").value = "";
+    showToast(t("客户端密钥已生成，可在列表中复制或填入配置。"));
+    await refreshAllData();
   });
 
   onSubmit("create-project-form", async (e) => {
