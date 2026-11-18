@@ -36,6 +36,10 @@ func NewExporter(pool *pgxpool.Pool, cfg config.ExportConfig, metrics *observabi
 	}
 }
 
+func (e *Exporter) OutputDir() string {
+	return e.cfg.OutputDir
+}
+
 type exportRow struct {
 	id          uuid.UUID
 	tenantID    uuid.UUID
@@ -103,24 +107,36 @@ func (e *Exporter) ExportAll(ctx context.Context) (int, error) {
 		}
 	}
 
-	// Clean up stale .md files (soft-deleted memories or changed scopes)
+	// Clean up stale .md files (soft-deleted memories or changed scopes) and empty directories
 	tenantsRoot := filepath.Join(baseDir, "tenants")
 	if _, err := os.Stat(tenantsRoot); err == nil {
+		var dirs []string
 		err = filepath.WalkDir(tenantsRoot, func(path string, d os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
-				if !expectedFiles[path] {
-					if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
-						return rmErr
-					}
+			if d.IsDir() {
+				if path != tenantsRoot {
+					dirs = append(dirs, path)
+				}
+				return nil
+			}
+			if strings.HasSuffix(d.Name(), ".md") && !expectedFiles[path] {
+				if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+					return rmErr
 				}
 			}
 			return nil
 		})
 		if err != nil {
 			return 0, fmt.Errorf("cleanup stale exported markdown files: %w", err)
+		}
+		// Remove empty directories from deepest to shallowest
+		for i := len(dirs) - 1; i >= 0; i-- {
+			entries, rdErr := os.ReadDir(dirs[i])
+			if rdErr == nil && len(entries) == 0 {
+				_ = os.Remove(dirs[i])
+			}
 		}
 	}
 

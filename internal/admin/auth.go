@@ -5,9 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +18,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
 	AdminUsername     = "admin"
 	SessionCookieName = "ai_memory_admin_session"
-	pbkdf2Iterations  = 60000
 )
 
 // AdminSessionClaims is the payload signed inside the admin session cookie/token.
@@ -46,22 +44,32 @@ type AdminState struct {
 
 // AuthManager manages the Web UI admin account, bootstrap password, and session tokens.
 type AuthManager struct {
-	pool       *pgxpool.Pool
-	signKey    []byte
-	sessionTTL time.Duration
-	resetAdmin bool
+	pool         *pgxpool.Pool
+	signKey      []byte
+	sessionTTL   time.Duration
+	resetAdmin   bool
+	cookieSecure bool
 }
 
-func NewAuthManager(pool *pgxpool.Pool, signKey string, sessionTTL time.Duration, resetAdmin bool) *AuthManager {
+func NewAuthManager(pool *pgxpool.Pool, signKey string, sessionTTL time.Duration, resetAdmin bool, cookieSecure ...bool) *AuthManager {
 	if sessionTTL <= 0 {
 		sessionTTL = 24 * time.Hour
 	}
-	return &AuthManager{
-		pool:       pool,
-		signKey:    []byte("admin-session:" + signKey),
-		sessionTTL: sessionTTL,
-		resetAdmin: resetAdmin,
+	secure := false
+	if len(cookieSecure) > 0 {
+		secure = cookieSecure[0]
 	}
+	return &AuthManager{
+		pool:         pool,
+		signKey:      []byte("admin-session:" + signKey),
+		sessionTTL:   sessionTTL,
+		resetAdmin:   resetAdmin,
+		cookieSecure: secure,
+	}
+}
+
+func (m *AuthManager) CookieSecure() bool {
+	return m.cookieSecure
 }
 
 // Bootstrap initializes the admin account on first startup or resets it when RESET_ADMIN is active.
@@ -227,13 +235,33 @@ func (m *AuthManager) VerifySession(ctx context.Context, token string) (AdminSta
 
 // ChangePassword updates the admin password, clears must_change_password, increments password_version,
 // and returns a fresh session token and updated AdminState.
-func (m *AuthManager) ChangePassword(ctx context.Context, username, newPassword string) (string, AdminState, error) {
+// When must_change_password is false (voluntary change), currentPassword must be verified.
+func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassword, newPassword string) (string, AdminState, error) {
 	newPassword = strings.TrimSpace(newPassword)
 	if len(newPassword) < 8 {
 		return "", AdminState{}, apperror.New(apperror.CodeInvalidArgument, "new password must be at least 8 characters")
 	}
-	if len(newPassword) > 128 {
-		return "", AdminState{}, apperror.New(apperror.CodeInvalidArgument, "new password must not exceed 128 characters")
+	if len(newPassword) > 72 {
+		return "", AdminState{}, apperror.New(apperror.CodeInvalidArgument, "new password must not exceed 72 characters")
+	}
+
+	var (
+		storedHash string
+		mustChange bool
+	)
+	err := m.pool.QueryRow(ctx, `
+		SELECT password_hash, must_change_password
+		FROM admin_accounts
+		WHERE username = $1
+	`, username).Scan(&storedHash, &mustChange)
+	if err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "query admin account", err)
+	}
+
+	if !mustChange || currentPassword != "" {
+		if strings.TrimSpace(currentPassword) == "" || !verifyPassword(currentPassword, storedHash) {
+			return "", AdminState{}, apperror.New(apperror.CodeUnauthenticated, "current password is incorrect")
+		}
 	}
 
 	passHash, err := hashPassword(newPassword)
@@ -330,62 +358,13 @@ func generateRandomPassword(length int) (string, error) {
 }
 
 func hashPassword(password string) (string, error) {
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
 		return "", err
 	}
-	dk := pbkdf2SHA256([]byte(password), salt, pbkdf2Iterations, 32)
-	return fmt.Sprintf("pbkdf2_sha256$%d$%s$%s", pbkdf2Iterations, hex.EncodeToString(salt), hex.EncodeToString(dk)), nil
+	return string(hashed), nil
 }
 
 func verifyPassword(password, encoded string) bool {
-	parts := strings.Split(encoded, "$")
-	if len(parts) != 4 || parts[0] != "pbkdf2_sha256" {
-		return false
-	}
-	salt, err := hex.DecodeString(parts[2])
-	if err != nil {
-		return false
-	}
-	expectedDK, err := hex.DecodeString(parts[3])
-	if err != nil {
-		return false
-	}
-	actualDK := pbkdf2SHA256([]byte(password), salt, pbkdf2Iterations, len(expectedDK))
-	return subtle.ConstantTimeCompare(actualDK, expectedDK) == 1
-}
-
-// pbkdf2SHA256 implements RFC 2898 PBKDF2 with HMAC-SHA256 using only the Go standard library.
-func pbkdf2SHA256(password, salt []byte, iter, keyLen int) []byte {
-	prf := hmac.New(sha256.New, password)
-	hashLen := prf.Size()
-	numBlocks := (keyLen + hashLen - 1) / hashLen
-
-	var buf [4]byte
-	dk := make([]byte, 0, numBlocks*hashLen)
-	u := make([]byte, hashLen)
-
-	for block := 1; block <= numBlocks; block++ {
-		prf.Reset()
-		prf.Write(salt)
-		buf[0] = byte(block >> 24)
-		buf[1] = byte(block >> 16)
-		buf[2] = byte(block >> 8)
-		buf[3] = byte(block)
-		prf.Write(buf[:])
-		dk = prf.Sum(dk)
-		t := dk[len(dk)-hashLen:]
-		copy(u, t)
-
-		for n := 2; n <= iter; n++ {
-			prf.Reset()
-			prf.Write(u)
-			u = u[:0]
-			u = prf.Sum(u)
-			for x := 0; x < len(u); x++ {
-				t[x] ^= u[x]
-			}
-		}
-	}
-	return dk[:keyLen]
+	return bcrypt.CompareHashAndPassword([]byte(encoded), []byte(password)) == nil
 }

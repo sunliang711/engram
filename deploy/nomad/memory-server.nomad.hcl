@@ -39,6 +39,10 @@ job "memory-server" {
         image = "ai-memory:v1"
         ports = ["http"]
         args  = ["/usr/local/bin/memory-server", "--config", "/etc/ai-memory/config.toml"]
+        volumes = [
+          "/opt/ai-memory/config:/etc/ai-memory:ro",
+          "/opt/ai-memory/export:/data/export:rw",
+        ]
       }
 
       resources {

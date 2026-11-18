@@ -57,6 +57,9 @@
     }
 
     if (sessionState.must_change_password) {
+      $("current-admin-password-group").classList.add("hidden");
+      $("current-admin-password").required = false;
+      $("btn-cancel-change-pwd").classList.add("hidden");
       $("force-password-view").classList.remove("hidden");
       return;
     }
@@ -403,6 +406,7 @@
 
   $("force-password-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const curPwd = $("current-admin-password").value;
     const p1 = $("new-admin-password").value;
     const p2 = $("confirm-admin-password").value;
     if (p1 !== p2) {
@@ -412,8 +416,12 @@
     try {
       const s = await api("/api/admin/change-password", {
         method: "POST",
-        body: JSON.stringify({ new_password: p1 }),
+        body: JSON.stringify({
+          current_password: curPwd,
+          new_password: p1,
+        }),
       });
+      $("current-admin-password").value = "";
       $("new-admin-password").value = "";
       $("confirm-admin-password").value = "";
       showToast("管理员密码已更新！");
@@ -425,7 +433,18 @@
 
   $("btn-open-change-pwd").addEventListener("click", () => {
     $("app-view").classList.add("hidden");
+    $("current-admin-password-group").classList.remove("hidden");
+    $("current-admin-password").required = true;
+    $("btn-cancel-change-pwd").classList.remove("hidden");
     $("force-password-view").classList.remove("hidden");
+  });
+
+  $("btn-cancel-change-pwd").addEventListener("click", () => {
+    $("current-admin-password").value = "";
+    $("new-admin-password").value = "";
+    $("confirm-admin-password").value = "";
+    $("force-password-view").classList.add("hidden");
+    $("app-view").classList.remove("hidden");
   });
 
   $("btn-logout").addEventListener("click", async () => {

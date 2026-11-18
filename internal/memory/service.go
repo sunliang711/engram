@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -355,16 +356,16 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 		limit = s.cfg.Limits.MaxQueryLimit
 	}
 
-	offset := 0
-	if req.Cursor != nil && *req.Cursor != "" {
-		parsedOffset, err := strconv.Atoi(*req.Cursor)
-		if err != nil || parsedOffset < 0 {
-			return nil, apperror.New(apperror.CodeInvalidArgument, "invalid query pagination cursor")
-		}
-		offset = parsedOffset
-	}
-
 	q := strings.TrimSpace(req.Query)
+
+	var qCur queryCursor
+	if req.Cursor != nil && strings.TrimSpace(*req.Cursor) != "" {
+		parsedCur, err := decodeQueryCursor(strings.TrimSpace(*req.Cursor))
+		if err != nil {
+			return nil, err
+		}
+		qCur = parsedCur
+	}
 
 	var (
 		args  []any
@@ -406,6 +407,21 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 	}
 
 	orderBy := "is_pinned DESC, updated_at DESC, id ASC"
+	sqlOffset := 0
+	if q == "" && qCur.IsPinned != nil && qCur.UpdatedAt != nil && qCur.ID != nil {
+		// Keyset pagination for empty-query listing to avoid OFFSET drift
+		pPin := addArg(*qCur.IsPinned)
+		pUpd := addArg(*qCur.UpdatedAt)
+		pID := addArg(*qCur.ID)
+		where = append(where, fmt.Sprintf(`(
+			(is_pinned = false AND %[1]s::boolean = true)
+			OR (is_pinned = %[1]s::boolean AND updated_at < %[2]s)
+			OR (is_pinned = %[1]s::boolean AND updated_at = %[2]s AND id > %[3]s)
+		)`, pPin, pUpd, pID))
+	} else {
+		sqlOffset = qCur.Offset
+	}
+
 	if q != "" {
 		qPlaceholder := addArg(q)
 		likeEscaped := escapeLike(q)
@@ -470,7 +486,7 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 	}
 
 	limitPlaceholder := addArg(limit + 1)
-	offsetPlaceholder := addArg(offset)
+	offsetPlaceholder := addArg(sqlOffset)
 
 	sqlStr := fmt.Sprintf(`
 		SELECT id, scope, project_id, category, title, content_md, tags, is_pinned, status, version, content_hash, source_memory_id, updated_at
@@ -501,7 +517,13 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 	var nextCursor *string
 	if len(items) > limit {
 		items = items[:limit]
-		nc := strconv.Itoa(offset + limit)
+		last := items[len(items)-1]
+		nc := encodeQueryCursor(queryCursor{
+			Offset:    qCur.Offset + limit,
+			IsPinned:  &last.IsPinned,
+			UpdatedAt: &last.UpdatedAt,
+			ID:        &last.ID,
+		})
 		nextCursor = &nc
 	}
 
@@ -1792,4 +1814,38 @@ func isLockTimeoutError(err error) bool {
 		return pgErr.Code == "55P03" || pgErr.Code == "57014"
 	}
 	return false
+}
+
+type queryCursor struct {
+	Offset    int        `json:"o"`
+	IsPinned  *bool      `json:"p,omitempty"`
+	UpdatedAt *time.Time `json:"u,omitempty"`
+	ID        *uuid.UUID `json:"i,omitempty"`
+}
+
+func encodeQueryCursor(c queryCursor) string {
+	raw, _ := json.Marshal(c)
+	return "qcur_" + base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeQueryCursor(s string) (queryCursor, error) {
+	if strings.HasPrefix(s, "cur_") {
+		return queryCursor{}, apperror.New(apperror.CodeInvalidArgument, "cursor with 'cur_' prefix is a change-feed cursor for memory_changes; pass next_cursor ('qcur_...') for memory_query pagination")
+	}
+	if strings.HasPrefix(s, "qcur_") {
+		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(s, "qcur_"))
+		if err != nil {
+			return queryCursor{}, apperror.New(apperror.CodeInvalidArgument, "invalid query pagination cursor encoding")
+		}
+		var c queryCursor
+		if err := json.Unmarshal(raw, &c); err != nil || c.Offset < 0 {
+			return queryCursor{}, apperror.New(apperror.CodeInvalidArgument, "malformed query pagination cursor")
+		}
+		return c, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return queryCursor{}, apperror.New(apperror.CodeInvalidArgument, "invalid query pagination cursor")
+	}
+	return queryCursor{Offset: n}, nil
 }

@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 if [ $# -lt 2 ]; then
   echo "Usage: $0 <dump_file> <target_verify_dsn>" >&2
@@ -10,7 +10,11 @@ DUMP_FILE="$1"
 VERIFY_DSN="$2"
 
 if [ -f "${DUMP_FILE}.sha256" ]; then
-  shasum -a 256 -c "${DUMP_FILE}.sha256"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum -c "${DUMP_FILE}.sha256"
+  else
+    shasum -a 256 -c "${DUMP_FILE}.sha256"
+  fi
 fi
 
 pg_restore --clean --if-exists --no-owner --no-privileges --dbname="${VERIFY_DSN}" "${DUMP_FILE}"

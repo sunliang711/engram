@@ -9,20 +9,14 @@ import (
 	"ai-memory/migrations"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 )
 
-// Database wraps both pgxpool.Pool (for explicit transactional SQL, optimistic locking, and LISTEN/NOTIFY)
-// and gorm.DB (for convenience queries or model inspection).
+// Database wraps pgxpool.Pool for explicit transactional SQL, optimistic locking, and LISTEN/NOTIFY.
 type Database struct {
 	Pool *pgxpool.Pool
-	GORM *gorm.DB
 }
 
-// Open connects to PostgreSQL, configures the pool, optionally runs migrations, and initializes GORM.
+// Open connects to PostgreSQL, configures the pool, and optionally runs schema migrations.
 func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
@@ -57,20 +51,8 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 		}
 	}
 
-	sqlDB := stdlib.OpenDBFromPool(pool)
-	gormDB, err := gorm.Open(postgres.New(postgres.Config{
-		Conn: sqlDB,
-	}), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
-	})
-	if err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("open gorm: %w", err)
-	}
-
 	return &Database{
 		Pool: pool,
-		GORM: gormDB,
 	}, nil
 }
 

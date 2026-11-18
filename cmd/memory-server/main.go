@@ -56,7 +56,7 @@ func main() {
 		return
 	}
 
-	adminAuth := admin.NewAuthManager(database.Pool, cfg.Server.ContextSignKey, cfg.Server.ContextTTL, cfg.Auth.ResetAdmin)
+	adminAuth := admin.NewAuthManager(database.Pool, cfg.Server.ContextSignKey, cfg.Server.ContextTTL, cfg.Auth.ResetAdmin, cfg.Auth.CookieSecure)
 	if _, err := adminAuth.Bootstrap(ctx, os.Stdout); err != nil {
 		log.Fatal().Err(err).Msg("failed to bootstrap web ui admin account")
 	}

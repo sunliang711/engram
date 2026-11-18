@@ -16,6 +16,7 @@ auto_migrate = true
 [auth]
 enable_mtls_headers = false
 enable_oidc_headers = false
+cookie_secure = false
 
 [limits]
 max_title_bytes = 256

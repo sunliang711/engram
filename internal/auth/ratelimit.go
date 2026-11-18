@@ -14,12 +14,13 @@ type bucket struct {
 	lastRefill time.Time
 }
 
-// RateLimiter enforces per-principal write rate limits.
+// RateLimiter enforces token-bucket rate limits and periodically evicts idle buckets.
 type RateLimiter struct {
 	mu            sync.Mutex
 	ratePerSecond float64
 	burst         float64
-	buckets       map[uuid.UUID]*bucket
+	buckets       map[string]*bucket
+	lastCleanup   time.Time
 }
 
 func NewRateLimiter(ratePerMinute, burst int) *RateLimiter {
@@ -32,19 +33,34 @@ func NewRateLimiter(ratePerMinute, burst int) *RateLimiter {
 	return &RateLimiter{
 		ratePerSecond: float64(ratePerMinute) / 60.0,
 		burst:         float64(burst),
-		buckets:       make(map[uuid.UUID]*bucket),
+		buckets:       make(map[string]*bucket),
+		lastCleanup:   time.Now(),
 	}
 }
 
 // Allow checks whether principalID has available write quota.
 func (rl *RateLimiter) Allow(principalID uuid.UUID) error {
+	return rl.AllowKey(principalID.String())
+}
+
+// AllowKey checks whether an arbitrary key (e.g. principal UUID or client IP) has available quota.
+func (rl *RateLimiter) AllowKey(key string) error {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
 	now := time.Now()
-	b, ok := rl.buckets[principalID]
+	if now.Sub(rl.lastCleanup) > 5*time.Minute {
+		for k, b := range rl.buckets {
+			if now.Sub(b.lastRefill) > 15*time.Minute {
+				delete(rl.buckets, k)
+			}
+		}
+		rl.lastCleanup = now
+	}
+
+	b, ok := rl.buckets[key]
 	if !ok {
-		rl.buckets[principalID] = &bucket{
+		rl.buckets[key] = &bucket{
 			tokens:     rl.burst - 1,
 			lastRefill: now,
 		}
@@ -61,7 +77,7 @@ func (rl *RateLimiter) Allow(principalID uuid.UUID) error {
 	}
 
 	if b.tokens < 1.0 {
-		return apperror.New(apperror.CodeRateLimited, "write rate limit exceeded for principal")
+		return apperror.New(apperror.CodeRateLimited, "rate limit exceeded")
 	}
 	b.tokens -= 1.0
 	return nil

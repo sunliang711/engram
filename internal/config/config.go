@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -48,6 +50,7 @@ type AuthConfig struct {
 	EnableMTLSHeaders bool                `toml:"enable_mtls_headers" json:"enable_mtls_headers"`
 	EnableOIDCHeaders bool                `toml:"enable_oidc_headers" json:"enable_oidc_headers"`
 	ResetAdmin        bool                `toml:"reset_admin" json:"reset_admin"`
+	CookieSecure      bool                `toml:"cookie_secure" json:"cookie_secure"`
 	StaticTokens      []StaticTokenConfig `toml:"static_tokens" json:"static_tokens"`
 }
 
@@ -75,6 +78,14 @@ type LogConfig struct {
 	Level string `toml:"level" json:"level"`
 }
 
+func randomSignKey() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
 // Default returns a Config populated with safe V1 defaults.
 func Default() Config {
 	return Config{
@@ -82,7 +93,7 @@ func Default() Config {
 			ListenAddr:     ":8080",
 			ReadTimeout:    30 * time.Second,
 			WriteTimeout:   60 * time.Second,
-			ContextSignKey: "change-me-in-production-hmac-secret-key-32bytes",
+			ContextSignKey: randomSignKey(),
 			ContextTTL:     24 * time.Hour,
 		},
 		Database: DatabaseConfig{
@@ -164,6 +175,9 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Limits.WriteRatePerMinute = n
 		}
 	}
+	if v := os.Getenv("MEMORY_COOKIE_SECURE"); v != "" {
+		cfg.Auth.CookieSecure = strings.EqualFold(v, "true") || v == "1"
+	}
 	if v := os.Getenv("RESET_ADMIN"); v != "" {
 		cfg.Auth.ResetAdmin = !strings.EqualFold(v, "false") && v != "0"
 	} else if v := os.Getenv("reset_admin"); v != "" {
@@ -171,13 +185,18 @@ func applyEnvOverrides(cfg *Config) {
 	}
 }
 
-// Validate checks that required configuration fields are valid.
+// Validate checks that required configuration fields are valid and rejects placeholder signing keys.
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.Database.DSN) == "" {
 		return fmt.Errorf("database.dsn is required")
 	}
-	if len(c.Server.ContextSignKey) < 16 {
-		return fmt.Errorf("server.context_sign_key must be at least 16 bytes")
+	key := strings.TrimSpace(c.Server.ContextSignKey)
+	if len(key) < 32 {
+		return fmt.Errorf("server.context_sign_key must be at least 32 bytes")
+	}
+	lowerKey := strings.ToLower(key)
+	if strings.Contains(lowerKey, "change-me") || strings.Contains(lowerKey, "replace-with") || strings.Contains(lowerKey, "example") {
+		return fmt.Errorf("server.context_sign_key must not use a placeholder or example value")
 	}
 	if c.Limits.MaxTitleBytes <= 0 || c.Limits.MaxContentBytes <= 0 {
 		return fmt.Errorf("limits.max_title_bytes and limits.max_content_bytes must be positive")

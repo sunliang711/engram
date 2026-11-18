@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,11 +32,12 @@ var uiFS embed.FS
 
 // Handler serves the embedded Admin Web UI and all /api/admin/* management endpoints.
 type Handler struct {
-	pool     *pgxpool.Pool
-	authMgr  *AuthManager
-	memSvc   *memory.Service
-	exporter *exporter.Exporter
-	log      zerolog.Logger
+	pool         *pgxpool.Pool
+	authMgr      *AuthManager
+	memSvc       *memory.Service
+	exporter     *exporter.Exporter
+	loginLimiter *auth.RateLimiter
+	log          zerolog.Logger
 }
 
 func NewHandler(
@@ -44,11 +48,12 @@ func NewHandler(
 	log zerolog.Logger,
 ) *Handler {
 	return &Handler{
-		pool:     pool,
-		authMgr:  authMgr,
-		memSvc:   memSvc,
-		exporter: exp,
-		log:      log,
+		pool:         pool,
+		authMgr:      authMgr,
+		memSvc:       memSvc,
+		exporter:     exp,
+		loginLimiter: auth.NewRateLimiter(20, 8),
+		log:          log,
 	}
 }
 
@@ -73,10 +78,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	})
 
 	// Public / Session Admin Auth APIs
-	mux.HandleFunc("/api/admin/session", h.handleSession)
-	mux.HandleFunc("/api/admin/login", h.handleLogin)
-	mux.HandleFunc("/api/admin/logout", h.handleLogout)
-	mux.HandleFunc("/api/admin/change-password", h.handleChangePassword)
+	mux.HandleFunc("/api/admin/session", h.withSafety(h.handleSession))
+	mux.HandleFunc("/api/admin/login", h.withSafety(h.handleLogin))
+	mux.HandleFunc("/api/admin/logout", h.withSafety(h.handleLogout))
+	mux.HandleFunc("/api/admin/change-password", h.withSafety(h.handleChangePassword))
 
 	// Protected Management APIs (require authenticated session with must_change_password == false)
 	mux.HandleFunc("/api/admin/overview", h.requireActiveAdmin(h.handleOverview))
@@ -94,6 +99,35 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/export", h.requireActiveAdmin(h.handleExport))
 }
 
+func (h *Handler) withSafety(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+			// Same-Origin / CSRF check
+			if secSite := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); secSite == "cross-site" {
+				writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "cross-site requests are forbidden"))
+				return
+			}
+			if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" && r.Host != "" {
+				u, err := url.Parse(origin)
+				if err != nil || !strings.EqualFold(u.Host, r.Host) {
+					writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "origin mismatch"))
+					return
+				}
+			}
+			if r.ContentLength > 0 {
+				ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+				if !strings.HasPrefix(ct, "application/json") {
+					writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "Content-Type must be application/json"))
+					return
+				}
+			}
+		}
+		next(w, r)
+	}
+}
+
 func (h *Handler) extractSessionToken(r *http.Request) string {
 	if c, err := r.Cookie(SessionCookieName); err == nil && strings.TrimSpace(c.Value) != "" {
 		return strings.TrimSpace(c.Value)
@@ -105,30 +139,39 @@ func (h *Handler) extractSessionToken(r *http.Request) string {
 	return ""
 }
 
-func (h *Handler) setSessionCookie(w http.ResponseWriter, token string) {
+func (h *Handler) isSecureRequest(r *http.Request) bool {
+	if h.authMgr.CookieSecure() || r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+}
+
+func (h *Handler) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   h.isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400,
 	})
 }
 
-func (h *Handler) clearSessionCookie(w http.ResponseWriter) {
+func (h *Handler) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   h.isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 }
 
 func (h *Handler) requireActiveAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return h.withSafety(func(w http.ResponseWriter, r *http.Request) {
 		token := h.extractSessionToken(r)
 		state, err := h.authMgr.VerifySession(r.Context(), token)
 		if err != nil || !state.Authenticated {
@@ -140,7 +183,7 @@ func (h *Handler) requireActiveAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
-	}
+	})
 }
 
 func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
@@ -165,6 +208,15 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	clientIP := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		clientIP = host
+	}
+	if err := h.loginLimiter.AllowKey("login:" + clientIP); err != nil {
+		writeJSONError(w, err)
+		return
+	}
+
 	var req struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -178,7 +230,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
-	h.setSessionCookie(w, token)
+	h.setSessionCookie(w, r, token)
 	writeJSON(w, http.StatusOK, state)
 }
 
@@ -187,7 +239,7 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	h.clearSessionCookie(w)
+	h.clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "logged_out"})
 }
 
@@ -204,19 +256,20 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		NewPassword string `json:"new_password"`
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
 		return
 	}
 
-	newToken, newState, err := h.authMgr.ChangePassword(r.Context(), state.Username, req.NewPassword)
+	newToken, newState, err := h.authMgr.ChangePassword(r.Context(), state.Username, req.CurrentPassword, req.NewPassword)
 	if err != nil {
 		writeJSONError(w, err)
 		return
 	}
-	h.setSessionCookie(w, newToken)
+	h.setSessionCookie(w, r, newToken)
 	writeJSON(w, http.StatusOK, newState)
 }
 
@@ -428,7 +481,7 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 		}
 		defer rows.Close()
 
-		var items []map[string]any
+		items := make([]map[string]any, 0)
 		for rows.Next() {
 			var id uuid.UUID
 			var name, status string
@@ -493,7 +546,7 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			CreatedAt        time.Time        `json:"created_at"`
 			TenantRoles      []map[string]any `json:"tenant_roles"`
 		}
-		var list []*prinItem
+		list := make([]*prinItem, 0)
 		byID := make(map[uuid.UUID]*prinItem)
 
 		for rows.Next() {
@@ -502,7 +555,7 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "scan principal", err))
 				return
 			}
-			p.TenantRoles = []map[string]any{}
+			p.TenantRoles = make([]map[string]any, 0)
 			list = append(list, &p)
 			byID[p.ID] = &p
 		}
@@ -626,7 +679,7 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 			Repositories []map[string]any `json:"repositories"`
 			Members      []map[string]any `json:"members"`
 		}
-		var list []*projItem
+		list := make([]*projItem, 0)
 		byID := make(map[uuid.UUID]*projItem)
 		for rows.Next() {
 			var p projItem
@@ -634,8 +687,8 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "scan project", err))
 				return
 			}
-			p.Repositories = []map[string]any{}
-			p.Members = []map[string]any{}
+			p.Repositories = make([]map[string]any, 0)
+			p.Members = make([]map[string]any, 0)
 			list = append(list, &p)
 			byID[p.ID] = &p
 		}
@@ -801,6 +854,26 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid principal_id"))
 		return
 	}
+
+	// Verify that principal belongs to the same tenant as the target project
+	var belongsToTenant bool
+	err = h.pool.QueryRow(r.Context(), `
+		SELECT EXISTS (
+			SELECT 1
+			FROM projects p
+			JOIN tenant_members tm ON tm.tenant_id = p.tenant_id
+			WHERE p.id = $1 AND tm.principal_id = $2
+		)
+	`, pid, prinID).Scan(&belongsToTenant)
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check tenant membership for project member", err))
+		return
+	}
+	if !belongsToTenant {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "principal must be a member of the project's tenant first"))
+		return
+	}
+
 	_, err = h.pool.Exec(r.Context(), `
 		INSERT INTO project_members (project_id, principal_id, role)
 		VALUES ($1, $2, $3)
@@ -885,7 +958,7 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		defer rows.Close()
 
-		var items []map[string]any
+		items := make([]map[string]any, 0)
 		for rows.Next() {
 			var id, tid, pid uuid.UUID
 			var prefix, tName, pName, name string
@@ -931,6 +1004,22 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 		}
 		if strings.TrimSpace(req.Name) == "" {
 			req.Name = "default"
+		}
+
+		// Verify that principal is a member of the target tenant before issuing token
+		var isMember bool
+		err = h.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM tenant_members WHERE tenant_id = $1 AND principal_id = $2
+			)
+		`, tid, pid).Scan(&isMember)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "verify tenant membership for token", err))
+			return
+		}
+		if !isMember {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "principal is not a member of the specified tenant"))
+			return
 		}
 
 		rawToken, prefix, tokenHash, err := generateAPIToken()
@@ -1005,7 +1094,7 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	)
 	addArg := func(v any) string {
 		args = append(args, v)
-		return "$" + string(rune('0'+len(args)))
+		return fmt.Sprintf("$%d", len(args))
 	}
 
 	if tenantIDStr != "" {
@@ -1026,7 +1115,7 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 		where = append(where, "m.deleted_at IS NOT NULL")
 	}
 	if keyword != "" {
-		likePat := "%" + keyword + "%"
+		likePat := "%" + escapeAdminLike(keyword) + "%"
 		p := addArg(likePat)
 		where = append(where, "(m.title ILIKE "+p+" OR m.content_md ILIKE "+p+")")
 	}
@@ -1052,7 +1141,7 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var items []map[string]any
+	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var (
 			id, tid                 uuid.UUID
@@ -1111,7 +1200,7 @@ func (h *Handler) handleMemoryRevisions(w http.ResponseWriter, r *http.Request) 
 	}
 	defer rows.Close()
 
-	var items []map[string]any
+	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var version int64
 		var op, reqID string
@@ -1235,8 +1324,15 @@ func (h *Handler) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"exported_count": count,
-		"output_dir":     "export",
+		"output_dir":     h.exporter.OutputDir(),
 	})
+}
+
+func escapeAdminLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }
 
 func generateAPIToken() (rawToken, prefix, tokenHash string, err error) {

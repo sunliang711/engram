@@ -94,78 +94,87 @@ func (r *Resolver) Resolve(ctx context.Context, tenantID uuid.UUID, in DiscoverI
 	if len(in.Remotes) > 0 {
 		canonicalList := make([]string, 0, len(in.Remotes))
 		seen := make(map[string]bool, len(in.Remotes))
+		var firstNormErr error
 		for _, rem := range in.Remotes {
 			canon, err := NormalizeRemote(rem.URL)
 			if err != nil {
-				return nil, err
+				if firstNormErr == nil {
+					firstNormErr = err
+				}
+				continue
 			}
 			if !seen[canon] {
 				seen[canon] = true
 				canonicalList = append(canonicalList, canon)
 			}
 		}
-
-		rows, err := r.pool.Query(ctx, `
-			SELECT p.id, p.name, p.marker, pr.canonical_remote, pr.workspace_path, pr.is_primary
-			FROM project_repositories pr
-			JOIN projects p ON p.id = pr.project_id
-			WHERE pr.tenant_id = $1
-			  AND pr.canonical_remote = ANY($2)
-			  AND p.status = 'active'
-		`, tenantID, canonicalList)
-		if err != nil {
-			return nil, apperror.Wrap(apperror.CodeInternalError, "query project repositories", err)
+		if len(canonicalList) == 0 && markerProj == nil && in.ProjectMarker == "" && firstNormErr != nil {
+			return nil, firstNormErr
 		}
-		defer rows.Close()
 
-		var matched []repoCandidate
-		for rows.Next() {
-			var c repoCandidate
-			if err := rows.Scan(&c.projectID, &c.projectName, &c.projectMarker, &c.canonicalRemote, &c.workspacePath, &c.isPrimary); err != nil {
-				return nil, apperror.Wrap(apperror.CodeInternalError, "scan project repository", err)
+		if len(canonicalList) > 0 {
+			rows, err := r.pool.Query(ctx, `
+				SELECT p.id, p.name, p.marker, pr.canonical_remote, pr.workspace_path, pr.is_primary
+				FROM project_repositories pr
+				JOIN projects p ON p.id = pr.project_id
+				WHERE pr.tenant_id = $1
+				  AND pr.canonical_remote = ANY($2)
+				  AND p.status = 'active'
+			`, tenantID, canonicalList)
+			if err != nil {
+				return nil, apperror.Wrap(apperror.CodeInternalError, "query project repositories", err)
 			}
-			if PathMatchesPrefix(wsPath, c.workspacePath) {
-				matched = append(matched, c)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			return nil, apperror.Wrap(apperror.CodeInternalError, "iterate project repositories", err)
-		}
+			defer rows.Close()
 
-		if len(matched) > 0 {
-			// Find longest workspace_path prefix match (Rule 3)
-			bestDepth := -1
-			bestLen := -1
-			for _, c := range matched {
-				d := PathDepth(c.workspacePath)
-				l := len(c.workspacePath)
-				if d > bestDepth || (d == bestDepth && l > bestLen) {
-					bestDepth = d
-					bestLen = l
+			var matched []repoCandidate
+			for rows.Next() {
+				var c repoCandidate
+				if err := rows.Scan(&c.projectID, &c.projectName, &c.projectMarker, &c.canonicalRemote, &c.workspacePath, &c.isPrimary); err != nil {
+					return nil, apperror.Wrap(apperror.CodeInternalError, "scan project repository", err)
+				}
+				if PathMatchesPrefix(wsPath, c.workspacePath) {
+					matched = append(matched, c)
 				}
 			}
+			if err := rows.Err(); err != nil {
+				return nil, apperror.Wrap(apperror.CodeInternalError, "iterate project repositories", err)
+			}
 
-			byProject := make(map[uuid.UUID]repoCandidate)
-			for _, c := range matched {
-				if PathDepth(c.workspacePath) == bestDepth && len(c.workspacePath) == bestLen {
-					existing, ok := byProject[c.projectID]
-					if !ok || (!existing.isPrimary && c.isPrimary) {
-						byProject[c.projectID] = c
+			if len(matched) > 0 {
+				// Find longest workspace_path prefix match (Rule 3)
+				bestDepth := -1
+				bestLen := -1
+				for _, c := range matched {
+					d := PathDepth(c.workspacePath)
+					l := len(c.workspacePath)
+					if d > bestDepth || (d == bestDepth && l > bestLen) {
+						bestDepth = d
+						bestLen = l
 					}
 				}
-			}
 
-			if len(byProject) > 1 {
-				return nil, apperror.New(apperror.CodeProjectAmbiguous, "multiple registered projects match repository identity at the same specificity")
-			}
-			for _, winner := range byProject {
-				remoteProj = &ResolvedProject{
-					ID:            winner.projectID,
-					TenantID:      tenantID,
-					Name:          winner.projectName,
-					Marker:        winner.projectMarker,
-					MatchedBy:     "remote",
-					WorkspacePath: winner.workspacePath,
+				byProject := make(map[uuid.UUID]repoCandidate)
+				for _, c := range matched {
+					if PathDepth(c.workspacePath) == bestDepth && len(c.workspacePath) == bestLen {
+						existing, ok := byProject[c.projectID]
+						if !ok || (!existing.isPrimary && c.isPrimary) {
+							byProject[c.projectID] = c
+						}
+					}
+				}
+
+				if len(byProject) > 1 {
+					return nil, apperror.New(apperror.CodeProjectAmbiguous, "multiple registered projects match repository identity at the same specificity")
+				}
+				for _, winner := range byProject {
+					remoteProj = &ResolvedProject{
+						ID:            winner.projectID,
+						TenantID:      tenantID,
+						Name:          winner.projectName,
+						Marker:        winner.projectMarker,
+						MatchedBy:     "remote",
+						WorkspacePath: winner.workspacePath,
+					}
 				}
 			}
 		}

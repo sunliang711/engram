@@ -795,6 +795,48 @@ func TestV1AcceptanceSuite(t *testing.T) {
 			t.Fatalf("expected old temporary password to be rejected after password change")
 		}
 
+		// Voluntary password change without current_password must be rejected (401 Unauthenticated)
+		volBadBody, _ := json.Marshal(map[string]string{"new_password": "AnotherPassword2026!"})
+		volBadReq, _ := http.NewRequest(http.MethodPost, env.mcpServer.URL+"/api/admin/change-password", bytes.NewReader(volBadBody))
+		volBadReq.Header.Set("Authorization", "Bearer "+newSessCookie)
+		volBadReq.Header.Set("Content-Type", "application/json")
+		volBadResp, err := http.DefaultClient.Do(volBadReq)
+		if err != nil {
+			t.Fatalf("voluntary bad change password request: %v", err)
+		}
+		volBadResp.Body.Close()
+		if volBadResp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected 401 Unauthorized when changing password without current_password, got %d", volBadResp.StatusCode)
+		}
+
+		// Passing a change-feed cursor (cur_...) into memory_query must return INVALID_ARGUMENT
+		badCur := discA1.LatestCursor
+		_, err = env.svc.Query(ctxA, memory.QueryRequest{
+			ProjectContext: discA1.ProjectContext,
+			Cursor:         &badCur,
+		})
+		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
+
+		// Keyset pagination in memory_query returns qcur_... and advances without overlap
+		page1, err := env.svc.Query(ctxA, memory.QueryRequest{
+			ProjectContext: discA1.ProjectContext,
+			Limit:          2,
+		})
+		if err != nil || page1.NextCursor == nil {
+			t.Fatalf("expected page1 with NextCursor, got err=%v", err)
+		}
+		page2, err := env.svc.Query(ctxA, memory.QueryRequest{
+			ProjectContext: discA1.ProjectContext,
+			Cursor:         page1.NextCursor,
+			Limit:          2,
+		})
+		if err != nil || len(page2.Items) == 0 {
+			t.Fatalf("expected page2 items, got err=%v", err)
+		}
+		if page1.Items[0].ID == page2.Items[0].ID {
+			t.Fatalf("pagination returned duplicate item %v across page1 and page2", page1.Items[0].ID)
+		}
+
 		// Quickstart via Web UI with new session
 		qsBody, _ := json.Marshal(map[string]string{
 			"tenant_name":            "webui-tenant",

@@ -80,6 +80,7 @@ func (m *Metrics) ObserveSearch(resultCount int) {
 
 func (m *Metrics) ObserveEventLag(d time.Duration) {
 	m.eventsPublished.Add(1)
+	m.exportBacklog.Add(1)
 	m.lastEventLagMillis.Store(d.Milliseconds())
 }
 

@@ -283,6 +283,10 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 		}
 	}
 
+	// Disable the global server WriteTimeout for long-lived SSE streams
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -292,10 +296,20 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 	ch, unsubscribe := s.hub.Subscribe(principal.TenantID, projID)
 	defer unsubscribe()
 
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+			_ = rc.SetWriteDeadline(time.Time{})
 		case notice, ok := <-ch:
 			if !ok {
 				return
@@ -309,8 +323,12 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 			if err != nil {
 				continue
 			}
-			_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(b))
+			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if _, err := fmt.Fprintf(w, "event: message\ndata: %s\n\n", string(b)); err != nil {
+				return
+			}
 			flusher.Flush()
+			_ = rc.SetWriteDeadline(time.Time{})
 		}
 	}
 }
