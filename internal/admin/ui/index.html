@@ -142,8 +142,11 @@
           </form>
 
           <div id="qs-result" class="hidden" style="margin-top:18px;">
-            <span class="badge success">初始化成功 — 请妥善保存以下 API Token（仅展示一次）</span>
+            <span class="badge success">初始化成功 — Token 已加密保存，后续可在「API Token 与客户端配置」中随时查看与复制</span>
             <pre class="code-box" id="qs-result-box"></pre>
+            <div style="margin-top:10px;">
+              <button type="button" class="secondary small" id="btn-go-client-guides">查看 Codex / Claude / Gemini 接入配置 →</button>
+            </div>
           </div>
         </div>
       </section>
@@ -348,8 +351,103 @@
           </form>
 
           <div id="new-token-box" class="hidden" style="margin-top:16px;">
-            <span class="badge warning">请立即复制保存：明文 Token 仅在创建时显示一次</span>
+            <span class="badge success">API Token 已签发 — 后续可在下方列表中随时查看、复制或一键填入配置</span>
             <pre class="code-box" id="new-token-content"></pre>
+          </div>
+        </div>
+
+        <div class="card" id="client-guides-card">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+            <div>
+              <h2>客户端接入配置建议（Codex / Claude Code / Gemini）</h2>
+              <p class="desc" style="margin-bottom:0;">分两步完成：1) 配置 Engram MCP Server；2) 在各自全局指令文件中加入会话开始时的项目识别与记忆读写规范。</p>
+            </div>
+            <div style="min-width:280px; flex:0 1 360px;">
+              <label for="guide-token-input" style="margin-bottom:4px;">当前预览用 API Token（签发后自动填入，也可手动粘贴）</label>
+              <input type="text" id="guide-token-input" placeholder="aim_...（留空则显示占位符 &lt;YOUR_API_TOKEN&gt;）" />
+            </div>
+          </div>
+
+          <div class="client-tabs" role="tablist">
+            <button type="button" class="client-tab-btn active" data-client="codex">Codex</button>
+            <button type="button" class="client-tab-btn" data-client="claude">Claude Code</button>
+            <button type="button" class="client-tab-btn" data-client="gemini">Gemini (CLI / Antigravity)</button>
+          </div>
+
+          <!-- Codex Guide -->
+          <div id="client-pane-codex" class="client-pane">
+            <div class="guide-step">
+              <h3>第 1 步：添加 Engram MCP Server</h3>
+              <p class="guide-note">编辑全局配置文件 <code>~/.codex/config.toml</code>（推荐 <code>http_headers</code>，在 Desktop App 与 CLI 中均生效；若仅在终端使用，也可用 <code>bearer_token_env_var = "ENGRAM_API_TOKEN"</code>）。</p>
+              <div class="code-header">
+                <span><code>~/.codex/config.toml</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-codex-mcp">复制配置</button>
+              </div>
+              <pre class="code-box" id="guide-codex-mcp"></pre>
+            </div>
+            <div class="guide-step">
+              <h3>第 2 步：配置全局记忆使用规范</h3>
+              <p class="guide-note">将下方说明追加到 <code>~/.codex/AGENTS.md</code>，引导 Codex 在会话开始时先识别项目并复用 <code>project_context</code>。</p>
+              <div class="code-header">
+                <span><code>~/.codex/AGENTS.md</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-codex-rules">复制说明</button>
+              </div>
+              <pre class="code-box" id="guide-codex-rules"></pre>
+            </div>
+          </div>
+
+          <!-- Claude Code Guide -->
+          <div id="client-pane-claude" class="client-pane hidden">
+            <div class="guide-step">
+              <h3>第 1 步：添加 Engram MCP Server</h3>
+              <p class="guide-note">用户级全局配置位于 <code>~/.claude.json</code>（或项目根目录 <code>.mcp.json</code>，注意不是 <code>~/.claude/settings.json</code>）；也可直接运行下方 CLI 命令添加。</p>
+              <div class="code-header">
+                <span><code>~/.claude.json</code>（或项目级 <code>.mcp.json</code>）</span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-claude-mcp">复制 JSON</button>
+              </div>
+              <pre class="code-box" id="guide-claude-mcp"></pre>
+              <div class="code-header">
+                <span>或使用 Claude Code CLI 一键添加（user 作用域）</span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-claude-cli">复制命令</button>
+              </div>
+              <pre class="code-box" id="guide-claude-cli"></pre>
+            </div>
+            <div class="guide-step">
+              <h3>第 2 步：配置全局记忆使用规范</h3>
+              <p class="guide-note">将下方说明追加到 <code>~/.claude/CLAUDE.md</code>。</p>
+              <div class="code-header">
+                <span><code>~/.claude/CLAUDE.md</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-claude-rules">复制说明</button>
+              </div>
+              <pre class="code-box" id="guide-claude-rules"></pre>
+            </div>
+          </div>
+
+          <!-- Gemini Guide -->
+          <div id="client-pane-gemini" class="client-pane hidden">
+            <div class="guide-step">
+              <h3>第 1 步：添加 Engram MCP Server</h3>
+              <p class="guide-note">根据使用的工具选择对应配置文件：<strong>Gemini CLI</strong> 写入 <code>~/.gemini/settings.json</code>；<strong>Antigravity</strong> 写入 <code>~/.gemini/config/mcp_config.json</code>（<code>~/.gemini/antigravity/mcp_config.json</code> 的全局配置目标）。</p>
+              <div class="code-header">
+                <span>Gemini CLI：<code>~/.gemini/settings.json</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-gemini-cli-mcp">复制配置</button>
+              </div>
+              <pre class="code-box" id="guide-gemini-cli-mcp"></pre>
+              <div class="code-header">
+                <span>Antigravity：<code>~/.gemini/config/mcp_config.json</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-gemini-agy-mcp">复制配置</button>
+              </div>
+              <pre class="code-box" id="guide-gemini-agy-mcp"></pre>
+            </div>
+            <div class="guide-step">
+              <h3>第 2 步：配置全局记忆使用规范</h3>
+              <p class="guide-note"><strong>Gemini CLI</strong> 请追加到 <code>~/.gemini/GEMINI.md</code>；<strong>Antigravity</strong> 请保存为全局规则 <code>~/.gemini/config/rules/engram.md</code>（或在具体工作区放置 <code>GEMINI.md</code> / <code>AGENTS.md</code>）。</p>
+              <div class="code-header">
+                <span><code>~/.gemini/GEMINI.md</code> 或 <code>~/.gemini/config/rules/engram.md</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-gemini-rules">复制说明</button>
+              </div>
+              <pre class="code-box" id="guide-gemini-rules"></pre>
+            </div>
           </div>
         </div>
 
@@ -357,7 +455,7 @@
           <h2>已签发 API Token 列表</h2>
           <table id="tokens-table">
             <thead>
-              <tr><th>备注名称</th><th>前缀</th><th>Tenant</th><th>Principal</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>备注名称</th><th>Token / 前缀</th><th>Tenant</th><th>Principal</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -370,9 +468,9 @@
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
             <div>
               <h2>知识库浏览、软删除恢复与 Markdown 导出</h2>
-              <p class="desc" style="margin-bottom:0;">支持查看所有 Tenant 与项目的知识、审查历史修订快照（Revisions）、恢复已软删除条目以及手动触发确定性 Markdown 导出。</p>
+              <p class="desc" style="margin-bottom:0;">支持查看所有 Tenant 与项目的知识、审查历史修订快照（Revisions）、恢复已软删除条目，以及打包下载确定性 Markdown 压缩包保存到本机。</p>
             </div>
-            <button id="btn-trigger-export" class="secondary">📦 立即执行 Markdown 导出</button>
+            <button type="button" id="btn-download-export-zip" class="secondary">📦 导出并下载 Markdown (.zip)</button>
           </div>
 
           <form id="filter-memories-form" class="form-row" style="align-items:end;">

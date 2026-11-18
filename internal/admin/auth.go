@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -46,6 +48,7 @@ type AdminState struct {
 type AuthManager struct {
 	pool         *pgxpool.Pool
 	signKey      []byte
+	tokenEncKey  [32]byte
 	sessionTTL   time.Duration
 	resetAdmin   bool
 	cookieSecure bool
@@ -62,10 +65,57 @@ func NewAuthManager(pool *pgxpool.Pool, signKey string, sessionTTL time.Duration
 	return &AuthManager{
 		pool:         pool,
 		signKey:      []byte("admin-session:" + signKey),
+		tokenEncKey:  sha256.Sum256([]byte("api-token-seal:" + signKey)),
 		sessionTTL:   sessionTTL,
 		resetAdmin:   resetAdmin,
 		cookieSecure: secure,
 	}
+}
+
+// SealToken encrypts a raw API token with AES-256-GCM so admins can view it again in the Web UI.
+func (m *AuthManager) SealToken(raw string) (string, error) {
+	block, err := aes.NewCipher(m.tokenEncKey[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(raw), nil)
+	return "v1:" + base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// UnsealToken decrypts a sealed API token produced by SealToken.
+func (m *AuthManager) UnsealToken(sealed string) (string, error) {
+	if !strings.HasPrefix(sealed, "v1:") {
+		return "", errors.New("unsupported sealed token format")
+	}
+	rawBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(sealed, "v1:"))
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(m.tokenEncKey[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(rawBytes) < nonceSize {
+		return "", errors.New("invalid sealed token payload")
+	}
+	plaintext, err := gcm.Open(nil, rawBytes[:nonceSize], rawBytes[nonceSize:], nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
 }
 
 func (m *AuthManager) CookieSecure() bool {

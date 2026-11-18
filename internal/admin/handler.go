@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -92,11 +93,13 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/projects/members", h.requireActiveAdmin(h.handleProjectMembers))
 	mux.HandleFunc("/api/admin/projects/remotes", h.requireActiveAdmin(h.handleProjectRemotes))
 	mux.HandleFunc("/api/admin/tokens", h.requireActiveAdmin(h.handleTokens))
+	mux.HandleFunc("/api/admin/tokens/reveal", h.requireActiveAdmin(h.handleRevealToken))
 	mux.HandleFunc("/api/admin/tokens/revoke", h.requireActiveAdmin(h.handleRevokeToken))
 	mux.HandleFunc("/api/admin/memories", h.requireActiveAdmin(h.handleMemories))
 	mux.HandleFunc("/api/admin/memories/revisions", h.requireActiveAdmin(h.handleMemoryRevisions))
 	mux.HandleFunc("/api/admin/memories/restore", h.requireActiveAdmin(h.handleRestoreMemory))
 	mux.HandleFunc("/api/admin/export", h.requireActiveAdmin(h.handleExport))
+	mux.HandleFunc("/api/admin/export/archive", h.requireActiveAdmin(h.handleExportArchive))
 }
 
 func (h *Handler) withSafety(next http.HandlerFunc) http.HandlerFunc {
@@ -441,11 +444,16 @@ func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "generate api token", err))
 		return
 	}
+	sealedToken, err := h.authMgr.SealToken(rawToken)
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "seal api token", err))
+		return
+	}
 	tokenID := uuid.New()
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO api_tokens (id, token_hash, token_prefix, tenant_id, principal_id, name)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, tokenID, tokenHash, prefix, tenantID, principalID, "quickstart-"+req.PrincipalSubject); err != nil {
+		INSERT INTO api_tokens (id, token_hash, token_prefix, token_ciphertext, tenant_id, principal_id, name)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, tokenID, tokenHash, prefix, sealedToken, tenantID, principalID, "quickstart-"+req.PrincipalSubject); err != nil {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "insert api token", err))
 		return
 	}
@@ -946,7 +954,7 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		rows, err := h.pool.Query(ctx, `
-			SELECT tk.id, tk.token_prefix, tk.tenant_id, t.name, tk.principal_id, p.display_name, tk.name, tk.revoked_at, tk.created_at
+			SELECT tk.id, tk.token_prefix, tk.token_ciphertext, tk.tenant_id, t.name, tk.principal_id, p.display_name, tk.name, tk.revoked_at, tk.created_at
 			FROM api_tokens tk
 			JOIN tenants t ON t.id = tk.tenant_id
 			JOIN principals p ON p.id = tk.principal_id
@@ -961,16 +969,23 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 		items := make([]map[string]any, 0)
 		for rows.Next() {
 			var id, tid, pid uuid.UUID
-			var prefix, tName, pName, name string
+			var prefix, ciphertext, tName, pName, name string
 			var revokedAt *time.Time
 			var createdAt time.Time
-			if err := rows.Scan(&id, &prefix, &tid, &tName, &pid, &pName, &name, &revokedAt, &createdAt); err != nil {
+			if err := rows.Scan(&id, &prefix, &ciphertext, &tid, &tName, &pid, &pName, &name, &revokedAt, &createdAt); err != nil {
 				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "scan api token", err))
 				return
+			}
+			canReveal := false
+			if ciphertext != "" {
+				if _, err := h.authMgr.UnsealToken(ciphertext); err == nil {
+					canReveal = true
+				}
 			}
 			items = append(items, map[string]any{
 				"id":             id,
 				"token_prefix":   prefix,
+				"can_reveal":     canReveal,
 				"tenant_id":      tid,
 				"tenant_name":    tName,
 				"principal_id":   pid,
@@ -1027,11 +1042,16 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "generate token", err))
 			return
 		}
+		sealedToken, err := h.authMgr.SealToken(rawToken)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "seal token", err))
+			return
+		}
 		tokenID := uuid.New()
 		_, err = h.pool.Exec(ctx, `
-			INSERT INTO api_tokens (id, token_hash, token_prefix, tenant_id, principal_id, name)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, tokenID, tokenHash, prefix, tid, pid, strings.TrimSpace(req.Name))
+			INSERT INTO api_tokens (id, token_hash, token_prefix, token_ciphertext, tenant_id, principal_id, name)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, tokenID, tokenHash, prefix, sealedToken, tid, pid, strings.TrimSpace(req.Name))
 		if err != nil {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "insert api token", err))
 			return
@@ -1040,6 +1060,7 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 			"id":           tokenID,
 			"token":        rawToken,
 			"token_prefix": prefix,
+			"can_reveal":   true,
 			"tenant_id":    tid,
 			"principal_id": pid,
 			"name":         strings.TrimSpace(req.Name),
@@ -1048,6 +1069,51 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (h *Handler) handleRevealToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid token id"))
+		return
+	}
+
+	var ciphertext string
+	err = h.pool.QueryRow(r.Context(), `
+		SELECT token_ciphertext FROM api_tokens WHERE id = $1
+	`, id).Scan(&ciphertext)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "token not found"))
+			return
+		}
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "query api token", err))
+		return
+	}
+	if ciphertext == "" {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "该 Token 创建于支持重复查看之前，无法还原明文；请重新生成"))
+		return
+	}
+	rawToken, err := h.authMgr.UnsealToken(ciphertext)
+	if err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "无法解密该 Token（可能服务端 context_sign_key 已变更）；请重新生成"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":    id,
+		"token": rawToken,
+	})
 }
 
 func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
@@ -1326,6 +1392,24 @@ func (h *Handler) handleExport(w http.ResponseWriter, r *http.Request) {
 		"exported_count": count,
 		"output_dir":     h.exporter.OutputDir(),
 	})
+}
+
+func (h *Handler) handleExportArchive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var buf bytes.Buffer
+	count, err := h.exporter.ExportArchive(r.Context(), &buf)
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "export markdown archive failed: "+err.Error(), err))
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="engram-markdown-export.zip"`)
+	w.Header().Set("X-Exported-Count", fmt.Sprintf("%d", count))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf.Bytes())
 }
 
 func escapeAdminLike(s string) string {

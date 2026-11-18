@@ -402,3 +402,70 @@ pre.code-box {
   border-radius: 8px;
   padding: 10px 12px;
 }
+
+.client-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.client-tab-btn {
+  background: var(--bg-input);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.client-tab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.client-tab-btn.active {
+  color: var(--text);
+  background: rgba(99, 102, 241, 0.22);
+  border-color: var(--primary);
+}
+
+.guide-step {
+  background: rgba(11, 17, 32, 0.55);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.guide-step:last-child {
+  margin-bottom: 0;
+}
+
+.guide-step h3 {
+  font-size: 14px;
+  color: #a5b4fc;
+  margin-bottom: 6px;
+}
+
+.guide-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.code-header span {
+  font-size: 12px;
+  color: var(--text-muted);
+}

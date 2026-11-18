@@ -1,9 +1,11 @@
 package exporter
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,31 +68,9 @@ func (e *Exporter) ExportAll(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("mkdir export output_dir: %w", err)
 	}
 
-	rows, err := e.pool.Query(ctx, `
-		SELECT id, tenant_id, scope, project_id, category, title, content_md,
-		       tags, is_pinned, status, version, content_hash, updated_at
-		FROM memories
-		WHERE deleted_at IS NULL
-		ORDER BY tenant_id ASC, scope ASC, project_id ASC NULLS FIRST, id ASC
-	`)
+	items, err := e.queryExportRows(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("query memories for export: %w", err)
-	}
-	defer rows.Close()
-
-	var items []exportRow
-	for rows.Next() {
-		var r exportRow
-		if err := rows.Scan(
-			&r.id, &r.tenantID, &r.scope, &r.projectID, &r.category, &r.title, &r.contentMD,
-			&r.tags, &r.isPinned, &r.status, &r.version, &r.contentHash, &r.updatedAt,
-		); err != nil {
-			return 0, fmt.Errorf("scan memory for export: %w", err)
-		}
-		items = append(items, r)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate memories for export: %w", err)
+		return 0, err
 	}
 
 	expectedFiles := make(map[string]bool, len(items))
@@ -152,6 +132,71 @@ func (e *Exporter) ExportAll(ctx context.Context) (int, error) {
 	return len(items), nil
 }
 
+// ExportArchive writes all non-deleted memories as Markdown files into a ZIP archive written to w.
+func (e *Exporter) ExportArchive(ctx context.Context, w io.Writer) (int, error) {
+	items, err := e.queryExportRows(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	zw := zip.NewWriter(w)
+	for _, item := range items {
+		relPath, err := e.relativeFilePath(item)
+		if err != nil {
+			_ = zw.Close()
+			return 0, err
+		}
+		hdr := &zip.FileHeader{
+			Name:     filepath.ToSlash(relPath),
+			Method:   zip.Deflate,
+			Modified: item.updatedAt.UTC(),
+		}
+		fw, err := zw.CreateHeader(hdr)
+		if err != nil {
+			_ = zw.Close()
+			return 0, fmt.Errorf("create zip entry %s: %w", relPath, err)
+		}
+		if _, err := fw.Write(RenderMarkdown(item)); err != nil {
+			_ = zw.Close()
+			return 0, fmt.Errorf("write zip entry %s: %w", relPath, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return 0, fmt.Errorf("finalize zip archive: %w", err)
+	}
+	return len(items), nil
+}
+
+func (e *Exporter) queryExportRows(ctx context.Context) ([]exportRow, error) {
+	rows, err := e.pool.Query(ctx, `
+		SELECT id, tenant_id, scope, project_id, category, title, content_md,
+		       tags, is_pinned, status, version, content_hash, updated_at
+		FROM memories
+		WHERE deleted_at IS NULL
+		ORDER BY tenant_id ASC, scope ASC, project_id ASC NULLS FIRST, id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query memories for export: %w", err)
+	}
+	defer rows.Close()
+
+	var items []exportRow
+	for rows.Next() {
+		var r exportRow
+		if err := rows.Scan(
+			&r.id, &r.tenantID, &r.scope, &r.projectID, &r.category, &r.title, &r.contentMD,
+			&r.tags, &r.isPinned, &r.status, &r.version, &r.contentHash, &r.updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan memory for export: %w", err)
+		}
+		items = append(items, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memories for export: %w", err)
+	}
+	return items, nil
+}
+
 // RunPeriodicLoop runs ExportAll on the configured interval until ctx is cancelled.
 func (e *Exporter) RunPeriodicLoop(ctx context.Context) {
 	if !e.cfg.Enabled {
@@ -176,15 +221,20 @@ func (e *Exporter) RunPeriodicLoop(ctx context.Context) {
 	}
 }
 
-func (e *Exporter) targetFilePath(baseDir string, r exportRow) (string, error) {
-	var rel string
+func (e *Exporter) relativeFilePath(r exportRow) (string, error) {
 	if r.scope == "global" {
-		rel = filepath.Join("tenants", r.tenantID.String(), "global", r.id.String()+".md")
-	} else {
-		if r.projectID == nil {
-			return "", fmt.Errorf("project memory %s missing project_id", r.id)
-		}
-		rel = filepath.Join("tenants", r.tenantID.String(), "projects", r.projectID.String(), r.id.String()+".md")
+		return filepath.Join("tenants", r.tenantID.String(), "global", r.id.String()+".md"), nil
+	}
+	if r.projectID == nil {
+		return "", fmt.Errorf("project memory %s missing project_id", r.id)
+	}
+	return filepath.Join("tenants", r.tenantID.String(), "projects", r.projectID.String(), r.id.String()+".md"), nil
+}
+
+func (e *Exporter) targetFilePath(baseDir string, r exportRow) (string, error) {
+	rel, err := e.relativeFilePath(r)
+	if err != nil {
+		return "", err
 	}
 	full := filepath.Clean(filepath.Join(baseDir, rel))
 	if !strings.HasPrefix(full, baseDir+string(filepath.Separator)) {

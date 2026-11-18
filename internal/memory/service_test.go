@@ -899,12 +899,31 @@ func TestV1AcceptanceSuite(t *testing.T) {
 			t.Fatalf("quickstart request: %v", err)
 		}
 		var qsOut struct {
-			Token string `json:"token"`
+			TokenID string `json:"token_id"`
+			Token   string `json:"token"`
 		}
 		_ = json.NewDecoder(qsResp.Body).Decode(&qsOut)
 		qsResp.Body.Close()
-		if qsResp.StatusCode != http.StatusOK || qsOut.Token == "" {
-			t.Fatalf("expected quickstart 200 OK with token, got status=%d", qsResp.StatusCode)
+		if qsResp.StatusCode != http.StatusOK || qsOut.Token == "" || qsOut.TokenID == "" {
+			t.Fatalf("expected quickstart 200 OK with token and token_id, got status=%d", qsResp.StatusCode)
+		}
+
+		// Admin can repeatedly reveal the sealed token
+		revBody, _ := json.Marshal(map[string]string{"id": qsOut.TokenID})
+		revReq, _ := http.NewRequest(http.MethodPost, env.mcpServer.URL+"/api/admin/tokens/reveal", bytes.NewReader(revBody))
+		revReq.Header.Set("Authorization", "Bearer "+newSessCookie)
+		revReq.Header.Set("Content-Type", "application/json")
+		revResp, err := http.DefaultClient.Do(revReq)
+		if err != nil {
+			t.Fatalf("reveal token request: %v", err)
+		}
+		var revOut struct {
+			Token string `json:"token"`
+		}
+		_ = json.NewDecoder(revResp.Body).Decode(&revOut)
+		revResp.Body.Close()
+		if revResp.StatusCode != http.StatusOK || revOut.Token != qsOut.Token {
+			t.Fatalf("expected revealed token %q, got status=%d token=%q", qsOut.Token, revResp.StatusCode, revOut.Token)
 		}
 
 		// Simulate RESET_ADMIN=true startup -> resets password to new temporary password and invalidates previous session

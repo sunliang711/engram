@@ -5,6 +5,8 @@
     projects: [],
     tokens: [],
     memories: [],
+    latestToken: "",
+    revealedTokens: {},
   };
 
   function $(id) {
@@ -218,29 +220,106 @@
       .join("");
   }
 
+  async function resolveTokenSecret(tokenId) {
+    if (state.revealedTokens[tokenId]) {
+      return state.revealedTokens[tokenId];
+    }
+    const res = await api("/api/admin/tokens/reveal", {
+      method: "POST",
+      body: JSON.stringify({ id: tokenId }),
+    });
+    if (res && res.token) {
+      state.revealedTokens[tokenId] = res.token;
+      return res.token;
+    }
+    throw new Error("未获取到 Token 明文");
+  }
+
   function renderTokensTable() {
     const tbody = $("tokens-table").querySelector("tbody");
     tbody.innerHTML = state.tokens
       .map((tk) => {
         const active = !tk.revoked_at;
+        const revealed = state.revealedTokens[tk.id];
+        const tokenCell = revealed
+          ? `<code>${escapeHtml(revealed)}</code>`
+          : `<code>${escapeHtml(tk.token_prefix)}...</code>${
+              tk.can_reveal ? "" : ' <small style="color:var(--text-muted)">(不可还原)</small>'
+            }`;
+        const revealBtns = tk.can_reveal
+          ? `
+            <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? "隐藏" : "查看"}</button>
+            <button type="button" class="secondary small btn-copy-token" data-id="${tk.id}">复制</button>
+            <button type="button" class="secondary small btn-apply-token" data-id="${tk.id}">填入配置</button>
+          `
+          : "";
         return `
       <tr>
         <td><strong>${escapeHtml(tk.name)}</strong></td>
-        <td><code>${escapeHtml(tk.token_prefix)}...</code></td>
+        <td>${tokenCell}</td>
         <td>${escapeHtml(tk.tenant_name)}</td>
         <td>${escapeHtml(tk.principal_name)}</td>
         <td><span class="badge ${active ? "success" : "danger"}">${active ? "active" : "revoked"}</span></td>
         <td>${new Date(tk.created_at).toLocaleString()}</td>
         <td>
-          ${
-            active
-              ? `<button class="danger small btn-revoke-token" data-id="${tk.id}">吊销</button>`
-              : `<span style="color:var(--text-muted)">已吊销</span>`
-          }
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${revealBtns}
+            ${
+              active
+                ? `<button type="button" class="danger small btn-revoke-token" data-id="${tk.id}">吊销</button>`
+                : `<span style="color:var(--text-muted)">已吊销</span>`
+            }
+          </div>
         </td>
       </tr>`;
       })
       .join("");
+
+    tbody.querySelectorAll(".btn-toggle-token").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        if (state.revealedTokens[id]) {
+          delete state.revealedTokens[id];
+          renderTokensTable();
+          return;
+        }
+        try {
+          await resolveTokenSecret(id);
+          renderTokensTable();
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      });
+    });
+
+    tbody.querySelectorAll(".btn-copy-token").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          const tok = await resolveTokenSecret(btn.dataset.id);
+          await copyText(tok);
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      });
+    });
+
+    tbody.querySelectorAll(".btn-apply-token").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          const tok = await resolveTokenSecret(btn.dataset.id);
+          state.latestToken = tok;
+          if ($("guide-token-input")) {
+            $("guide-token-input").value = tok;
+          }
+          renderClientGuides();
+          const card = $("client-guides-card");
+          if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+          showToast("已将 Token 填入客户端接入配置");
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      });
+    });
 
     tbody.querySelectorAll(".btn-revoke-token").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -369,6 +448,133 @@
     );
   }
 
+  function getMemoryInstructionSnippet() {
+    return [
+      "## Engram 共享记忆使用规范",
+      "",
+      "如果当前会话已接入 `engram` MCP 工具，请按以下流程使用：",
+      "",
+      "1. **会话开始先识别项目**：",
+      "   - 获取当前仓库的 `git remote -v`（以及根目录或子目录 `.engram-project` 文件中的 UUID，如有），调用 `memory_discover` 获取 `project_context` 与范围索引。",
+      "   - 注意：`workspace_path` 仅用于 Monorepo 子目录（相对于 Git 根目录），**不要传入本地绝对路径**；若当前不在 Git 仓库中且仅需全局记忆，传入 `allow_global_only: true`。",
+      "   - 同一会话内复用返回的 `project_context`，无需重复调用 `memory_discover`。",
+      "2. **先查索引，再按需检索与读取**：",
+      "   - 先浏览 `memory_discover` 返回的 `pinned`、`category_stats` 和 `recent`，若已命中目标可直接调用 `memory_read`。",
+      "   - 需要按关键词、分类或标签检索时调用 `memory_query`，定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。",
+      "3. **任务过程中及时沉淀与更新**：",
+      "   - 遇到有长期价值的架构约定、环境配置、排障结论或跨项目规范时，调用 `memory_create` / `memory_update` 沉淀或更新记忆（更新需传 `expected_version` 与唯一 `idempotency_key`），**严禁写入密码、Token、私钥等敏感凭据**。",
+    ].join("\n");
+  }
+
+  function renderClientGuides() {
+    const tokenInput = $("guide-token-input");
+    const rawToken = ((tokenInput && tokenInput.value.trim()) || state.latestToken || "<YOUR_API_TOKEN>").trim();
+    const mcpUrl = `${window.location.origin}/mcp`;
+
+    const codexToml = [
+      "[mcp_servers.engram]",
+      "enabled = true",
+      `url = "${mcpUrl}"`,
+      `http_headers = { Authorization = "Bearer ${rawToken}" }`,
+      "",
+      "# 若仅在命令行 CLI 使用，也可改用环境变量方式：",
+      '# bearer_token_env_var = "ENGRAM_API_TOKEN"',
+    ].join("\n");
+
+    const claudeJson = JSON.stringify(
+      {
+        mcpServers: {
+          engram: {
+            type: "http",
+            url: mcpUrl,
+            headers: {
+              Authorization: `Bearer ${rawToken}`,
+            },
+          },
+        },
+      },
+      null,
+      2
+    );
+
+    const claudeCli = `claude mcp add --transport http --scope user engram "${mcpUrl}" --header "Authorization: Bearer ${rawToken}"`;
+
+    const geminiCliJson = JSON.stringify(
+      {
+        mcpServers: {
+          engram: {
+            httpUrl: mcpUrl,
+            headers: {
+              Authorization: `Bearer ${rawToken}`,
+            },
+          },
+        },
+      },
+      null,
+      2
+    );
+
+    const geminiAgyJson = JSON.stringify(
+      {
+        mcpServers: {
+          engram: {
+            url: mcpUrl,
+            headers: {
+              Authorization: `Bearer ${rawToken}`,
+            },
+          },
+        },
+      },
+      null,
+      2
+    );
+
+    const instructions = getMemoryInstructionSnippet();
+    if ($("guide-codex-mcp")) $("guide-codex-mcp").textContent = codexToml;
+    if ($("guide-codex-rules")) $("guide-codex-rules").textContent = instructions;
+    if ($("guide-claude-mcp")) $("guide-claude-mcp").textContent = claudeJson;
+    if ($("guide-claude-cli")) $("guide-claude-cli").textContent = claudeCli;
+    if ($("guide-claude-rules")) $("guide-claude-rules").textContent = instructions;
+    if ($("guide-gemini-cli-mcp")) $("guide-gemini-cli-mcp").textContent = geminiCliJson;
+    if ($("guide-gemini-agy-mcp")) $("guide-gemini-agy-mcp").textContent = geminiAgyJson;
+    if ($("guide-gemini-rules")) $("guide-gemini-rules").textContent = instructions;
+  }
+
+  function switchMainTab(tabId) {
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tab === tabId);
+    });
+    document.querySelectorAll(".tab-pane").forEach((p) => {
+      p.classList.toggle("hidden", p.id !== tabId);
+    });
+  }
+
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        showToast("已复制到剪贴板");
+        return;
+      }
+    } catch (_) {
+      // Fallback below
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+      showToast("已复制到剪贴板");
+    } catch (_) {
+      showToast("复制失败，请手动选中复制", true);
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
   function escapeHtml(s) {
     return String(s || "")
       .replace(/&/g, "&amp;")
@@ -380,12 +586,38 @@
   // Event Listeners
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-pane").forEach((p) => p.classList.add("hidden"));
-      btn.classList.add("active");
-      $(btn.dataset.tab).classList.remove("hidden");
+      switchMainTab(btn.dataset.tab);
     });
   });
+
+  document.querySelectorAll(".client-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.client;
+      document.querySelectorAll(".client-tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".client-pane").forEach((p) => p.classList.toggle("hidden", p.id !== `client-pane-${target}`));
+    });
+  });
+
+  document.querySelectorAll(".copy-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const target = $(btn.dataset.copyTarget);
+      if (target) {
+        copyText(target.textContent || "");
+      }
+    });
+  });
+
+  if ($("guide-token-input")) {
+    $("guide-token-input").addEventListener("input", renderClientGuides);
+  }
+
+  if ($("btn-go-client-guides")) {
+    $("btn-go-client-guides").addEventListener("click", () => {
+      switchMainTab("tab-tokens");
+      const card = $("client-guides-card");
+      if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 
   $("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -449,6 +681,12 @@
 
   $("btn-logout").addEventListener("click", async () => {
     await api("/api/admin/logout", { method: "POST" });
+    state.latestToken = "";
+    state.revealedTokens = {};
+    if ($("guide-token-input")) {
+      $("guide-token-input").value = "";
+    }
+    renderClientGuides();
     renderView({ authenticated: false });
   });
 
@@ -467,6 +705,14 @@
           workspace_path: $("qs-workspace").value,
         }),
       });
+      state.latestToken = res.token || "";
+      if (res.token_id && res.token) {
+        state.revealedTokens[res.token_id] = res.token;
+      }
+      if ($("guide-token-input")) {
+        $("guide-token-input").value = state.latestToken;
+      }
+      renderClientGuides();
       $("qs-result").classList.remove("hidden");
       $("qs-result-box").textContent = JSON.stringify(
         {
@@ -597,6 +843,14 @@
           name: $("tok-name").value,
         }),
       });
+      state.latestToken = res.token || "";
+      if (res.id && res.token) {
+        state.revealedTokens[res.id] = res.token;
+      }
+      if ($("guide-token-input")) {
+        $("guide-token-input").value = state.latestToken;
+      }
+      renderClientGuides();
       $("new-token-box").classList.remove("hidden");
       $("new-token-content").textContent = formatMCPConfig(res.token);
       showToast("API Token 已签发");
@@ -638,14 +892,60 @@
     }
   });
 
-  $("btn-trigger-export").addEventListener("click", async () => {
-    try {
-      const res = await api("/api/admin/export", { method: "POST" });
-      showToast(`Markdown 导出完成：共导出 ${res.exported_count} 条记录至 ${res.output_dir}`);
-    } catch (err) {
-      showToast(err.message, true);
-    }
-  });
+  if ($("btn-download-export-zip")) {
+    $("btn-download-export-zip").addEventListener("click", async () => {
+      try {
+        const resp = await fetch("/api/admin/export/archive", { credentials: "same-origin" });
+        if (!resp.ok) {
+          let msg = `HTTP ${resp.status}`;
+          try {
+            const errData = await resp.json();
+            if (errData && errData.message) msg = errData.message;
+          } catch (_) {}
+          throw new Error(msg);
+        }
+        const blob = await resp.blob();
+        const cnt = resp.headers.get("X-Exported-Count");
 
+        if (typeof window.showSaveFilePicker === "function") {
+          try {
+            const handle = await window.showSaveFilePicker({
+              suggestedName: "engram-markdown-export.zip",
+              types: [
+                {
+                  description: "ZIP Archive",
+                  accept: { "application/zip": [".zip"] },
+                },
+              ],
+            });
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            showToast(cnt ? `Markdown 导出已保存（共 ${cnt} 条记录）` : "Markdown 导出已保存");
+            return;
+          } catch (pickerErr) {
+            if (pickerErr && pickerErr.name === "AbortError") {
+              return;
+            }
+            // Fall back to standard browser download if picker cannot open.
+          }
+        }
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "engram-markdown-export.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showToast(cnt ? `Markdown 压缩包下载已开始（共 ${cnt} 条记录）` : "Markdown 压缩包下载已开始");
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
+  renderClientGuides();
   checkSession();
 })();
