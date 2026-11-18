@@ -134,6 +134,7 @@ type snapshotAPIToken struct {
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	RevokedAt       *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
+	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
 }
 
 type snapshotMemory struct {
@@ -389,13 +390,13 @@ func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bo
 	rows.Close()
 
 	// 7. api_tokens
-	rows, err = tx.Query(ctx, `SELECT id, token_hash, token_prefix, token_ciphertext, tenant_id, principal_id, name, expires_at, revoked_at, created_at FROM api_tokens ORDER BY created_at ASC, id ASC`)
+	rows, err = tx.Query(ctx, `SELECT id, token_hash, token_prefix, token_ciphertext, tenant_id, principal_id, name, expires_at, revoked_at, created_at, last_used_at FROM api_tokens ORDER BY created_at ASC, id ASC`)
 	if err != nil {
 		return p, apperror.Wrap(apperror.CodeInternalError, "export api_tokens", err)
 	}
 	for rows.Next() {
 		var row snapshotAPIToken
-		if err := rows.Scan(&row.ID, &row.TokenHash, &row.TokenPrefix, &row.TokenCiphertext, &row.TenantID, &row.PrincipalID, &row.Name, &row.ExpiresAt, &row.RevokedAt, &row.CreatedAt); err != nil {
+		if err := rows.Scan(&row.ID, &row.TokenHash, &row.TokenPrefix, &row.TokenCiphertext, &row.TenantID, &row.PrincipalID, &row.Name, &row.ExpiresAt, &row.RevokedAt, &row.CreatedAt, &row.LastUsedAt); err != nil {
 			rows.Close()
 			return p, apperror.Wrap(apperror.CodeInternalError, "scan api_token", err)
 		}
@@ -588,9 +589,9 @@ func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, 
 			counts.TokensResealed++
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO api_tokens (id, token_hash, token_prefix, token_ciphertext, tenant_id, principal_id, name, expires_at, revoked_at, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		`, tk.ID, tk.TokenHash, tk.TokenPrefix, ciphertext, tk.TenantID, tk.PrincipalID, tk.Name, tk.ExpiresAt, tk.RevokedAt, tk.CreatedAt); err != nil {
+			INSERT INTO api_tokens (id, token_hash, token_prefix, token_ciphertext, tenant_id, principal_id, name, expires_at, revoked_at, created_at, last_used_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		`, tk.ID, tk.TokenHash, tk.TokenPrefix, ciphertext, tk.TenantID, tk.PrincipalID, tk.Name, tk.ExpiresAt, tk.RevokedAt, tk.CreatedAt, tk.LastUsedAt); err != nil {
 			return counts, apperror.Wrap(apperror.CodeInvalidArgument, "restore api_token "+tk.ID.String(), err)
 		}
 	}

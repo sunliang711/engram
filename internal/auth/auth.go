@@ -123,13 +123,13 @@ func (a *Authenticator) AuthenticateToken(ctx context.Context, rawToken string) 
 		return a.VerifyPrincipalMembership(ctx, st.tenantID, st.principalID)
 	}
 
-	var tenantID, principalID uuid.UUID
-	var expiresAt, revokedAt *time.Time
+	var tokenID, tenantID, principalID uuid.UUID
+	var expiresAt, revokedAt, lastUsedAt *time.Time
 	err := a.pool.QueryRow(ctx, `
-		SELECT tenant_id, principal_id, expires_at, revoked_at
+		SELECT id, tenant_id, principal_id, expires_at, revoked_at, last_used_at
 		FROM api_tokens
 		WHERE token_hash = $1
-	`, tokenHash).Scan(&tenantID, &principalID, &expiresAt, &revokedAt)
+	`, tokenHash).Scan(&tokenID, &tenantID, &principalID, &expiresAt, &revokedAt, &lastUsedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Principal{}, apperror.New(apperror.CodeUnauthenticated, "invalid api token")
@@ -142,7 +142,27 @@ func (a *Authenticator) AuthenticateToken(ctx context.Context, rawToken string) 
 	if expiresAt != nil && time.Now().UTC().After(*expiresAt) {
 		return Principal{}, apperror.New(apperror.CodeUnauthenticated, "api token has expired")
 	}
-	return a.VerifyPrincipalMembership(ctx, tenantID, principalID)
+	p, err := a.VerifyPrincipalMembership(ctx, tenantID, principalID)
+	if err != nil {
+		return Principal{}, err
+	}
+	a.recordTokenUse(ctx, tokenID, lastUsedAt)
+	return p, nil
+}
+
+// tokenUseInterval bounds how often a busy token rewrites its last_used_at column.
+const tokenUseInterval = time.Minute
+
+// recordTokenUse stores the latest successful authentication time on a best-effort basis;
+// a failed write never rejects an otherwise valid request.
+func (a *Authenticator) recordTokenUse(ctx context.Context, tokenID uuid.UUID, lastUsedAt *time.Time) {
+	if lastUsedAt != nil && time.Since(*lastUsedAt) < tokenUseInterval {
+		return
+	}
+	_, _ = a.pool.Exec(ctx, `
+		UPDATE api_tokens SET last_used_at = now()
+		WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - make_interval(secs => $2))
+	`, tokenID, tokenUseInterval.Seconds())
 }
 
 func (a *Authenticator) authenticateByProviderSubject(ctx context.Context, tenantIDStr, provider, subject string) (Principal, error) {

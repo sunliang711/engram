@@ -1296,28 +1296,99 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 
 // Restore restores a soft-deleted memory (management operation for `memoryctl memory restore`, Section 7.6).
 func (s *Service) Restore(ctx context.Context, req RestoreRequest) (*MemoryDetail, error) {
-	if req.ExpectedVersion <= 0 {
+	return s.adminWrite(ctx, adminWriteSpec{
+		tenantID: req.TenantID, actorID: req.ActorID, memoryID: req.MemoryID,
+		expectedVersion: req.ExpectedVersion, requestID: req.RequestID,
+		operation: "restore", needMaintain: true,
+		check: func(current *MemoryDetail) error {
+			if current.DeletedAt == nil {
+				return apperror.New(apperror.CodeInvalidArgument, "memory is not deleted")
+			}
+			return nil
+		},
+		setSQL: "deleted_at = NULL",
+		apply:  func(m *MemoryDetail, _ time.Time) { m.DeletedAt = nil },
+	})
+}
+
+// AdminDelete soft-deletes a memory from the management console with the actor's own permissions.
+func (s *Service) AdminDelete(ctx context.Context, req AdminDeleteRequest) (*MemoryDetail, error) {
+	return s.adminWrite(ctx, adminWriteSpec{
+		tenantID: req.TenantID, actorID: req.ActorID, memoryID: req.MemoryID,
+		expectedVersion: req.ExpectedVersion, requestID: req.RequestID,
+		operation: "delete", needMaintain: true,
+		check: func(current *MemoryDetail) error {
+			if current.DeletedAt != nil {
+				return apperror.New(apperror.CodeInvalidArgument, "memory is already deleted")
+			}
+			return nil
+		},
+		setSQL: "deleted_at = $2",
+		apply:  func(m *MemoryDetail, now time.Time) { m.DeletedAt = &now },
+	})
+}
+
+// AdminSetPinned changes the pinned flag of an active memory from the management console.
+func (s *Service) AdminSetPinned(ctx context.Context, req AdminPinRequest) (*MemoryDetail, error) {
+	return s.adminWrite(ctx, adminWriteSpec{
+		tenantID: req.TenantID, actorID: req.ActorID, memoryID: req.MemoryID,
+		expectedVersion: req.ExpectedVersion, requestID: req.RequestID,
+		operation: "update",
+		check: func(current *MemoryDetail) error {
+			if current.DeletedAt != nil {
+				return apperror.New(apperror.CodeInvalidArgument, "memory is deleted")
+			}
+			if current.IsPinned == req.IsPinned {
+				return apperror.New(apperror.CodeInvalidArgument, "memory pinned state is unchanged")
+			}
+			return nil
+		},
+		setSQL:  "is_pinned = $7",
+		setArgs: []any{req.IsPinned},
+		apply:   func(m *MemoryDetail, _ time.Time) { m.IsPinned = req.IsPinned },
+	})
+}
+
+// adminWriteSpec describes one management-console state change: the permission it needs,
+// the precondition on the current row, and the column assignment that performs it.
+type adminWriteSpec struct {
+	tenantID, actorID, memoryID uuid.UUID
+	expectedVersion             int64
+	requestID                   string
+	operation                   string
+	needMaintain                bool
+	check                       func(*MemoryDetail) error
+	// setSQL is spliced into the UPDATE; $1 is the actor, $2 the timestamp, $7 onward are setArgs.
+	setSQL  string
+	setArgs []any
+	apply   func(*MemoryDetail, time.Time)
+}
+
+// adminWrite applies a versioned change on behalf of a tenant member, recording the
+// revision snapshot and change event in the same transaction as the update.
+func (s *Service) adminWrite(ctx context.Context, spec adminWriteSpec) (*MemoryDetail, error) {
+	if spec.expectedVersion <= 0 {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "expected_version must be > 0")
 	}
-	p, err := s.auth.VerifyPrincipalMembership(ctx, req.TenantID, req.ActorID)
+	p, err := s.auth.VerifyPrincipalMembership(ctx, spec.tenantID, spec.actorID)
 	if err != nil {
 		return nil, err
 	}
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return nil, apperror.Wrap(apperror.CodeInternalError, "begin restore transaction", err)
+		return nil, apperror.Wrap(apperror.CodeInternalError, "begin "+spec.operation+" transaction", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	current, err := s.loadMemoryByID(ctx, tx, req.TenantID, req.MemoryID)
+	current, err := s.loadMemoryByID(ctx, tx, spec.tenantID, spec.memoryID)
 	if err != nil {
 		return nil, err
 	}
 
 	if current.Scope == "global" {
 		if !auth.CanWriteGlobal(p.TenantRole) {
-			return nil, apperror.New(apperror.CodeUnauthorized, "global_writer or admin role required to restore global memory")
+			return nil, apperror.New(apperror.CodeUnauthorized, "global_writer or admin role required to change global memory")
 		}
 	} else {
 		if current.ProjectID == nil {
@@ -1330,15 +1401,18 @@ func (s *Service) Restore(ctx context.Context, req RestoreRequest) (*MemoryDetai
 		if !auth.CanReadProject(projRole) {
 			return nil, apperror.New(apperror.CodeMemoryNotFound, "memory not found")
 		}
-		if !auth.CanMaintainProject(projRole) {
-			return nil, apperror.New(apperror.CodeUnauthorized, "maintainer role required to restore project memory")
+		if spec.needMaintain && !auth.CanMaintainProject(projRole) {
+			return nil, apperror.New(apperror.CodeUnauthorized, "maintainer role required to "+spec.operation+" project memory")
+		}
+		if !spec.needMaintain && !auth.CanWriteProject(projRole) {
+			return nil, apperror.New(apperror.CodeUnauthorized, "writer role required to update project memory")
 		}
 	}
 
-	if current.DeletedAt == nil {
-		return nil, apperror.New(apperror.CodeInvalidArgument, "memory is not deleted")
+	if err := spec.check(current); err != nil {
+		return nil, err
 	}
-	if current.Version != req.ExpectedVersion {
+	if current.Version != spec.expectedVersion {
 		if s.metrics != nil {
 			s.metrics.IncVersionConflict()
 		}
@@ -1349,49 +1423,47 @@ func (s *Service) Restore(ctx context.Context, req RestoreRequest) (*MemoryDetai
 	}
 
 	now := time.Now().UTC()
+	args := append([]any{p.PrincipalID, now, spec.memoryID, p.TenantID, spec.expectedVersion, current.DeletedAt != nil}, spec.setArgs...)
 	var newVersion int64
 	err = tx.QueryRow(ctx, `
 		UPDATE memories
-		SET deleted_at = NULL,
+		SET `+spec.setSQL+`,
 			version = version + 1,
 			updated_by = $1,
 			updated_at = $2
 		WHERE id = $3
 		  AND tenant_id = $4
 		  AND version = $5
-		  AND deleted_at IS NOT NULL
+		  AND (deleted_at IS NOT NULL) = $6
 		RETURNING version
-	`, p.PrincipalID, now, req.MemoryID, p.TenantID, req.ExpectedVersion).Scan(&newVersion)
+	`, args...).Scan(&newVersion)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeVersionConflict, "memory version conflict")
 		}
-		return nil, apperror.Wrap(apperror.CodeInternalError, "restore memory", err)
+		return nil, apperror.Wrap(apperror.CodeInternalError, spec.operation+" memory", err)
 	}
 
-	restored := *current
-	restored.DeletedAt = nil
-	restored.Version = newVersion
-	restored.UpdatedBy = p.PrincipalID
-	restored.UpdatedAt = now
+	changed := *current
+	spec.apply(&changed, now)
+	changed.Version = newVersion
+	changed.UpdatedBy = p.PrincipalID
+	changed.UpdatedAt = now
 
-	reqID := req.RequestID
+	reqID := spec.requestID
 	if reqID == "" {
-		reqID = "cli-restore-" + uuid.NewString()
+		reqID = "cli-" + spec.operation + "-" + uuid.NewString()
 	}
-	if err := insertRevision(ctx, tx, restored, "restore", p.PrincipalID, reqID); err != nil {
+	if err := insertRevision(ctx, tx, changed, spec.operation, p.PrincipalID, reqID); err != nil {
 		return nil, err
 	}
-
-	if _, err := s.appendEventLocked(ctx, tx, restored.TenantID, restored.ProjectID, restored.ID, "restore", restored.Version, p.PrincipalID); err != nil {
+	if _, err := s.appendEventLocked(ctx, tx, changed.TenantID, changed.ProjectID, changed.ID, spec.operation, changed.Version, p.PrincipalID); err != nil {
 		return nil, err
 	}
-
 	if err := tx.Commit(ctx); err != nil {
-		return nil, apperror.Wrap(apperror.CodeInternalError, "commit restore transaction", err)
+		return nil, apperror.Wrap(apperror.CodeInternalError, "commit "+spec.operation+" transaction", err)
 	}
-
-	return &restored, nil
+	return &changed, nil
 }
 
 // loadMemoryForWriteCheck enforces the Section 9 error decision matrix:

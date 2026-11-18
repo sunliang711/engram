@@ -236,3 +236,16 @@ type RestoreRequest struct {
 	ExpectedVersion int64     `json:"expected_version"`
 	RequestID       string    `json:"request_id"`
 }
+
+// AdminDeleteRequest soft-deletes a memory from the management console.
+type AdminDeleteRequest RestoreRequest
+
+// AdminPinRequest sets or clears the pinned flag of a memory from the management console.
+type AdminPinRequest struct {
+	TenantID        uuid.UUID `json:"tenant_id"`
+	ActorID         uuid.UUID `json:"actor_id"`
+	MemoryID        uuid.UUID `json:"memory_id"`
+	ExpectedVersion int64     `json:"expected_version"`
+	IsPinned        bool      `json:"is_pinned"`
+	RequestID       string    `json:"request_id"`
+}

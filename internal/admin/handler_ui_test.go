@@ -152,6 +152,51 @@ func TestAdminUIRegression(t *testing.T) {
 			t.Fatalf("deep-link lookup: %+v", got)
 		}
 	})
+	t.Run("category and tag filters with pinned entries first", func(t *testing.T) {
+		if _, err := database.Pool.Exec(ctx, `UPDATE memories SET category = 'runbook', tags = ARRAY['ops'] WHERE tenant_id = $1 AND title IN ('fixture 1', 'fixture 2')`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Pool.Exec(ctx, `UPDATE memories SET is_pinned = true, updated_at = now() - interval '1 day' WHERE tenant_id = $1 AND title = 'fixture 3'`, tenant); err != nil {
+			t.Fatal(err)
+		}
+		if got := list("&category=runbook"); got.Total != 2 {
+			t.Fatalf("category filter: %+v", got)
+		}
+		if got := list("&tag=ops&category=runbook"); got.Total != 2 {
+			t.Fatalf("tag filter: %+v", got)
+		}
+		if got := list("&tag=missing"); got.Total != 0 {
+			t.Fatalf("missing tag: %+v", got)
+		}
+		var pinnedID string
+		if err := database.Pool.QueryRow(ctx, `SELECT id::text FROM memories WHERE tenant_id = $1 AND title = 'fixture 3'`, tenant).Scan(&pinnedID); err != nil {
+			t.Fatal(err)
+		}
+		if first := list("").Items[0].ID; first != pinnedID {
+			t.Fatalf("pinned entry should lead the list, got %s", first)
+		}
+		if first := list("&sort=recent").Items[0].ID; first == pinnedID {
+			t.Fatal("sort=recent must ignore pinning")
+		}
+	})
+	t.Run("project names stay unique within a tenant", func(t *testing.T) {
+		defer func() {
+			if _, err := database.Pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1`, tenant); err != nil {
+				t.Errorf("cleanup projects: %v", err)
+			}
+		}()
+		create := func(status int) {
+			t.Helper()
+			payload, _ := json.Marshal(map[string]any{"tenant_id": tenant.String(), "name": "ui-regression-project", "with_marker": true})
+			rec := httptest.NewRecorder()
+			handler.handleProjects(rec, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload)))
+			if rec.Code != status {
+				t.Fatalf("project status %d, want %d: %s", rec.Code, status, rec.Body.String())
+			}
+		}
+		create(http.StatusCreated)
+		create(http.StatusConflict)
+	})
 	// postPrincipal exercises creation and binding semantics without bypassing handler validation.
 	postPrincipal := func(body map[string]string, status int) {
 		t.Helper()

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -588,6 +589,40 @@ func TestV1AcceptanceSuite(t *testing.T) {
 			t.Fatalf("expected restored version 4 with nil DeletedAt, got %+v", restored)
 		}
 
+		// Management console pin, soft delete, and restore keep versions, revisions, and state consistent.
+		wasPinned := restored.IsPinned
+		pinned, err := env.svc.AdminSetPinned(env.ctx, memory.AdminPinRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 4, IsPinned: !wasPinned})
+		if err != nil || pinned.IsPinned == wasPinned || pinned.Version != 5 {
+			t.Fatalf("AdminSetPinned: %+v err=%v", pinned, err)
+		}
+		_, err = env.svc.AdminSetPinned(env.ctx, memory.AdminPinRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 4, IsPinned: wasPinned})
+		assertAppErrorCode(t, err, apperror.CodeVersionConflict)
+		deleted, err := env.svc.AdminDelete(env.ctx, memory.AdminDeleteRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 5})
+		if err != nil || deleted.DeletedAt == nil || deleted.Version != 6 || deleted.IsPinned == wasPinned {
+			t.Fatalf("AdminDelete: %+v err=%v", deleted, err)
+		}
+		_, err = env.svc.AdminDelete(env.ctx, memory.AdminDeleteRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 6})
+		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
+		if restored, err = env.svc.Restore(env.ctx, memory.RestoreRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 6}); err != nil || restored.Version != 7 {
+			t.Fatalf("Restore after AdminDelete: %+v err=%v", restored, err)
+		}
+		var revisionOps []string
+		rows, err := env.database.Pool.Query(env.ctx, `SELECT operation FROM memory_revisions WHERE memory_id = $1 AND version > 4 ORDER BY version`, memA1ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var op string
+			if err := rows.Scan(&op); err != nil {
+				t.Fatal(err)
+			}
+			revisionOps = append(revisionOps, op)
+		}
+		rows.Close()
+		if strings.Join(revisionOps, ",") != "update,delete,restore" {
+			t.Fatalf("admin revision operations = %v", revisionOps)
+		}
+
 		// Pull incremental changes from cursor -> must contain promote, delete, and restore in strict monotonic order
 		delta, err := env.svc.Changes(ctxA, memory.ChangesRequest{
 			ProjectContext: discA1.ProjectContext,
@@ -596,10 +631,10 @@ func TestV1AcceptanceSuite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Changes delta failed: %v", err)
 		}
-		if len(delta.Events) != 3 {
-			t.Fatalf("expected 3 delta events (promote, delete, restore), got %d: %+v", len(delta.Events), delta.Events)
+		if len(delta.Events) != 6 {
+			t.Fatalf("expected 6 delta events (promote, delete, restore, update, delete, restore), got %d: %+v", len(delta.Events), delta.Events)
 		}
-		wantOps := []string{"promote", "delete", "restore"}
+		wantOps := []string{"promote", "delete", "restore", "update", "delete", "restore"}
 		for i, wantOp := range wantOps {
 			if delta.Events[i].Operation != wantOp {
 				t.Fatalf("event[%d] operation = %s, want %s", i, delta.Events[i].Operation, wantOp)

@@ -30,7 +30,7 @@ V1 不包含：
 | 组件 | 技术 | 作用 |
 | --- | --- | --- |
 | MCP Server | Go | 业务服务、MCP 协议实现与内嵌管理端 |
-| Admin Console | Embedded Web UI (`go:embed`) | 租户/身份初始化、项目注册、Token 签发、知识恢复与导出管理（无需独立 CLI） |
+| Admin Console | Embedded Web UI (`go:embed`) | 租户/身份初始化、项目注册、Token 签发、知识浏览、置顶、软删除、恢复与导出管理（无需独立 CLI） |
 | MCP Transport | Streamable HTTP | 多客户端远程访问 |
 | API | MCP Tools + Admin REST API | 统一 Agent 读写接口与管理后台接口 |
 | Knowledge Storage | PostgreSQL | Memory 唯一事实来源 |
@@ -146,6 +146,8 @@ github.com/eagle/project-a
 ### 5.3 项目注册
 
 项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.engram-project` Marker 以及签发 API Token）统一在 `engram-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
+
+同一 Tenant 内的有效项目名称唯一：注册同名项目会被拒绝；快速接入向导填写已有项目名称时直接复用该项目，并在其上补充成员权限与 Remote 映射，不会生成同名项目。
 
 没有 Remote 的项目（或 Monorepo 子项目）可在 Web UI 中一键生成并复制 `.engram-project` Marker UUID。该文件只保存项目 UUID，不保存服务地址或凭证，建议提交到仓库。
 
@@ -266,7 +268,7 @@ Tool 名只使用 ASCII 字母、数字和下划线，并控制在 64 个字符�
 
 ### 7.6 `memory_delete`
 
-使用软删除并要求 `expected_version`。删除操作必须生成 revision 和 event。V1 不向普通 Agent 暴露恢复 Tool；通过 Admin Web UI 恢复已软删除的知识，恢复同样执行乐观锁并生成 revision 和 event。
+使用软删除并要求 `expected_version`。删除操作必须生成 revision 和 event。V1 不向普通 Agent 暴露恢复 Tool；通过 Admin Web UI 恢复已软删除的知识。Admin Web UI 也可以软删除知识和切换置顶状态。这三类管理操作都以 Tenant 管理员身份执行，同样执行乐观锁并生成 revision 和 event。
 
 ### 7.7 `memory_changes`
 
@@ -362,9 +364,12 @@ CREATE TABLE api_tokens (
     name TEXT NOT NULL DEFAULT '',
     expires_at TIMESTAMPTZ,
     revoked_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMPTZ
 );
 ```
+
+`last_used_at` 记录 Token 最近一次鉴权成功的时间，同一 Token 每分钟最多写入一次；写入失败不影响本次请求。Admin Web UI 在客户端列表中展示该时间，用于确认客户端配置已生效。
 
 所有有效 Tenant Member 可以读取 Tenant Global Memory。只有 `global_writer` 和 `admin` 可以写入或提升 Global Memory。Tenant Member 默认不能访问所有 Project，除 `admin` 外必须在 `project_members` 中获得显式项目权限。
 
