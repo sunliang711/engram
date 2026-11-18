@@ -27,6 +27,8 @@ import (
 	"engram/internal/security"
 
 	"github.com/google/uuid"
+	"io"
+	"mime/multipart"
 )
 
 type testEnv struct {
@@ -924,6 +926,56 @@ func TestV1AcceptanceSuite(t *testing.T) {
 		revResp.Body.Close()
 		if revResp.StatusCode != http.StatusOK || revOut.Token != qsOut.Token {
 			t.Fatalf("expected revealed token %q, got status=%d token=%q", qsOut.Token, revResp.StatusCode, revOut.Token)
+		}
+
+		// Export full encrypted system migration snapshot and re-import with confirm_replace=true
+		expBody, _ := json.Marshal(map[string]string{"passphrase": "migration-passphrase"})
+		expReq, _ := http.NewRequest(http.MethodPost, env.mcpServer.URL+"/api/admin/migration/export", bytes.NewReader(expBody))
+		expReq.Header.Set("Authorization", "Bearer "+newSessCookie)
+		expReq.Header.Set("Content-Type", "application/json")
+		expResp, err := http.DefaultClient.Do(expReq)
+		if err != nil {
+			t.Fatalf("migration export request: %v", err)
+		}
+		snapZip, _ := io.ReadAll(expResp.Body)
+		expResp.Body.Close()
+		if expResp.StatusCode != http.StatusOK || len(snapZip) == 0 {
+			t.Fatalf("expected migration export 200 OK, got status=%d len=%d", expResp.StatusCode, len(snapZip))
+		}
+
+		// Importing without confirm_replace on non-empty DB must be rejected with 409 Conflict
+		buildImportReq := func(confirm bool) *http.Request {
+			var mpBuf bytes.Buffer
+			mw := multipart.NewWriter(&mpBuf)
+			fw, _ := mw.CreateFormFile("file", "snapshot.zip")
+			_, _ = fw.Write(snapZip)
+			_ = mw.WriteField("passphrase", "migration-passphrase")
+			if confirm {
+				_ = mw.WriteField("confirm_replace", "true")
+			}
+			_ = mw.Close()
+			req, _ := http.NewRequest(http.MethodPost, env.mcpServer.URL+"/api/admin/migration/import", &mpBuf)
+			req.Header.Set("Authorization", "Bearer "+newSessCookie)
+			req.Header.Set("Content-Type", mw.FormDataContentType())
+			return req
+		}
+
+		noConfirmResp, err := http.DefaultClient.Do(buildImportReq(false))
+		if err != nil {
+			t.Fatalf("migration import without confirm: %v", err)
+		}
+		noConfirmResp.Body.Close()
+		if noConfirmResp.StatusCode != http.StatusConflict {
+			t.Fatalf("expected 409 Conflict when confirm_replace=false on non-empty DB, got %d", noConfirmResp.StatusCode)
+		}
+
+		importResp, err := http.DefaultClient.Do(buildImportReq(true))
+		if err != nil {
+			t.Fatalf("migration import with confirm: %v", err)
+		}
+		importResp.Body.Close()
+		if importResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK for confirmed migration import, got %d", importResp.StatusCode)
 		}
 
 		// Simulate RESET_ADMIN=true startup -> resets password to new temporary password and invalidates previous session

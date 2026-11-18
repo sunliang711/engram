@@ -78,6 +78,7 @@
       <button class="tab-btn" data-tab="tab-projects">3. 项目与仓库识别</button>
       <button class="tab-btn" data-tab="tab-tokens">4. API Token 与客户端配置</button>
       <button class="tab-btn" data-tab="tab-memories">5. 知识治理、恢复与导出</button>
+      <button class="tab-btn" data-tab="tab-migration">6. 系统迁移与还原</button>
     </nav>
 
     <main class="container">
@@ -104,14 +105,14 @@
                 <small class="field-hint">顶层隔离边界；同一 Tenant 内共享 Global 记忆，跨 Tenant 完全隔离。</small>
               </div>
               <div class="form-group">
-                <label>客户端身份标识 (Principal Subject)</label>
-                <input type="text" id="qs-subject" placeholder="例如：macbook-pro" value="agent-default" required />
-                <small class="field-hint">在当前认证方式下唯一标识此设备或 Agent（如 <code>macbook-pro</code>）。</small>
+                <label>成员/主体标识 (Principal Subject)</label>
+                <input type="text" id="qs-subject" placeholder="例如：eagle 或 owner" value="owner" required />
+                <small class="field-hint">唯一标识使用记忆库的人或自动化角色（如 <code>eagle</code>）；个人多台设备/Agent 可共用此主体，再按设备签发多张 Token。</small>
               </div>
               <div class="form-group">
                 <label>显示名称 (Display Name)</label>
-                <input type="text" id="qs-display" placeholder="例如：Eagle MacBook" value="Default AI Agent" required />
-                <small class="field-hint">控制台可读名称，用于展示和审计，不影响鉴权。</small>
+                <input type="text" id="qs-display" placeholder="例如：Eagle" value="Owner" required />
+                <small class="field-hint">控制台与审计记录中的可读名称（<code>created_by</code>/<code>updated_by</code>），不影响鉴权。</small>
               </div>
               <div class="form-group">
                 <label>Tenant 角色</label>
@@ -167,8 +168,8 @@
           </div>
 
           <div class="card">
-            <h2>创建身份并绑定租户角色 (Principal & Role)</h2>
-            <p class="desc">为设备、用户或 Agent 创建身份并授予 Tenant 权限。</p>
+            <h2>创建成员身份并绑定租户角色 (Principal & Role)</h2>
+            <p class="desc">为用户或独立自动化角色（如 CI 机器人）创建权限主体并授予 Tenant 权限；个人多台设备或多种 Agent 可共用同一 Principal。</p>
             <form id="create-principal-form">
               <div class="form-row">
                 <div class="form-group">
@@ -188,12 +189,12 @@
               <div class="form-row">
                 <div class="form-group">
                   <label>唯一标识 (Subject)</label>
-                  <input type="text" id="prin-subject" placeholder="例如：claude-code-mac" required />
-                  <small class="field-hint">同一 Provider 下不可重复，用于区分不同客户端/成员。</small>
+                  <input type="text" id="prin-subject" placeholder="例如：eagle 或 ci-bot" required />
+                  <small class="field-hint">同一 Provider 下不可重复，用于区分不同成员或自动化角色。</small>
                 </div>
                 <div class="form-group">
                   <label>显示名称</label>
-                  <input type="text" id="prin-name" placeholder="例如：Claude Code (Mac)" required />
+                  <input type="text" id="prin-name" placeholder="例如：Eagle 或 CI 只读机器人" required />
                 </div>
                 <div class="form-group">
                   <label>Tenant 角色</label>
@@ -331,7 +332,7 @@
       <section id="tab-tokens" class="tab-pane hidden">
         <div class="card">
           <h2>签发客户端 API Token</h2>
-          <p class="desc">为 Codex、Claude Code 等 MCP 客户端生成 Bearer Token，并自动生成 MCP 客户端配置。</p>
+          <p class="desc">在同一个 Principal（如你本人）名下，可为 MacBook Codex、Mac mini Claude、Gemini CLI 等不同设备或客户端分别签发独立 Token，方便按客户端单独吊销。</p>
           <form id="create-token-form">
             <div class="form-row">
               <div class="form-group">
@@ -339,12 +340,12 @@
                 <select id="tok-tenant" required></select>
               </div>
               <div class="form-group">
-                <label>绑定身份 (Principal)</label>
+                <label>绑定主体 (Principal)</label>
                 <select id="tok-principal" required></select>
               </div>
               <div class="form-group">
-                <label>Token 备注名称</label>
-                <input type="text" id="tok-name" placeholder="例如：claude-code-macbook" value="default-client" required />
+                <label>Token 备注名称（建议填设备/客户端名）</label>
+                <input type="text" id="tok-name" placeholder="例如：macbook-codex 或 macmini-claude" value="default-client" required />
               </div>
             </div>
             <button type="submit">生成新 API Token</button>
@@ -528,6 +529,53 @@
           <pre class="code-box" id="detail-revisions"></pre>
         </div>
       </section>
+
+      <!-- TAB 6: System Migration Export & Import -->
+      <section id="tab-migration" class="tab-pane hidden">
+        <div class="grid-2">
+          <div class="card">
+            <h2>📦 导出系统全量迁移包</h2>
+            <p class="desc">用于完整迁移到另一台 Engram 服务。导出内容包含：Tenants、Principals、成员权限、Projects、Git Remote / Marker、API Tokens、全部记忆（含已软删除）、历史 Revisions 与 Events；不包含管理员登录密码。</p>
+            <form id="migration-export-form">
+              <div class="form-group">
+                <label for="mig-export-passphrase">可选：导出加密口令</label>
+                <input type="password" id="mig-export-passphrase" placeholder="留空则不加密；设置口令后整包使用 AES-256-GCM 加密" autocomplete="new-password" />
+                <small class="field-hint">
+                  推荐设置口令：加密导出时会安全携带 API Token 明文，导入到<strong>不同</strong> <code>ENGRAM_CONTEXT_SIGN_KEY</code> 的新服务后仍可继续在 Web UI 查看 Token（未加密导出若更换签名密钥，仅保留 Token 鉴权能力）。
+                </small>
+              </div>
+              <button type="submit">📦 导出并保存系统迁移包 (.zip)</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>📥 导入系统全量迁移包</h2>
+            <p class="desc">将从源服务导出的迁移包（<code>engram-system-snapshot-*.zip</code>）完整还原到当前服务。导入在单个数据库事务内完成，若失败将自动回滚。</p>
+            <form id="migration-import-form">
+              <div class="form-group">
+                <label for="mig-import-file">选择系统迁移包 (.zip)</label>
+                <input type="file" id="mig-import-file" accept=".zip,application/zip" required />
+              </div>
+              <div class="form-group">
+                <label for="mig-import-passphrase">解密口令（若导出时设置了口令则必填）</label>
+                <input type="password" id="mig-import-passphrase" placeholder="未加密包留空即可" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; color:#fcd34d;">
+                  <input type="checkbox" id="mig-import-confirm" style="width:auto; margin-top:3px;" />
+                  <span>确认清空当前服务已有业务数据并全量覆盖还原（保留当前管理员账号密码；空库可直接还原或勾选）</span>
+                </label>
+              </div>
+              <button type="submit" class="danger">📥 上传并还原系统快照</button>
+            </form>
+
+            <div id="mig-import-result" class="hidden" style="margin-top:16px;">
+              <span class="badge success">系统迁移还原成功</span>
+              <pre class="code-box" id="mig-import-result-box"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -542,8 +590,8 @@
         <h3>1. 核心概念与层级关系</h3>
         <ul class="glossary-list">
           <li><strong>Tenant（租户）</strong>：最高层级的隔离边界（如 <code>default</code>、<code>personal</code>、<code>team-core</code>）。同一 Tenant 内共享 <code>global</code> 记忆，不同 Tenant 之间数据完全隔离。</li>
-          <li><strong>Principal（身份主体）</strong>：访问 MCP 服务的具体客户端、设备或成员身份（例如 MacBook 上的 Claude Code、另一台电脑上的 Codex）。</li>
-          <li><strong>Provider / Subject（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分身份的唯一 ID（如 <code>macbook-pro</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
+          <li><strong>Principal（成员 / 权限主体）</strong>：代表使用 Engram 的<strong>人或独立自动化角色</strong>（例如开发者 <code>eagle</code>、只读机器人 <code>ci-bot</code>），决定权限范围与审计归属（<code>created_by</code>/<code>updated_by</code>）。个人的多台设备、多种 Agent（MacBook 上的 Codex、Mac mini 上的 Claude 等）可共用同一个 Principal，并分别签发多张 <strong>API Token</strong> 来区分各客户端凭证。</li>
+          <li><strong>Provider / Subject（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分成员或自动化角色的唯一 ID（如 <code>eagle</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
           <li><strong>Project（项目）&amp; Marker / Remote</strong>：归属于某个 Tenant 的独立代码库或 Monorepo 子路径（<code>workspace_path</code>），用于存放 <code>project</code> 作用域记忆。可通过 Git Remote 或根目录 <code>.engram-project</code> UUID 文件自动匹配。</li>
         </ul>
       </div>

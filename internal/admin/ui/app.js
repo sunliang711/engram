@@ -892,6 +892,47 @@
     }
   });
 
+  async function saveBlobToLocal(blob, suggestedName) {
+    if (typeof window.showSaveFilePicker === "function") {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName,
+          types: [
+            {
+              description: "ZIP Archive",
+              accept: { "application/zip": [".zip"] },
+            },
+          ],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return true;
+      } catch (pickerErr) {
+        if (pickerErr && pickerErr.name === "AbortError") {
+          return false;
+        }
+        // Fall back to standard browser download if picker cannot open.
+      }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = suggestedName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  }
+
+  function parseDownloadFilename(resp, fallbackName) {
+    const cd = resp.headers.get("Content-Disposition") || "";
+    const m = /filename="?([^";]+)"?/i.exec(cd);
+    return m && m[1] ? m[1] : fallbackName;
+  }
+
   if ($("btn-download-export-zip")) {
     $("btn-download-export-zip").addEventListener("click", async () => {
       try {
@@ -906,40 +947,86 @@
         }
         const blob = await resp.blob();
         const cnt = resp.headers.get("X-Exported-Count");
-
-        if (typeof window.showSaveFilePicker === "function") {
-          try {
-            const handle = await window.showSaveFilePicker({
-              suggestedName: "engram-markdown-export.zip",
-              types: [
-                {
-                  description: "ZIP Archive",
-                  accept: { "application/zip": [".zip"] },
-                },
-              ],
-            });
-            const writable = await handle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-            showToast(cnt ? `Markdown 导出已保存（共 ${cnt} 条记录）` : "Markdown 导出已保存");
-            return;
-          } catch (pickerErr) {
-            if (pickerErr && pickerErr.name === "AbortError") {
-              return;
-            }
-            // Fall back to standard browser download if picker cannot open.
-          }
+        const saved = await saveBlobToLocal(blob, "engram-markdown-export.zip");
+        if (saved) {
+          showToast(cnt ? `Markdown 压缩包已导出（共 ${cnt} 条记录）` : "Markdown 压缩包已导出");
         }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
 
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "engram-markdown-export.zip";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        showToast(cnt ? `Markdown 压缩包下载已开始（共 ${cnt} 条记录）` : "Markdown 压缩包下载已开始");
+  if ($("migration-export-form")) {
+    $("migration-export-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const passphrase = $("mig-export-passphrase") ? $("mig-export-passphrase").value : "";
+        const resp = await fetch("/api/admin/migration/export", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ passphrase }),
+        });
+        if (!resp.ok) {
+          let msg = `HTTP ${resp.status}`;
+          try {
+            const errData = await resp.json();
+            if (errData && errData.message) msg = errData.message;
+          } catch (_) {}
+          throw new Error(msg);
+        }
+        const blob = await resp.blob();
+        const filename = parseDownloadFilename(resp, "engram-system-snapshot.zip");
+        const saved = await saveBlobToLocal(blob, filename);
+        if (saved) {
+          const enc = resp.headers.get("X-Snapshot-Encrypted") === "true";
+          const mems = resp.headers.get("X-Snapshot-Memories") || "0";
+          showToast(`系统迁移包已导出（${enc ? "已加密" : "未加密"}，含 ${mems} 条记忆）`);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
+  if ($("migration-import-form")) {
+    $("migration-import-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fileInput = $("mig-import-file");
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        showToast("请先选择要还原的系统迁移包 (.zip)", true);
+        return;
+      }
+      const fd = new FormData();
+      fd.append("file", fileInput.files[0]);
+      fd.append("passphrase", $("mig-import-passphrase") ? $("mig-import-passphrase").value : "");
+      fd.append("confirm_replace", $("mig-import-confirm") && $("mig-import-confirm").checked ? "true" : "false");
+
+      try {
+        const resp = await fetch("/api/admin/migration/import", {
+          method: "POST",
+          credentials: "same-origin",
+          body: fd,
+        });
+        const text = await resp.text();
+        let data = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch (_) {
+          data = { message: text };
+        }
+        if (!resp.ok) {
+          throw new Error((data && (data.message || data.error)) || `HTTP ${resp.status}`);
+        }
+        state.revealedTokens = {};
+        if ($("mig-import-result") && $("mig-import-result-box")) {
+          $("mig-import-result").classList.remove("hidden");
+          $("mig-import-result-box").textContent = JSON.stringify(data, null, 2);
+        }
+        if ($("mig-import-passphrase")) $("mig-import-passphrase").value = "";
+        showToast("系统快照还原成功！");
+        await refreshAllData();
       } catch (err) {
         showToast(err.message, true);
       }

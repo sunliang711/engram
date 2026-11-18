@@ -100,12 +100,18 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/memories/restore", h.requireActiveAdmin(h.handleRestoreMemory))
 	mux.HandleFunc("/api/admin/export", h.requireActiveAdmin(h.handleExport))
 	mux.HandleFunc("/api/admin/export/archive", h.requireActiveAdmin(h.handleExportArchive))
+	mux.HandleFunc("/api/admin/migration/export", h.requireActiveAdmin(h.handleMigrationExport))
+	mux.HandleFunc("/api/admin/migration/import", h.requireActiveAdminMultipart(maxImportBytes, h.handleMigrationImport))
 }
 
 func (h *Handler) withSafety(next http.HandlerFunc) http.HandlerFunc {
+	return h.withSafetyOpts(1<<20, false, next)
+}
+
+func (h *Handler) withSafetyOpts(maxBytes int64, allowMultipart bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete {
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
 			// Same-Origin / CSRF check
 			if secSite := strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))); secSite == "cross-site" {
@@ -121,8 +127,10 @@ func (h *Handler) withSafety(next http.HandlerFunc) http.HandlerFunc {
 			}
 			if r.ContentLength > 0 {
 				ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
-				if !strings.HasPrefix(ct, "application/json") {
-					writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "Content-Type must be application/json"))
+				isJSON := strings.HasPrefix(ct, "application/json")
+				isMultipart := allowMultipart && strings.HasPrefix(ct, "multipart/form-data")
+				if !isJSON && !isMultipart {
+					writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "unsupported Content-Type"))
 					return
 				}
 			}
@@ -174,7 +182,15 @@ func (h *Handler) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) requireActiveAdmin(next http.HandlerFunc) http.HandlerFunc {
-	return h.withSafety(func(w http.ResponseWriter, r *http.Request) {
+	return h.withSafety(h.requireActiveAdminCore(next))
+}
+
+func (h *Handler) requireActiveAdminMultipart(maxBytes int64, next http.HandlerFunc) http.HandlerFunc {
+	return h.withSafetyOpts(maxBytes, true, h.requireActiveAdminCore(next))
+}
+
+func (h *Handler) requireActiveAdminCore(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		token := h.extractSessionToken(r)
 		state, err := h.authMgr.VerifySession(r.Context(), token)
 		if err != nil || !state.Authenticated {
@@ -186,7 +202,7 @@ func (h *Handler) requireActiveAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
-	})
+	}
 }
 
 func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
