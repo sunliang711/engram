@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"engram/internal/apperror"
@@ -523,7 +524,7 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 
 	items := make([]MemorySummary, 0, limit)
 	for rows.Next() {
-		sum, err := scanMemorySummary(rows)
+		sum, err := scanMemorySummary(rows, q)
 		if err != nil {
 			return nil, err
 		}
@@ -1760,7 +1761,7 @@ func scanIndexItem(rows pgx.Rows) (IndexItem, error) {
 	return item, nil
 }
 
-func scanMemorySummary(rows pgx.Rows) (MemorySummary, error) {
+func scanMemorySummary(rows pgx.Rows, query string) (MemorySummary, error) {
 	var (
 		sum     MemorySummary
 		content string
@@ -1780,17 +1781,257 @@ func scanMemorySummary(rows pgx.Rows) (MemorySummary, error) {
 	if err != nil {
 		return sum, apperror.Wrap(apperror.CodeInternalError, "scan memory summary", err)
 	}
-	sum.Summary = summarizeContent(content, 200)
+	sum.Summary = summarizeContent(content, query, 220)
 	return sum, nil
 }
 
-func summarizeContent(md string, maxRunes int) string {
-	s := strings.TrimSpace(strings.ReplaceAll(md, "\r\n", "\n"))
-	runes := []rune(s)
+func summarizeContent(md, query string, maxRunes int) string {
+	if maxRunes <= 0 {
+		maxRunes = 220
+	}
+	body, desc := stripYAMLFrontmatter(md)
+	body = compactBlankLines(body)
+
+	q := strings.TrimSpace(query)
+	if q != "" {
+		if body != "" {
+			if start, end, ok := findBestQueryMatch([]rune(body), q, maxRunes); ok {
+				return sliceRuneWindow([]rune(body), start, end, maxRunes)
+			}
+		}
+		if desc != "" {
+			if start, end, ok := findBestQueryMatch([]rune(desc), q, maxRunes); ok {
+				return sliceRuneWindow([]rune(desc), start, end, maxRunes)
+			}
+		}
+	}
+
+	var combined string
+	switch {
+	case desc != "" && body != "":
+		if strings.Contains(strings.ToLower(body), strings.ToLower(desc)) {
+			combined = body
+		} else {
+			combined = desc + "\n" + body
+		}
+	case body != "":
+		combined = body
+	case desc != "":
+		combined = desc
+	default:
+		combined = compactBlankLines(md)
+	}
+
+	runes := []rune(combined)
 	if len(runes) <= maxRunes {
-		return s
+		return combined
 	}
 	return string(runes[:maxRunes]) + "..."
+}
+
+func stripYAMLFrontmatter(md string) (body, description string) {
+	normalized := strings.ReplaceAll(strings.TrimPrefix(md, "\ufeff"), "\r\n", "\n")
+	trimmed := strings.TrimLeft(normalized, " \t\n")
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
+		return strings.TrimSpace(normalized), ""
+	}
+
+	closeIdx := -1
+	for i := 1; i < len(lines); i++ {
+		t := strings.TrimSpace(lines[i])
+		if t == "---" || t == "..." {
+			closeIdx = i
+			break
+		}
+	}
+	if closeIdx == -1 {
+		return strings.TrimSpace(normalized), ""
+	}
+
+	fmLines := lines[1:closeIdx]
+	for i := 0; i < len(fmLines); i++ {
+		line := fmLines[i]
+		trimmedLine := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmedLine, "description:") {
+			continue
+		}
+		val := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "description:"))
+		if val == "|" || val == ">" || val == "|-" || val == ">-" {
+			var multi []string
+			for j := i + 1; j < len(fmLines); j++ {
+				if fmLines[j] == "" {
+					if len(multi) > 0 {
+						multi = append(multi, "")
+					}
+					continue
+				}
+				if !strings.HasPrefix(fmLines[j], " ") && !strings.HasPrefix(fmLines[j], "\t") {
+					break
+				}
+				multi = append(multi, strings.TrimSpace(fmLines[j]))
+			}
+			description = strings.TrimSpace(strings.Join(multi, " "))
+		} else {
+			description = unquoteYAMLValue(val)
+		}
+		break
+	}
+
+	body = strings.TrimSpace(strings.Join(lines[closeIdx+1:], "\n"))
+	return body, strings.TrimSpace(description)
+}
+
+func unquoteYAMLValue(v string) string {
+	if len(v) >= 2 {
+		if (v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'') {
+			return strings.TrimSpace(v[1 : len(v)-1])
+		}
+	}
+	return strings.TrimSpace(v)
+}
+
+func compactBlankLines(s string) string {
+	normalized := strings.ReplaceAll(strings.TrimSpace(s), "\r\n", "\n")
+	if normalized == "" {
+		return ""
+	}
+	lines := strings.Split(normalized, "\n")
+	out := make([]string, 0, len(lines))
+	prevEmpty := false
+	for _, line := range lines {
+		t := strings.TrimRight(line, " \t")
+		if strings.TrimSpace(t) == "" {
+			if !prevEmpty && len(out) > 0 {
+				out = append(out, "")
+			}
+			prevEmpty = true
+			continue
+		}
+		prevEmpty = false
+		out = append(out, t)
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func findBestQueryMatch(haystack []rune, query string, windowRunes int) (start, end int, found bool) {
+	if len(haystack) == 0 {
+		return 0, 0, false
+	}
+	fullNeedle := []rune(strings.TrimSpace(query))
+	if len(fullNeedle) > 0 {
+		if idx := indexRunesFold(haystack, fullNeedle, 0); idx >= 0 {
+			return idx, idx + len(fullNeedle), true
+		}
+	}
+
+	fields := strings.Fields(query)
+	if len(fields) == 0 {
+		return 0, 0, false
+	}
+
+	type hit struct {
+		tokenIdx int
+		start    int
+		end      int
+	}
+	var hits []hit
+	for ti, f := range fields {
+		needle := []rune(f)
+		if len(needle) == 0 {
+			continue
+		}
+		pos := 0
+		for pos < len(haystack) {
+			idx := indexRunesFold(haystack, needle, pos)
+			if idx < 0 {
+				break
+			}
+			hits = append(hits, hit{tokenIdx: ti, start: idx, end: idx + len(needle)})
+			pos = idx + len(needle)
+		}
+	}
+	if len(hits) == 0 {
+		return 0, 0, false
+	}
+
+	bestScore := -1
+	bestHit := hits[0]
+	halfWin := windowRunes / 2
+	for _, anchor := range hits {
+		winLo := anchor.start - halfWin
+		winHi := anchor.start + halfWin
+		seenTokens := make(map[int]bool, len(fields))
+		for _, other := range hits {
+			if other.start >= winLo && other.start <= winHi {
+				seenTokens[other.tokenIdx] = true
+			}
+		}
+		score := len(seenTokens)
+		if score > bestScore || (score == bestScore && anchor.start < bestHit.start) {
+			bestScore = score
+			bestHit = anchor
+		}
+	}
+	return bestHit.start, bestHit.end, true
+}
+
+func indexRunesFold(haystack, needle []rune, from int) int {
+	nLen := len(needle)
+	if nLen == 0 || from < 0 || from+nLen > len(haystack) {
+		return -1
+	}
+	limit := len(haystack) - nLen
+	for i := from; i <= limit; i++ {
+		matched := true
+		for j := 0; j < nLen; j++ {
+			if unicode.ToLower(haystack[i+j]) != unicode.ToLower(needle[j]) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
+}
+
+func sliceRuneWindow(runes []rune, matchStart, matchEnd, maxRunes int) string {
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	// Reserve ~30% before the match and ~70% from matchStart onward so values after a matched label stay visible.
+	preContext := maxRunes / 3
+	winStart := matchStart - preContext
+	if winStart < 0 {
+		winStart = 0
+	}
+	winEnd := winStart + maxRunes
+	if winEnd > len(runes) {
+		winEnd = len(runes)
+		winStart = winEnd - maxRunes
+		if winStart < 0 {
+			winStart = 0
+		}
+	}
+	if matchEnd > winEnd && matchEnd-matchStart <= maxRunes {
+		winEnd = matchEnd
+		winStart = winEnd - maxRunes
+		if winStart < 0 {
+			winStart = 0
+		}
+	}
+
+	var b strings.Builder
+	if winStart > 0 {
+		b.WriteString("...")
+	}
+	b.WriteString(strings.TrimSpace(string(runes[winStart:winEnd])))
+	if winEnd < len(runes) {
+		b.WriteString("...")
+	}
+	return b.String()
 }
 
 func normalizeTags(tags []string) []string {
