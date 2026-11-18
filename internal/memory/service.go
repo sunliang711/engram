@@ -124,11 +124,23 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 		return nil, err
 	}
 
+	wsPath, err := project.NormalizeRelPath(req.WorkspacePath)
+	if err != nil {
+		return nil, err
+	}
+	markerPath, err := project.NormalizeRelPath(req.MarkerPath)
+	if err != nil {
+		return nil, err
+	}
+
 	var resolvedProj *project.ResolvedProject
 	var projRole string
 	mode := auth.ModeGlobalOnly
 
 	hasIdentityInput := strings.TrimSpace(req.ProjectMarker) != "" || len(req.Remotes) > 0
+	if !hasIdentityInput && (wsPath != "" || markerPath != "") && !req.AllowGlobalOnly {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "cannot identify project from workspace_path or marker_path alone; provide remotes or project_marker, or set allow_global_only=true")
+	}
 	if hasIdentityInput {
 		proj, err := s.resolver.Resolve(ctx, p.TenantID, project.DiscoverInput{
 			ProjectMarker:   req.ProjectMarker,
@@ -214,9 +226,9 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 
 func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope string, projectID *uuid.UUID) (ScopeIndex, error) {
 	idx := ScopeIndex{
-		Pinned:        []MemorySummary{},
+		Pinned:        []IndexItem{},
 		CategoryStats: map[string]int{},
-		Recent:        []MemorySummary{},
+		Recent:        []IndexItem{},
 	}
 
 	// 1. Category counts
@@ -248,7 +260,7 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 
 	// 2. Pinned items (up to 10)
 	pinnedRows, err := s.pool.Query(ctx, `
-		SELECT id, scope, project_id, category, title, content_md, tags, is_pinned, status, version, content_hash, source_memory_id, updated_at
+		SELECT id, category, title, tags, updated_at
 		FROM memories
 		WHERE tenant_id = $1
 		  AND scope = $2
@@ -264,35 +276,42 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 	}
 	defer pinnedRows.Close()
 	for pinnedRows.Next() {
-		sum, err := scanMemorySummary(pinnedRows)
+		item, err := scanIndexItem(pinnedRows)
 		if err != nil {
 			return idx, err
 		}
-		idx.Pinned = append(idx.Pinned, sum)
+		idx.Pinned = append(idx.Pinned, item)
+	}
+	if err := pinnedRows.Err(); err != nil {
+		return idx, apperror.Wrap(apperror.CodeInternalError, "iterate pinned memories", err)
 	}
 
-	// 3. Recent items (up to 10)
+	// 3. Recent non-pinned items (up to 5, avoiding duplication with pinned)
 	recentRows, err := s.pool.Query(ctx, `
-		SELECT id, scope, project_id, category, title, content_md, tags, is_pinned, status, version, content_hash, source_memory_id, updated_at
+		SELECT id, category, title, tags, updated_at
 		FROM memories
 		WHERE tenant_id = $1
 		  AND scope = $2
 		  AND ($3::uuid IS NULL OR project_id = $3)
 		  AND status = 'active'
+		  AND is_pinned = false
 		  AND deleted_at IS NULL
 		ORDER BY updated_at DESC, id ASC
-		LIMIT 10
+		LIMIT 5
 	`, tenantID, scope, projectID)
 	if err != nil {
 		return idx, apperror.Wrap(apperror.CodeInternalError, "query recent memories", err)
 	}
 	defer recentRows.Close()
 	for recentRows.Next() {
-		sum, err := scanMemorySummary(recentRows)
+		item, err := scanIndexItem(recentRows)
 		if err != nil {
 			return idx, err
 		}
-		idx.Recent = append(idx.Recent, sum)
+		idx.Recent = append(idx.Recent, item)
+	}
+	if err := recentRows.Err(); err != nil {
+		return idx, apperror.Wrap(apperror.CodeInternalError, "iterate recent memories", err)
 	}
 
 	return idx, nil
@@ -489,7 +508,7 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 	offsetPlaceholder := addArg(sqlOffset)
 
 	sqlStr := fmt.Sprintf(`
-		SELECT id, scope, project_id, category, title, content_md, tags, is_pinned, status, version, content_hash, source_memory_id, updated_at
+		SELECT id, scope, category, title, content_md, tags, is_pinned, status, version, updated_at
 		FROM memories
 		WHERE %s
 		ORDER BY %s
@@ -1726,6 +1745,21 @@ func (s *Service) getLatestCursor(ctx context.Context, tenantID uuid.UUID, proje
 	return s.signer.SignCursor(tenantID, projectID, rev)
 }
 
+func scanIndexItem(rows pgx.Rows) (IndexItem, error) {
+	var item IndexItem
+	err := rows.Scan(
+		&item.ID,
+		&item.Category,
+		&item.Title,
+		&item.Tags,
+		&item.UpdatedAt,
+	)
+	if err != nil {
+		return item, apperror.Wrap(apperror.CodeInternalError, "scan index item", err)
+	}
+	return item, nil
+}
+
 func scanMemorySummary(rows pgx.Rows) (MemorySummary, error) {
 	var (
 		sum     MemorySummary
@@ -1734,7 +1768,6 @@ func scanMemorySummary(rows pgx.Rows) (MemorySummary, error) {
 	err := rows.Scan(
 		&sum.ID,
 		&sum.Scope,
-		&sum.ProjectID,
 		&sum.Category,
 		&sum.Title,
 		&content,
@@ -1742,15 +1775,10 @@ func scanMemorySummary(rows pgx.Rows) (MemorySummary, error) {
 		&sum.IsPinned,
 		&sum.Status,
 		&sum.Version,
-		&sum.ContentHash,
-		&sum.SourceMemoryID,
 		&sum.UpdatedAt,
 	)
 	if err != nil {
 		return sum, apperror.Wrap(apperror.CodeInternalError, "scan memory summary", err)
-	}
-	if sum.Tags == nil {
-		sum.Tags = []string{}
 	}
 	sum.Summary = summarizeContent(content, 200)
 	return sum, nil

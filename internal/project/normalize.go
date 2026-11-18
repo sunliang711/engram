@@ -70,7 +70,7 @@ func NormalizeRelPath(raw string) (string, error) {
 		return "", nil
 	}
 	if strings.HasPrefix(s, "/") || strings.Contains(s, "\\") {
-		return "", apperror.New(apperror.CodeInvalidArgument, "relative path must not start with '/' or contain '\\'")
+		return "", apperror.New(apperror.CodeInvalidArgument, "path must be relative to the Git root (omit or pass '' at repo root; do not pass an absolute local path or '\\')")
 	}
 	s = multiSlashRe.ReplaceAllString(s, "/")
 	s = strings.TrimSuffix(s, "/")

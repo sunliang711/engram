@@ -124,9 +124,8 @@ type toolCallParams struct {
 }
 
 type toolCallResult struct {
-	Content           []toolContentItem `json:"content"`
-	StructuredContent any               `json:"structuredContent,omitempty"`
-	IsError           bool              `json:"isError,omitempty"`
+	Content []toolContentItem `json:"content"`
+	IsError bool              `json:"isError,omitempty"`
 }
 
 type toolContentItem struct {
@@ -407,8 +406,7 @@ func (s *Server) dispatchToolCall(ctx context.Context, principal auth.Principal,
 			Content: []toolContentItem{
 				{Type: "text", Text: string(errJSON)},
 			},
-			StructuredContent: appErr,
-			IsError:           true,
+			IsError: true,
 		}
 	}
 
@@ -425,8 +423,7 @@ func (s *Server) dispatchToolCall(ctx context.Context, principal auth.Principal,
 		Content: []toolContentItem{
 			{Type: "text", Text: string(resJSON)},
 		},
-		StructuredContent: res,
-		IsError:           false,
+		IsError: false,
 	}
 }
 
@@ -448,21 +445,34 @@ func toolDefinitions() []map[string]any {
 	return []map[string]any{
 		{
 			"name":        "memory_discover",
-			"description": "Resolve current repository/project identity and return project_context, permissions, key indices, and latest change cursor.",
+			"description": "Resolve current repository/project identity and return project_context, permissions, compact scope indices, and latest_cursor. Pass Git remotes (e.g. git remote -v) and/or project_marker (.engram-project UUID) to identify a project, or set allow_global_only=true when outside a registered project.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"project_marker":    map[string]any{"type": "string"},
-					"marker_path":       map[string]any{"type": "string"},
-					"workspace_path":    map[string]any{"type": "string"},
-					"allow_global_only": map[string]any{"type": "boolean"},
+					"project_marker": map[string]any{
+						"type":        "string",
+						"description": "UUID read from the nearest .engram-project file, if present.",
+					},
+					"marker_path": map[string]any{
+						"type":        "string",
+						"description": "Directory containing .engram-project relative to the Git root (empty string if at Git root). Do not pass an absolute local filesystem path.",
+					},
+					"workspace_path": map[string]any{
+						"type":        "string",
+						"description": "Optional monorepo sub-directory relative to the Git root (e.g. 'services/api'; omit or pass '' at Git root). Must NOT be an absolute local path.",
+					},
+					"allow_global_only": map[string]any{
+						"type":        "boolean",
+						"description": "Set to true to allow global_only fallback (tenant global memories only) when no project identity is provided or the project is unregistered.",
+					},
 					"remotes": map[string]any{
-						"type": "array",
+						"type":        "array",
+						"description": "Git remotes of the current repository (e.g. origin). Required to identify a project unless project_marker is provided.",
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"name": map[string]any{"type": "string"},
-								"url":  map[string]any{"type": "string"},
+								"name": map[string]any{"type": "string", "description": "Git remote name (e.g. 'origin')."},
+								"url":  map[string]any{"type": "string", "description": "Git remote URL (SSH or HTTPS, e.g. 'git@github.com:org/repo.git')."},
 							},
 							"required": []string{"name", "url"},
 						},
@@ -476,14 +486,14 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"project_context": map[string]any{"type": "string"},
-					"scopes":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"query":           map[string]any{"type": "string"},
-					"categories":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"tags":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"status":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-					"cursor":          map[string]any{"type": "string"},
-					"limit":           map[string]any{"type": "integer"},
+					"project_context": map[string]any{"type": "string", "description": "Token returned by memory_discover."},
+					"scopes":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional scopes filter: 'global' and/or 'project'."},
+					"query":           map[string]any{"type": "string", "description": "Search keywords (empty string lists memories by recency)."},
+					"categories":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional category filter."},
+					"tags":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional tag filter (matches items containing all specified tags)."},
+					"status":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional status filter (defaults to ['active'])."},
+					"cursor":          map[string]any{"type": "string", "description": "Pagination cursor from previous response's next_cursor."},
+					"limit":           map[string]any{"type": "integer", "description": "Maximum number of items to return."},
 				},
 				"required": []string{"project_context"},
 			},
@@ -494,9 +504,9 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"project_context": map[string]any{"type": "string"},
-					"memory_id":       map[string]any{"type": "string"},
-					"version":         map[string]any{"type": "integer"},
+					"project_context": map[string]any{"type": "string", "description": "Token returned by memory_discover."},
+					"memory_id":       map[string]any{"type": "string", "description": "UUID of the memory to read."},
+					"version":         map[string]any{"type": "integer", "description": "Optional historical version number to read."},
 				},
 				"required": []string{"project_context", "memory_id"},
 			},

@@ -28,12 +28,12 @@ type DiscoverInput struct {
 
 // ResolvedProject represents a project matched by Resolver.
 type ResolvedProject struct {
-	ID            uuid.UUID `json:"id"`
-	TenantID      uuid.UUID `json:"tenant_id"`
-	Name          string    `json:"name"`
+	ID            uuid.UUID  `json:"id"`
+	TenantID      uuid.UUID  `json:"tenant_id"`
+	Name          string     `json:"name"`
 	Marker        *uuid.UUID `json:"marker,omitempty"`
-	MatchedBy     string    `json:"matched_by"`
-	WorkspacePath string    `json:"workspace_path"`
+	MatchedBy     string     `json:"matched_by"`
+	WorkspacePath string     `json:"workspace_path,omitempty"`
 }
 
 type Resolver struct {

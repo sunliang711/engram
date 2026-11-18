@@ -40,20 +40,25 @@ type PermissionsInfo struct {
 	CanMaintainProject bool   `json:"can_maintain_project"`
 }
 
+type IndexItem struct {
+	ID        uuid.UUID `json:"id"`
+	Category  string    `json:"category"`
+	Title     string    `json:"title"`
+	Tags      []string  `json:"tags,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type MemorySummary struct {
-	ID             uuid.UUID  `json:"id"`
-	Scope          string     `json:"scope"`
-	ProjectID      *uuid.UUID `json:"project_id,omitempty"`
-	Category       string     `json:"category"`
-	Title          string     `json:"title"`
-	Summary        string     `json:"summary"`
-	Tags           []string   `json:"tags"`
-	IsPinned       bool       `json:"is_pinned"`
-	Status         string     `json:"status"`
-	Version        int64      `json:"version"`
-	ContentHash    string     `json:"content_hash"`
-	SourceMemoryID *uuid.UUID `json:"source_memory_id,omitempty"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID        uuid.UUID `json:"id"`
+	Scope     string    `json:"scope"`
+	Category  string    `json:"category"`
+	Title     string    `json:"title"`
+	Summary   string    `json:"summary"`
+	Tags      []string  `json:"tags,omitempty"`
+	IsPinned  bool      `json:"is_pinned,omitempty"`
+	Status    string    `json:"status"`
+	Version   int64     `json:"version"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type MemoryDetail struct {
@@ -79,9 +84,9 @@ type MemoryDetail struct {
 }
 
 type ScopeIndex struct {
-	Pinned        []MemorySummary `json:"pinned"`
-	CategoryStats map[string]int  `json:"category_stats"`
-	Recent        []MemorySummary `json:"recent"`
+	Pinned        []IndexItem    `json:"pinned"`
+	CategoryStats map[string]int `json:"category_stats"`
+	Recent        []IndexItem    `json:"recent"`
 }
 
 // 7.1 memory_discover

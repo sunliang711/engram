@@ -287,6 +287,33 @@ func TestV1AcceptanceSuite(t *testing.T) {
 		if discPay.Project == nil || discPay.Project.ID != projMonoPayment {
 			t.Fatalf("expected monorepo payment project %v, got %v", projMonoPayment, discPay.Project)
 		}
+
+		// Absolute local path alone or with remotes must return INVALID_ARGUMENT (not silent global_only)
+		_, err = env.svc.Discover(ctxA, memory.DiscoverRequest{
+			WorkspacePath: "/Users/eagle/project-a",
+		})
+		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
+
+		_, err = env.svc.Discover(ctxA, memory.DiscoverRequest{
+			WorkspacePath: "/Users/eagle/project-a",
+			Remotes:       []project.RemoteInput{{Name: "origin", URL: "git@github.com:eagle/project-a.git"}},
+		})
+		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
+
+		// Relative workspace_path without remotes or project_marker must require allow_global_only
+		_, err = env.svc.Discover(ctxA, memory.DiscoverRequest{
+			WorkspacePath: "services/api",
+		})
+		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
+
+		// Empty DiscoverRequest (non-Git workspace) falls back to global_only
+		discEmpty, err := env.svc.Discover(ctxA, memory.DiscoverRequest{})
+		if err != nil {
+			t.Fatalf("Discover empty request failed: %v", err)
+		}
+		if discEmpty.Mode != auth.ModeGlobalOnly {
+			t.Fatalf("expected mode global_only for empty discover, got %q", discEmpty.Mode)
+		}
 	})
 
 	// Discover contexts for Project A1, Project A2, and Project B1
@@ -723,16 +750,34 @@ func TestV1AcceptanceSuite(t *testing.T) {
 			t.Fatalf("expected HTTP 200, got %d", resp.StatusCode)
 		}
 		var out struct {
-			Result struct {
-				IsError           bool                    `json:"isError"`
-				StructuredContent memory.DiscoverResponse `json:"structuredContent"`
-			} `json:"result"`
+			Result map[string]json.RawMessage `json:"result"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 			t.Fatalf("decode mcp response: %v", err)
 		}
-		if out.Result.IsError || out.Result.StructuredContent.ProjectContext == "" {
-			t.Fatalf("unexpected mcp discover response: %+v", out)
+		if _, hasStructured := out.Result["structuredContent"]; hasStructured {
+			t.Fatalf("expected structuredContent to be omitted to avoid duplicate payload, got %s", string(out.Result["structuredContent"]))
+		}
+		var resultPayload struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		rawResult, _ := json.Marshal(out.Result)
+		if err := json.Unmarshal(rawResult, &resultPayload); err != nil {
+			t.Fatalf("unmarshal mcp result: %v", err)
+		}
+		if resultPayload.IsError || len(resultPayload.Content) != 1 || resultPayload.Content[0].Type != "text" {
+			t.Fatalf("unexpected mcp discover result: %+v", resultPayload)
+		}
+		var discResp memory.DiscoverResponse
+		if err := json.Unmarshal([]byte(resultPayload.Content[0].Text), &discResp); err != nil {
+			t.Fatalf("unmarshal content text: %v", err)
+		}
+		if discResp.ProjectContext == "" {
+			t.Fatalf("expected non-empty project_context in discover response: %+v", discResp)
 		}
 	})
 
