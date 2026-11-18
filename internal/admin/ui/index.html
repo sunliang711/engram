@@ -179,7 +179,7 @@
               <div class="form-row">
                 <div class="form-group">
                   <label for="qs-tenant-role">租户角色</label>
-                  <select id="qs-tenant-role"><option value="global_writer" selected>全局读写者</option><option value="member">全局只读成员</option><option value="admin">租户管理员</option></select>
+                  <select id="qs-tenant-role"><option value="global_writer" selected>公共知识编辑</option><option value="member">普通成员</option><option value="admin">租户管理员</option></select>
                   <small class="field-hint">初始项目将自动授予维护者权限。</small>
                 </div>
                 <div class="form-group">
@@ -275,8 +275,8 @@
                 <div class="form-group">
                   <label for="prin-role">租户角色</label>
                   <select id="prin-role">
-                    <option value="global_writer">全局读写者</option>
-                    <option value="member">全局只读成员</option>
+                    <option value="global_writer">公共知识编辑</option>
+                    <option value="member">普通成员</option>
                     <option value="admin">租户管理员</option>
                   </select>
                   <small class="field-hint" id="prin-role-hint"></small>
@@ -308,9 +308,9 @@
           </div>
           <p class="desc" id="member-detail-status"></p>
           <section class="member-section">
-            <h3>全局记忆权限</h3>
+            <h3>公共（全局）记忆权限</h3>
             <form id="member-role-form">
-              <div class="form-group"><label for="member-role">租户角色</label><select id="member-role"><option value="member">全局只读成员</option><option value="global_writer">全局读写者</option><option value="admin">租户管理员</option></select><small class="field-hint" id="member-role-hint"></small></div>
+              <div class="form-group"><label for="member-role">租户角色</label><select id="member-role"><option value="member">普通成员</option><option value="global_writer">公共知识编辑</option><option value="admin">租户管理员</option></select><small class="field-hint" id="member-role-hint"></small></div>
               <button type="submit" class="secondary">保存租户角色变更</button>
             </form>
           </section>
@@ -751,27 +751,27 @@
       </div>
 
       <div class="glossary-section">
-        <h3>2. 租户角色：控制全局记忆</h3>
+        <h3>2. 租户角色：控制公共（全局）记忆</h3>
         <table>
           <thead>
-            <tr><th>角色</th><th>全局记忆</th><th>项目记忆</th><th>适用场景</th></tr>
+            <tr><th>角色</th><th>公共（全局）记忆</th><th>项目记忆</th><th>适用场景</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td>全局只读成员<br><code>member</code></td>
+              <td>普通成员<br><code>member</code></td>
               <td>只读</td>
               <td>需要在「项目」页单独分配项目角色</td>
-              <td>普通协作者，或只需读取全局规范的 Agent</td>
+              <td>普通协作者，或只需读取租户公共规范的 Agent</td>
             </tr>
             <tr>
-              <td>全局读写者<br><code>global_writer</code></td>
-              <td>读写、删除，可把项目记忆提升为全局</td>
+              <td>公共知识编辑<br><code>global_writer</code></td>
+              <td>读写、删除，可把项目记忆提升为公共记忆</td>
               <td>需要在「项目」页单独分配项目角色</td>
-              <td>个人主力 Agent，或负责沉淀跨项目规范的成员</td>
+              <td>个人主力 Agent，或负责沉淀跨项目公共规范的成员</td>
             </tr>
             <tr>
               <td>租户管理员<br><code>admin</code></td>
-              <td>读写、删除，可把项目记忆提升为全局</td>
+              <td>读写、删除，可把项目记忆提升为公共记忆</td>
               <td>自动成为租户下所有项目的维护者</td>
               <td>租户管理员，或个人的全权限主账号</td>
             </tr>

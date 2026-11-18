@@ -99,7 +99,7 @@
     return hit ? hit[1] : "";
   }
 
-  const TENANT_ROLES = { member: t("全局只读成员"), global_writer: t("全局读写者"), admin: t("租户管理员") };
+  const TENANT_ROLES = { member: t("普通成员"), global_writer: t("公共知识编辑"), admin: t("租户管理员") };
   const PROJECT_ROLES = { reader: t("只读成员"), writer: t("编辑者"), maintainer: t("维护者") };
 
   // isSystemPrincipal marks the internal identity the console uses to act on a tenant's behalf.
@@ -276,9 +276,9 @@
 
   // tenantRoleHint explains effective abilities without requiring knowledge of role names.
   function tenantRoleHint(role) {
-    if (role === "admin") return t("可以读写全局记忆，并维护当前租户下的所有项目。");
-    if (role === "global_writer") return t("可以读写当前租户的全局记忆。访问项目记忆仍需单独授权。");
-    return t("可以读取当前租户的全局记忆。访问项目记忆仍需单独授权。");
+    if (role === "admin") return t("可读写公共（全局）记忆，并自动维护当前租户下的所有项目。");
+    if (role === "global_writer") return t("可读写当前租户的公共（全局）记忆；访问项目记忆仍需单独授权。");
+    return t("可查看当前租户的公共（全局）记忆；访问项目记忆仍需单独授权。");
   }
 
   // renderTenantContext keeps member operations scoped to one tenant across refreshes.
