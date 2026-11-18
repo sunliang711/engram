@@ -1,4 +1,5 @@
 (function () {
+  const t = (...args) => window.EngramI18n ? window.EngramI18n.t(...args) : args[0];
   // escapeHTML keeps memory content inert before inserting the supported Markdown subset.
   function escapeHTML(value) {
     return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -42,7 +43,7 @@
         flush();
         const code = [];
         while (++index < lines.length && !new RegExp(`^\\s*${fence[1][0]}{${fence[1].length},}\\s*$`).test(lines[index])) code.push(lines[index]);
-        output.push(`<div class="markdown-code"><div class="code-header"><span>${escapeHTML(fence[2].trim() || "代码")}</span><button type="button" class="secondary small btn-copy-code">复制代码</button></div><pre><code>${escapeHTML(code.join("\n"))}</code></pre></div>`);
+        output.push(`<div class="markdown-code"><div class="code-header"><span>${escapeHTML(fence[2].trim() || t("代码"))}</span><button type="button" class="secondary small btn-copy-code">${t("复制代码")}</button></div><pre><code>${escapeHTML(code.join("\n"))}</code></pre></div>`);
       } else if (/^\s*$/.test(line)) flush();
       else if (heading) {
         flush(); const level = heading[1].length;
@@ -57,7 +58,7 @@
       } else { if (list) flush(); paragraph.push(line); }
     }
     flush();
-    return output.join("\n") || '<p class="empty-state">暂无正文</p>';
+    return output.join("\n") || `<p class="empty-state">${t("暂无正文")}</p>`;
   }
 
   // diff shows the changed line region, preserving shared prefix and suffix as context.
@@ -66,7 +67,7 @@
     const after = String(current || "").split("\n");
     let start = 0;
     while (start < before.length && start < after.length && before[start] === after[start]) start++;
-    if (start === before.length && start === after.length) return '<p class="field-hint">正文无变化</p>';
+    if (start === before.length && start === after.length) return `<p class="field-hint">${t("正文无变化")}</p>`;
     let endBefore = before.length, endAfter = after.length;
     while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) { endBefore--; endAfter--; }
     return '<pre class="revision-diff">' + before.slice(Math.max(0, start - 2), start).map(line => `<span>  ${escapeHTML(line)}</span>`).join("") + before.slice(start, endBefore).map(line => `<span class="diff-removed">− ${escapeHTML(line)}</span>`).join("") + after.slice(start, endAfter).map(line => `<span class="diff-added">+ ${escapeHTML(line)}</span>`).join("") + after.slice(endAfter, endAfter + 2).map(line => `<span>  ${escapeHTML(line)}</span>`).join("") + '</pre>';

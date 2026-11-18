@@ -1,4 +1,6 @@
 (function () {
+  const { t, locale } = window.EngramI18n;
+  window.EngramI18n.initialize();
   const state = {
     tenants: [],
     principals: [],
@@ -52,35 +54,35 @@
     }
     if (!resp.ok) {
       const raw = (data && (data.message || data.error)) || "";
-      const msg = ERROR_CODES[data && data.code] || translateError(raw) || raw || `请求失败（${resp.status}），请重试。`;
+      const msg = ERROR_CODES[data && data.code] || translateError(raw) || raw || t`请求失败（${resp.status}），请重试。`;
       throw new Error(msg);
     }
     return data;
   }
 
   const ERROR_CODES = {
-    UNAUTHENTICATED: "登录已过期或账号密码不正确，请重新登录。",
-    UNAUTHORIZED: "权限不足，无法完成这个操作。",
-    INTERNAL_ERROR: "暂时无法完成操作，请稍后重试。",
-    RATE_LIMITED: "操作过于频繁，请稍后重试。",
-    VERSION_CONFLICT: "这条知识刚被其他客户端修改，请刷新后重试。",
-    MEMORY_NOT_FOUND: "这条知识不存在或已被删除，请刷新后重试。",
+    UNAUTHENTICATED: t("登录已过期或账号密码不正确，请重新登录。"),
+    UNAUTHORIZED: t("权限不足，无法完成这个操作。"),
+    INTERNAL_ERROR: t("暂时无法完成操作，请稍后重试。"),
+    RATE_LIMITED: t("操作过于频繁，请稍后重试。"),
+    VERSION_CONFLICT: t("这条知识刚被其他客户端修改，请刷新后重试。"),
+    MEMORY_NOT_FOUND: t("这条知识不存在或已被删除，请刷新后重试。"),
   };
 
   // ERROR_MESSAGES translates validation messages the management API returns in English.
   const ERROR_MESSAGES = [
-    [/^(invalid remote url|remote host cannot be empty|invalid repository path)/i, "仓库地址格式不正确，请填写 SSH 或 HTTPS 形式的 Git 地址。"],
-    [/^(path must be relative|relative path must not contain)/i, "子目录请填写相对仓库根目录的路径，不能以 / 开头，也不能包含 . 或 ..。"],
-    [/^principal is not a member of the specified tenant/i, "该成员还不属于所选租户，请先在「租户与成员」页把成员绑定到这个租户。"],
-    [/^principal must be a member of the project's tenant/i, "该成员还不属于这个项目所在的租户，请先绑定租户。"],
-    [/^project name is required/i, "请填写项目名称。"],
-    [/^tenant name is required/i, "请填写租户名称。"],
-    [/^tenant_name, principal_subject, and principal_display_name are required/i, "请填写租户名称、成员标识和显示名称。"],
-    [/^project not found/i, "项目不存在，请刷新后重新选择。"],
-    [/^memory (is not deleted|is already deleted|is deleted|pinned state is unchanged)/i, "这条知识的状态已经变化，请刷新后重试。"],
-    [/^invalid (tenant_id|principal_id|project_id)/i, "请先选择租户、成员或项目。"],
-    [/^invalid (json body|tenant role|principal mode|identity provider)/i, "提交的内容不正确，请刷新页面后重试。"],
-    [/admin password change required/i, "请先修改管理员密码。"],
+    [/^(invalid remote url|remote host cannot be empty|invalid repository path)/i, t("仓库地址格式不正确，请填写 SSH 或 HTTPS 形式的 Git 地址。")],
+    [/^(path must be relative|relative path must not contain)/i, t("子目录请填写相对仓库根目录的路径，不能以 / 开头，也不能包含 . 或 ..。")],
+    [/^principal is not a member of the specified tenant/i, t("该成员还不属于所选租户，请先在「租户与成员」页把成员绑定到这个租户。")],
+    [/^principal must be a member of the project's tenant/i, t("该成员还不属于这个项目所在的租户，请先绑定租户。")],
+    [/^project name is required/i, t("请填写项目名称。")],
+    [/^tenant name is required/i, t("请填写租户名称。")],
+    [/^tenant_name, principal_subject, and principal_display_name are required/i, t("请填写租户名称、成员标识和显示名称。")],
+    [/^project not found/i, t("项目不存在，请刷新后重新选择。")],
+    [/^memory (is not deleted|is already deleted|is deleted|pinned state is unchanged)/i, t("这条知识的状态已经变化，请刷新后重试。")],
+    [/^invalid (tenant_id|principal_id|project_id)/i, t("请先选择租户、成员或项目。")],
+    [/^invalid (json body|tenant role|principal mode|identity provider)/i, t("提交的内容不正确，请刷新页面后重试。")],
+    [/admin password change required/i, t("请先修改管理员密码。")],
   ];
 
   function translateError(message) {
@@ -88,8 +90,8 @@
     return hit ? hit[1] : "";
   }
 
-  const TENANT_ROLES = { member: "全局只读成员", global_writer: "全局读写者", admin: "租户管理员" };
-  const PROJECT_ROLES = { reader: "只读成员", writer: "编辑者", maintainer: "维护者" };
+  const TENANT_ROLES = { member: t("全局只读成员"), global_writer: t("全局读写者"), admin: t("租户管理员") };
+  const PROJECT_ROLES = { reader: t("只读成员"), writer: t("编辑者"), maintainer: t("维护者") };
 
   // isSystemPrincipal marks the internal identity the console uses to act on a tenant's behalf.
   function isSystemPrincipal(principal) { return principal && principal.identity_provider === "system_webui"; }
@@ -101,7 +103,7 @@
   function actorName(actorID) {
     const actor = state.principals.find((person) => person.id === actorID);
     if (!actor) return actorID.slice(0, 8);
-    return isSystemPrincipal(actor) ? "管理控制台" : actor.display_name;
+    return isSystemPrincipal(actor) ? t("管理控制台") : actor.display_name;
   }
 
   // renderView separates first activation from an authenticated administration session.
@@ -123,8 +125,8 @@
     }
 
     if (sessionState.must_change_password) {
-      $("pwd-view-title").textContent = "设置管理员密码";
-      $("pwd-view-subtitle").textContent = "你正在使用临时密码。请设置新的管理员密码以完成首次激活。";
+      $("pwd-view-title").textContent = t("设置管理员密码");
+      $("pwd-view-subtitle").textContent = t("你正在使用临时密码。请设置新的管理员密码以完成首次激活。");
       $("current-admin-password-group").classList.add("hidden");
       $("current-admin-password").required = false;
       $("btn-cancel-change-pwd").classList.add("hidden");
@@ -176,8 +178,8 @@
 
       const initialized = state.tenants.length > 0;
       $("tab-overview").classList.toggle("needs-setup", !initialized);
-      $("overview-title").textContent = initialized ? "让知识在项目与客户端之间流动" : "连接你的第一个 AI 客户端";
-      $("overview-description").textContent = initialized ? "浏览最近沉淀的知识，管理项目和客户端接入。" : "创建空间、关联项目，再复制客户端配置，即可开始共享记忆。";
+      $("overview-title").textContent = initialized ? t("让知识在项目与客户端之间流动") : t("连接你的第一个 AI 客户端");
+      $("overview-description").textContent = initialized ? t("浏览最近沉淀的知识，管理项目和客户端接入。") : t("创建空间、关联项目，再复制客户端配置，即可开始共享记忆。");
       if (state.initialized === null) {
         $("quickstart-panel").open = !initialized;
         $("create-token-panel").open = !state.tokens.length;
@@ -196,7 +198,7 @@
         await loadMemories({ quiet: options.quiet });
       }
       await loadRecentMemories();
-      $("last-refresh").textContent = "已更新 " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      $("last-refresh").textContent = t("已更新 ") + new Date().toLocaleTimeString(locale, { hour12: false });
     } catch (err) {
       showToast(err.message, true);
     }
@@ -225,8 +227,8 @@
 
     fillSelect("mem-filter-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
     renderMemoryProjectFilter();
-    fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, `${categoryLabel(f.value)}（${f.count}）`]));
-    fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, `${f.value}（${f.count}）`]));
+    fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
+    fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
 
     const prinSelects = ["pm-principal", "tok-principal", "prin-existing"];
     prinSelects.forEach((id) => {
@@ -234,7 +236,7 @@
       if (!sel) return;
       const prev = sel.value;
       sel.innerHTML = visiblePrincipals()
-        .map((p) => `<option value="${p.id}">${escapeHtml(p.display_name)}（${escapeHtml(p.subject)}）</option>`)
+        .map((p) => t`<option value="${p.id}">${escapeHtml(p.display_name)}（${escapeHtml(p.subject)}）</option>`)
         .join("");
       if (prev && Array.from(sel.options).some((option) => option.value === prev)) sel.value = prev;
     });
@@ -258,7 +260,7 @@
     const prev = sel.value || sel.dataset.pending || "";
     const known = new Set(entries.map(([value]) => value));
     if (prev && !known.has(prev)) entries = entries.concat([[prev, prev]]);
-    sel.innerHTML = '<option value="">全部</option>' + entries.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join("");
+    sel.innerHTML = t('<option value="">全部</option>') + entries.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join("");
     sel.value = prev;
     delete sel.dataset.pending;
   }
@@ -270,20 +272,20 @@
   }
 
   // tenantLabel adds a short identifier only when two tenants share a name.
-  function tenantLabel(t) {
-    return state.tenants.filter((other) => other.name === t.name).length > 1 ? `${t.name}（${t.id.slice(0, 6)}）` : t.name;
+  function tenantLabel(tenant) {
+    return state.tenants.filter((other) => other.name === tenant.name).length > 1 ? t`${tenant.name}（${tenant.id.slice(0, 6)}）` : tenant.name;
   }
 
   // projectLabel names a project with its tenant and, when names repeat, a short identifier.
   function projectLabel(p) {
     const twins = state.projects.filter((other) => other.name === p.name && other.tenant_id === p.tenant_id).length > 1;
-    return `${p.name}（${p.tenant_name}${twins ? " · " + p.id.slice(0, 6) : ""}）`;
+    return t`${p.name}（${p.tenant_name}${twins ? " · " + p.id.slice(0, 6) : ""}）`;
   }
 
   // renderTenantsTable shows tenant status and copyable compact identifiers.
   function renderTenantsTable() {
     const tbody = $("tenants-table").querySelector("tbody");
-    if (!state.tenants.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty-state">尚无租户，请先在概览完成快速接入。</td></tr>'; return; }
+    if (!state.tenants.length) { tbody.innerHTML = t('<tr><td colspan="4" class="empty-state">尚无租户，请先在概览完成快速接入。</td></tr>'); return; }
     tbody.innerHTML = state.tenants
       .map(
         (t) => `
@@ -298,13 +300,13 @@
       .join("");
   }
 
-  const PROVIDERS = { api_token: "客户端密钥", oidc: "单点登录", mtls: "双向 TLS 证书" };
+  const PROVIDERS = { api_token: t("客户端密钥"), oidc: t("单点登录"), mtls: t("双向 TLS 证书") };
 
   // renderPrincipalsTable presents identities with their explicit tenant memberships.
   function renderPrincipalsTable() {
     const tbody = $("principals-table").querySelector("tbody");
     const principals = visiblePrincipals();
-    if (!principals.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-state">尚无成员，请先创建租户和成员。</td></tr>'; return; }
+    if (!principals.length) { tbody.innerHTML = t('<tr><td colspan="5" class="empty-state">尚无成员，请先创建租户和成员。</td></tr>'); return; }
     tbody.innerHTML = principals
       .map((p) => {
         const roles = (p.tenant_roles || [])
@@ -316,7 +318,7 @@
         <td><strong>${escapeHtml(p.display_name)}</strong></td>
         <td>${escapeHtml(PROVIDERS[p.identity_provider] || p.identity_provider)}<div class="field-hint"><code>${escapeHtml(p.subject)}</code></div></td>
         <td><span class="badge ${p.status === "active" ? "success" : "danger"}">${statusLabel(p.status)}</span></td>
-        <td>${roles || '<span class="muted">未加入任何租户</span>'}</td>
+        <td>${roles || t('<span class="muted">未加入任何租户</span>')}</td>
       </tr>`;
       })
       .join("");
@@ -325,17 +327,17 @@
   // renderProjectsTable keeps project names primary and technical identifiers compact.
   function renderProjectsTable() {
     const tbody = $("projects-table").querySelector("tbody");
-    if (!state.projects.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-state">尚未关联项目，可在下方注册第一个项目。</td></tr>'; return; }
+    if (!state.projects.length) { tbody.innerHTML = t('<tr><td colspan="5" class="empty-state">尚未关联项目，可在下方注册第一个项目。</td></tr>'); return; }
     tbody.innerHTML = state.projects
       .map((p) => {
         const markerHtml = p.marker
           ? `${identifier(p.marker)}`
-          : `<span class="muted">未生成</span>`;
+          : t`<span class="muted">未生成</span>`;
         const reposHtml = (p.repositories || [])
           .map(
             (r) =>
               `<div><code>${escapeHtml(r.canonical_remote)}</code> ${
-                r.workspace_path ? `<span class="badge">子目录 ${escapeHtml(r.workspace_path)}</span>` : ""
+                r.workspace_path ? t`<span class="badge">子目录 ${escapeHtml(r.workspace_path)}</span>` : ""
               }</div>`
           )
           .join("");
@@ -347,8 +349,8 @@
         <td><strong>${escapeHtml(p.name)}</strong><br/>${identifier(p.id)}</td>
         <td>${escapeHtml(p.tenant_name)}</td>
         <td>${markerHtml}</td>
-        <td>${reposHtml || '<span class="muted">未关联仓库，通过标记文件识别</span>'}</td>
-        <td>${membersHtml || '<span class="muted">仅租户管理员</span>'}</td>
+        <td>${reposHtml || t('<span class="muted">未关联仓库，通过标记文件识别</span>')}</td>
+        <td>${membersHtml || t('<span class="muted">仅租户管理员</span>')}</td>
       </tr>`;
       })
       .join("");
@@ -366,13 +368,13 @@
       state.revealedTokens[tokenId] = res.token;
       return res.token;
     }
-    throw new Error("未能获取密钥明文。");
+    throw new Error(t("未能获取密钥明文。"));
   }
 
   // renderTokensTable lists client credentials and exposes their configuration actions.
   function renderTokensTable() {
     const tbody = $("tokens-table").querySelector("tbody");
-    if (!state.tokens.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">尚无客户端密钥，可在下方为客户端生成密钥。</td></tr>'; return; }
+    if (!state.tokens.length) { tbody.innerHTML = t('<tr><td colspan="7" class="empty-state">尚无客户端密钥，可在下方为客户端生成密钥。</td></tr>'); return; }
     tbody.innerHTML = state.tokens
       .map((tk) => {
         const active = !tk.revoked_at;
@@ -380,30 +382,30 @@
         const tokenCell = revealed
           ? `<code>${escapeHtml(revealed)}</code>`
           : `<code>${escapeHtml(tk.token_prefix)}…</code>${
-              tk.can_reveal ? "" : ' <small class="muted" title="服务端签名密钥变更后无法再解密这个密钥，它仍可正常鉴权；需要明文时请重新签发。">（无法查看明文）</small>'
+              tk.can_reveal ? "" : t(' <small class="muted" title="服务端签名密钥变更后无法再解密这个密钥，它仍可正常鉴权；需要明文时请重新签发。">（无法查看明文）</small>')
             }`;
         const revealBtns = tk.can_reveal
-          ? `
-            <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? "隐藏" : "查看"}</button>
+          ? t`
+            <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? t("隐藏") : t("查看")}</button>
             <button type="button" class="secondary small btn-copy-token" data-id="${tk.id}">复制</button>
             <button type="button" class="secondary small btn-apply-token" data-id="${tk.id}">填入配置</button>
           `
           : "";
         const lastUsed = tk.last_used_at
           ? `<time title="${escapeHtml(formatDate(tk.last_used_at))}">${relativeTime(tk.last_used_at)}</time>`
-          : '<span class="muted">从未使用</span>';
+          : t('<span class="muted">从未使用</span>');
         return `
       <tr class="${active ? "" : "row-muted"}">
         <td><strong>${escapeHtml(tk.name)}</strong></td>
         <td>${tokenCell}</td>
         <td>${escapeHtml(tk.tenant_name)}<div class="field-hint">${escapeHtml(tk.principal_name)}</div></td>
-        <td><span class="badge nowrap ${active ? "success" : "danger"}">${active ? "正常" : "已吊销"}</span></td>
+        <td><span class="badge nowrap ${active ? "success" : "danger"}">${active ? t("正常") : t("已吊销")}</span></td>
         <td class="date-cell">${lastUsed}</td>
         <td class="date-cell">${formatDate(tk.created_at)}</td>
         <td>
           <div class="row-actions">
             ${active ? revealBtns : ""}
-            ${active ? `<button type="button" class="danger-outline small btn-revoke-token" data-id="${tk.id}">吊销</button>` : ""}
+            ${active ? t`<button type="button" class="danger-outline small btn-revoke-token" data-id="${tk.id}">吊销</button>` : ""}
           </div>
         </td>
       </tr>`;
@@ -450,7 +452,7 @@
           const card = $("client-guides-card");
           card.open = true;
           if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
-          showToast("已把密钥填入客户端接入配置");
+          showToast(t("已把密钥填入客户端接入配置"));
         } catch (err) {
           showToast(err.message, true);
         }
@@ -461,9 +463,9 @@
       btn.addEventListener("click", async () => {
         const token = state.tokens.find((item) => item.id === btn.dataset.id);
         const confirmed = await confirmDialog({
-          title: "吊销这个客户端密钥？",
-          message: `「${token ? token.name : "该密钥"}」（${token ? token.token_prefix + "…" : ""}）吊销后立即失效，使用它的 AI 客户端将无法再访问 Engram。此操作无法撤销。`,
-          confirmText: "吊销密钥",
+          title: t("吊销这个客户端密钥？"),
+          message: t`「${token ? token.name : t("该密钥")}」（${token ? token.token_prefix + "…" : ""}）吊销后立即失效，使用它的 AI 客户端将无法再访问 Engram。此操作无法撤销。`,
+          confirmText: t("吊销密钥"),
         });
         if (!confirmed) return;
         try {
@@ -471,7 +473,7 @@
             method: "POST",
             body: JSON.stringify({ id: btn.dataset.id }),
           });
-          showToast("客户端密钥已吊销");
+          showToast(t("客户端密钥已吊销"));
           refreshAllData();
         } catch (err) {
           showToast(err.message, true);
@@ -495,8 +497,8 @@
     if (!options.quiet) {
       // Remove stale actions while a new result set is pending, including on slow connections.
       state.memories = [];
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">正在加载知识…</td></tr>';
-      $("memory-list-status").textContent = "正在加载知识…";
+      tbody.innerHTML = t('<tr><td colspan="6" class="empty-state">正在加载知识…</td></tr>');
+      $("memory-list-status").textContent = t("正在加载知识…");
     }
     const filters = memoryFilterValues();
     const params = new URLSearchParams({ page: state.memoryPage, page_size: state.memoryPageSize });
@@ -514,20 +516,20 @@
       const filtered = !!(filters.tenant || filters.scope || filters.project || filters.category || filters.tag || filters.q || filters.deleted !== "active");
       if (!state.memories.length) {
         const trash = filters.deleted === "deleted";
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><strong>${trash ? "回收站是空的" : filtered ? "未找到匹配的知识" : "知识库还是空的"}</strong><p>${trash ? "删除的知识会先进入回收站，可随时恢复。" : filtered ? "试试其他关键词，或点击清除筛选。" : "连接 AI 客户端后，让 Agent 保存第一条共享记忆。"}</p></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><strong>${trash ? t("回收站是空的") : filtered ? t("未找到匹配的知识") : t("知识库还是空的")}</strong><p>${trash ? t("删除的知识会先进入回收站，可随时恢复。") : filtered ? t("试试其他关键词，或点击清除筛选。") : t("连接 AI 客户端后，让 Agent 保存第一条共享记忆。")}</p></td></tr>`;
       }
-      const trashHint = filters.deleted === "active" && state.deletedCount ? ` · <button type="button" class="link-btn" id="btn-open-trash">回收站 ${state.deletedCount} 条</button>` : "";
-      $("memory-list-status").innerHTML = `共 ${res.total} 条知识${filtered ? " · 已应用筛选" : ""}${trashHint}`;
+      const trashHint = filters.deleted === "active" && state.deletedCount ? t` · <button type="button" class="link-btn" id="btn-open-trash">回收站 ${state.deletedCount} 条</button>` : "";
+      $("memory-list-status").innerHTML = t`共 ${res.total} 条知识${filtered ? t(" · 已应用筛选") : ""}${trashHint}`;
       const pages = Math.max(1, Math.ceil(res.total / state.memoryPageSize));
-      $("memory-page-info").textContent = `第 ${res.page} / ${pages} 页`;
+      $("memory-page-info").textContent = t`第 ${res.page} / ${pages} 页`;
       $("btn-memory-prev").disabled = res.page <= 1;
       $("btn-memory-next").disabled = res.page >= pages;
       if (activeTab() === "tab-memories") syncLocation();
     } catch (err) {
       if (request !== state.memoryRequest) return;
       state.memories = [];
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">知识加载失败，请点击搜索重试。</td></tr>';
-      $("memory-list-status").textContent = "加载失败，当前结果不可用";
+      tbody.innerHTML = t('<tr><td colspan="6" class="empty-state">知识加载失败，请点击搜索重试。</td></tr>');
+      $("memory-list-status").textContent = t("加载失败，当前结果不可用");
       $("memory-page-info").textContent = "";
       showToast(err.message, true);
     } finally {
@@ -541,12 +543,12 @@
     const project = m.scope === "global" ? "" : `<button type="button" class="chip-link" data-filter="mem-filter-project" data-value="${m.project_id}">${escapeHtml(m.project_name)}</button>`;
     const tags = (m.tags || []).map((tag) => `<button type="button" class="tag-chip" data-filter="mem-filter-tag" data-value="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`).join("");
     return `<tr data-memory-id="${m.id}" class="memory-row${deleted ? " row-muted" : ""}">
-      <td class="memory-main"><button type="button" class="memory-title btn-view-mem" data-id="${m.id}">${highlight(m.title, keyword)}</button>${m.is_pinned ? '<span class="badge warning">置顶</span>' : ""}<p class="memory-snippet">${memorySnippet(m.content_md, keyword)}</p></td>
-      <td><span class="badge nowrap">${m.scope === "global" ? "全局" : "项目"}</span><div>${project}</div></td>
+      <td class="memory-main"><button type="button" class="memory-title btn-view-mem" data-id="${m.id}">${highlight(m.title, keyword)}</button>${m.is_pinned ? t('<span class="badge warning">置顶</span>') : ""}<p class="memory-snippet">${memorySnippet(m.content_md, keyword)}</p></td>
+      <td><span class="badge nowrap">${m.scope === "global" ? t("全局") : t("项目")}</span><div>${project}</div></td>
       <td><button type="button" class="chip-link" data-filter="mem-filter-category" data-value="${escapeHtml(m.category)}">${escapeHtml(categoryLabel(m.category))}</button><div class="tag-list">${tags}</div></td>
-      <td class="nowrap">v${m.version} <span class="badge ${deleted ? "danger" : "success"}">${deleted ? "已删除" : statusLabel(m.status)}</span></td>
+      <td class="nowrap">v${m.version} <span class="badge ${deleted ? "danger" : "success"}">${deleted ? t("已删除") : statusLabel(m.status)}</span></td>
       <td class="date-cell"><time title="${escapeHtml(formatDate(m.updated_at))}">${relativeTime(m.updated_at)}</time></td>
-      <td><div class="row-actions">${deleted ? `<button type="button" class="small btn-restore-mem" data-id="${m.id}">恢复</button>` : `<button type="button" class="secondary small btn-view-mem" data-id="${m.id}">查看</button>`}</div></td>
+      <td><div class="row-actions">${deleted ? t`<button type="button" class="small btn-restore-mem" data-id="${m.id}">恢复</button>` : t`<button type="button" class="secondary small btn-view-mem" data-id="${m.id}">查看</button>`}</div></td>
     </tr>`;
   }
 
@@ -570,7 +572,7 @@
       .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
       .replace(/\s+/g, " ")
       .trim();
-    if (!text) return '<span class="muted">（无正文）</span>';
+    if (!text) return t('<span class="muted">（无正文）</span>');
     let start = 0;
     const index = keyword ? text.toLowerCase().indexOf(keyword.toLowerCase()) : -1;
     if (index > 40) start = index - 30;
@@ -604,7 +606,7 @@
     loadMemories();
   }
 
-  const REVISION_FIELDS = { title: "标题", category: "分类", tags: "标签", status: "状态", is_pinned: "置顶", deleted_at: "删除时间" };
+  const REVISION_FIELDS = { title: t("标题"), category: t("分类"), tags: t("标签"), status: t("状态"), is_pinned: t("置顶"), deleted_at: t("删除时间") };
 
   // revisionContent reads snapshot text from both the current and the legacy snapshot field names.
   function revisionContent(snapshot) { return snapshot.content ?? snapshot.content_md ?? ""; }
@@ -616,10 +618,10 @@
     if ($("memory-detail-card").classList.contains("hidden")) state.detailTrigger = document.activeElement;
     $("memory-detail-card").classList.remove("hidden");
     document.body.classList.add("drawer-open");
-    $("detail-title").textContent = "正在加载知识…";
+    $("detail-title").textContent = t("正在加载知识…");
     $("detail-meta").textContent = "";
     $("detail-frontmatter").classList.add("hidden");
-    $("detail-preview").textContent = "正在加载正文与历史…";
+    $("detail-preview").textContent = t("正在加载正文与历史…");
     $("detail-revisions").textContent = "";
     $("detail-content").textContent = "";
     ["btn-pin-memory", "btn-delete-memory", "btn-restore-memory", "btn-hard-delete-memory"].forEach((id) => $(id).classList.add("hidden"));
@@ -628,19 +630,19 @@
     try {
       const res = await api(`/api/admin/memories?memory_id=${encodeURIComponent(memId)}`);
       const mem = (res.items || [])[0];
-      if (!mem) throw new Error("这条知识已不存在，请关闭详情并刷新列表。");
+      if (!mem) throw new Error(t("这条知识已不存在，请关闭详情并刷新列表。"));
       const revRes = await api(`/api/admin/memories/revisions?memory_id=${encodeURIComponent(memId)}`);
       if (request !== state.detailRequest) return;
       state.selectedMemory = mem;
       const deleted = !!mem.deleted_at;
       $("detail-title").textContent = mem.title;
       const chips = [
-        `<span class="badge">${mem.scope === "global" ? "全局记忆" : "项目 · " + escapeHtml(mem.project_name)}</span>`,
+        `<span class="badge">${mem.scope === "global" ? t("全局记忆") : t("项目 · ") + escapeHtml(mem.project_name)}</span>`,
         `<button type="button" class="chip-link" data-filter="mem-filter-category" data-value="${escapeHtml(mem.category)}">${escapeHtml(categoryLabel(mem.category))}</button>`,
         ...(mem.tags || []).map((tag) => `<button type="button" class="tag-chip" data-filter="mem-filter-tag" data-value="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`),
-        mem.is_pinned ? '<span class="badge warning">置顶</span>' : "",
-        deleted ? '<span class="badge danger">已删除</span>' : "",
-        `<span class="meta-text">v${mem.version} · ${escapeHtml(formatDate(mem.updated_at))} 更新</span>`,
+        mem.is_pinned ? t('<span class="badge warning">置顶</span>') : "",
+        deleted ? t('<span class="badge danger">已删除</span>') : "",
+        t`<span class="meta-text">v${mem.version} · ${escapeHtml(formatDate(mem.updated_at))} 更新</span>`,
         identifier(mem.id),
       ];
       $("detail-meta").innerHTML = chips.filter(Boolean).join("");
@@ -649,7 +651,7 @@
       $("detail-frontmatter").classList.toggle("hidden", !fields.length);
       $("detail-content").textContent = mem.content_md || "";
       $("detail-preview").innerHTML = window.EngramMarkdown.render(body);
-      $("btn-pin-memory").textContent = mem.is_pinned ? "取消置顶" : "置顶";
+      $("btn-pin-memory").textContent = mem.is_pinned ? t("取消置顶") : t("置顶");
       $("btn-pin-memory").classList.toggle("hidden", deleted);
       $("btn-delete-memory").classList.toggle("hidden", deleted);
       $("btn-restore-memory").classList.toggle("hidden", !deleted);
@@ -659,16 +661,16 @@
         const previous = revisions[index + 1];
         const snap = revision.snapshot || {};
         const old = previous ? previous.snapshot || {} : {};
-        const operation = { create: "创建", update: "更新", delete: "删除", restore: "恢复", promote: "提升至全局" }[revision.operation] || revision.operation;
-        const meta = previous ? Object.keys(REVISION_FIELDS).filter((key) => JSON.stringify(snap[key] ?? null) !== JSON.stringify(old[key] ?? null)).map((key) => `${REVISION_FIELDS[key]}：${revisionValue(key, old[key])} → ${revisionValue(key, snap[key])}`).join("\n") : "";
+        const operation = { create: t("创建"), update: t("更新"), delete: t("删除"), restore: t("恢复"), promote: t("提升至全局") }[revision.operation] || revision.operation;
+        const meta = previous ? Object.keys(REVISION_FIELDS).filter((key) => JSON.stringify(snap[key] ?? null) !== JSON.stringify(old[key] ?? null)).map((key) => t`${REVISION_FIELDS[key]}：${revisionValue(key, old[key])} → ${revisionValue(key, snap[key])}`).join("\n") : "";
         const diff = previous || revision.operation === "create" ? window.EngramMarkdown.diff(revisionContent(old), revisionContent(snap)) : "";
-        return `<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actorName(revision.actor_id))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
-      }).join("") || '<p class="empty-state">暂无版本历史</p>';
+        return t`<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actorName(revision.actor_id))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
+      }).join("") || t('<p class="empty-state">暂无版本历史</p>');
       if (updateURL) syncLocation(true);
     } catch (err) {
       if (request !== state.detailRequest) return;
       state.selectedMemory = null;
-      $("detail-title").textContent = "无法打开知识";
+      $("detail-title").textContent = t("无法打开知识");
       $("detail-preview").textContent = err.message;
       showToast(err.message, true);
     }
@@ -676,11 +678,11 @@
 
   // revisionValue formats a changed revision field for the history summary.
   function revisionValue(key, value) {
-    if (key === "is_pinned") return value ? "是" : "否";
-    if (key === "deleted_at") return value ? formatDate(value) : "无";
-    if (key === "status") return value ? statusLabel(value) : "无";
-    if (Array.isArray(value)) return value.length ? value.join("、") : "无";
-    return value == null || value === "" ? "无" : JSON.stringify(value);
+    if (key === "is_pinned") return value ? t("是") : t("否");
+    if (key === "deleted_at") return value ? formatDate(value) : t("无");
+    if (key === "status") return value ? statusLabel(value) : t("无");
+    if (Array.isArray(value)) return value.length ? value.join(t("、")) : t("无");
+    return value == null || value === "" ? t("无") : JSON.stringify(value);
   }
 
   // closeMemoryDetail cancels pending rendering and restores the original list focus.
@@ -696,13 +698,13 @@
 
   // memoryAction applies delete, restore or pin on the displayed version and refreshes both views.
   async function memoryAction(action, mem, extra = {}) {
-    const labels = { delete: "已移入回收站，可随时恢复", restore: "已从回收站恢复", pin: extra.is_pinned ? "已置顶" : "已取消置顶" };
+    const labels = { delete: t("已移入回收站，可随时恢复"), restore: t("已从回收站恢复"), pin: extra.is_pinned ? t("已置顶") : t("已取消置顶") };
     try {
       await api(`/api/admin/memories/${action}`, {
         method: "POST",
         body: JSON.stringify(Object.assign({ tenant_id: mem.tenant_id, memory_id: mem.id, expected_version: mem.version }, extra)),
       });
-      showToast(`「${mem.title}」${labels[action]}`);
+      showToast(t`「${mem.title}」${labels[action]}`);
       const reopen = detailIsOpen() && state.selectedMemory && state.selectedMemory.id === mem.id;
       await refreshAllData({ quiet: true });
       if (reopen) {
@@ -710,7 +712,7 @@
         await viewMemoryDetail(mem.id, false);
       }
     } catch (err) {
-      showToast(/version conflict/i.test(err.message) ? "这条知识刚被其他客户端修改，请刷新后重试。" : err.message, true);
+      showToast(/version conflict/i.test(err.message) ? t("这条知识刚被其他客户端修改，请刷新后重试。") : err.message, true);
     }
   }
 
@@ -736,19 +738,19 @@
 
   function getMemoryInstructionSnippet() {
     return [
-      "## Engram 共享记忆使用规范",
+      t("## Engram 共享记忆使用规范"),
       "",
-      "如果当前会话已接入 `engram` MCP 工具，请按以下流程使用：",
+      t("如果当前会话已接入 `engram` MCP 工具，请按以下流程使用："),
       "",
-      "1. **会话开始先识别项目**：",
-      "   - 获取当前仓库的 `git remote -v`（以及根目录或子目录 `.engram-project` 文件中的 UUID，如有），调用 `memory_discover` 获取 `project_context` 与范围索引。",
-      "   - 注意：`workspace_path` 仅用于 Monorepo 子目录（相对于 Git 根目录），**不要传入本地绝对路径**；若当前不在 Git 仓库中且仅需全局记忆，传入 `allow_global_only: true`。",
-      "   - 同一会话内复用返回的 `project_context`，无需重复调用 `memory_discover`。",
-      "2. **先查索引，再按需检索与读取**：",
-      "   - 先浏览 `memory_discover` 返回的 `pinned`、`category_stats` 和 `recent`，若已命中目标可直接调用 `memory_read`。",
-      "   - 需要按关键词、分类或标签检索时调用 `memory_query`，定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。",
-      "3. **任务过程中及时沉淀与更新**：",
-      "   - 遇到有长期价值的架构约定、环境配置、排障结论或跨项目规范时，调用 `memory_create` / `memory_update` 沉淀或更新记忆（更新需传 `expected_version` 与唯一 `idempotency_key`），**严禁写入密码、Token、私钥等敏感凭据**。",
+      t("1. **会话开始先识别项目**："),
+      t("   - 获取当前仓库的 `git remote -v`（以及根目录或子目录 `.engram-project` 文件中的 UUID，如有），调用 `memory_discover` 获取 `project_context` 与范围索引。"),
+      t("   - 注意：`workspace_path` 仅用于 Monorepo 子目录（相对于 Git 根目录），**不要传入本地绝对路径**；若当前不在 Git 仓库中且仅需全局记忆，传入 `allow_global_only: true`。"),
+      t("   - 同一会话内复用返回的 `project_context`，无需重复调用 `memory_discover`。"),
+      t("2. **先查索引，再按需检索与读取**："),
+      t("   - 先浏览 `memory_discover` 返回的 `pinned`、`category_stats` 和 `recent`，若已命中目标可直接调用 `memory_read`。"),
+      t("   - 需要按关键词、分类或标签检索时调用 `memory_query`，定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。"),
+      t("3. **任务过程中及时沉淀与更新**："),
+      t("   - 遇到有长期价值的架构约定、环境配置、排障结论或跨项目规范时，调用 `memory_create` / `memory_update` 沉淀或更新记忆（更新需传 `expected_version` 与唯一 `idempotency_key`），**严禁写入密码、Token、私钥等敏感凭据**。"),
     ].join("\n");
   }
 
@@ -764,12 +766,12 @@
       if (!["http:", "https:"].includes(serverURL.protocol) || serverURL.username || serverURL.password || serverURL.search || serverURL.hash || !["/", ""].includes(serverURL.pathname)) throw new Error("invalid origin");
       serverInput.setCustomValidity("");
     } catch (_) {
-      serverInput.setCustomValidity("请输入不含路径、账号和参数的 HTTP 或 HTTPS 服务地址。");
-      document.querySelectorAll('.client-pane [id$="-mcp"], #guide-claude-cli').forEach((el) => { el.textContent = "请先填写有效的服务地址。"; });
+      serverInput.setCustomValidity(t("请输入不含路径、账号和参数的 HTTP 或 HTTPS 服务地址。"));
+      document.querySelectorAll('.client-pane [id$="-mcp"], #guide-claude-cli').forEach((el) => { el.textContent = t("请先填写有效的服务地址。"); });
       return;
     }
     const mcpUrl = `${serverURL.origin}/mcp`;
-    $("guide-server-hint").textContent = ["localhost", "127.0.0.1", "[::1]"].includes(serverURL.hostname) ? "当前地址仅适合同机使用；跨设备时请改为可访问的域名或 IP。" : "请确认 AI 客户端所在设备可以访问此地址。";
+    $("guide-server-hint").textContent = ["localhost", "127.0.0.1", "[::1]"].includes(serverURL.hostname) ? t("当前地址仅适合同机使用；跨设备时请改为可访问的域名或 IP。") : t("请确认 AI 客户端所在设备可以访问此地址。");
 
     const codexToml = [
       "[mcp_servers.engram]",
@@ -777,7 +779,7 @@
       `url = "${mcpUrl}"`,
       `http_headers = { Authorization = ${JSON.stringify("Bearer " + rawToken)} }`,
       "",
-      "# 若仅在命令行 CLI 使用，也可改用环境变量方式：",
+      t("# 若仅在命令行 CLI 使用，也可改用环境变量方式："),
       '# bearer_token_env_var = "ENGRAM_API_TOKEN"',
     ].join("\n");
 
@@ -900,37 +902,37 @@
   // loadRecentMemories keeps the dashboard useful after the first client is connected.
   async function loadRecentMemories() {
     const res = await api("/api/admin/memories?page_size=5&deleted=active&sort=recent");
-    $("recent-memories").innerHTML = (res.items || []).map((mem) => `<button type="button" class="recent-item" data-id="${mem.id}"><span><strong>${escapeHtml(mem.title)}</strong><small>${escapeHtml(mem.project_name || "全局记忆")} · ${escapeHtml(mem.category)}</small></span><time title="${escapeHtml(formatDate(mem.updated_at))}">${relativeTime(mem.updated_at)}</time></button>`).join("") || '<p class="empty-state">还没有知识。完成客户端接入后，让 Agent 保存第一条记忆。</p>';
+    $("recent-memories").innerHTML = (res.items || []).map((mem) => `<button type="button" class="recent-item" data-id="${mem.id}"><span><strong>${escapeHtml(mem.title)}</strong><small>${escapeHtml(mem.project_name || t("全局记忆"))} · ${escapeHtml(mem.category)}</small></span><time title="${escapeHtml(formatDate(mem.updated_at))}">${relativeTime(mem.updated_at)}</time></button>`).join("") || t('<p class="empty-state">还没有知识。完成客户端接入后，让 Agent 保存第一条记忆。</p>');
     $("recent-memories").querySelectorAll("button").forEach((btn) => btn.addEventListener("click", () => { switchMainTab("tab-memories"); viewMemoryDetail(btn.dataset.id); }));
   }
 
   // identifier shortens technical IDs while retaining their complete value for copying.
-  function identifier(value) { return `<button type="button" class="id-copy" data-copy-value="${escapeHtml(value)}" title="复制完整标识：${escapeHtml(value)}" aria-label="复制完整标识 ${escapeHtml(value)}">${escapeHtml(value.slice(0, 8))}… ⧉</button>`; }
+  function identifier(value) { return t`<button type="button" class="id-copy" data-copy-value="${escapeHtml(value)}" title="复制完整标识：${escapeHtml(value)}" aria-label="复制完整标识 ${escapeHtml(value)}">${escapeHtml(value.slice(0, 8))}… ⧉</button>`; }
 
   // statusLabel translates storage states into consistent user-facing labels.
-  function statusLabel(value) { return { active: "正常", disabled: "已停用", deprecated: "已过时", archived: "已归档" }[value] || escapeHtml(value); }
+  function statusLabel(value) { return { active: t("正常"), disabled: t("已停用"), deprecated: t("已过时"), archived: t("已归档") }[value] || escapeHtml(value); }
 
   // formatDate uses a consistent local-language timestamp across tables and history.
-  function formatDate(value) { return new Date(value).toLocaleString("zh-CN", { hour12: false }); }
+  function formatDate(value) { return new Date(value).toLocaleString(locale, { hour12: false }); }
 
   // relativeTime describes recent moments in words and falls back to the calendar date.
   function relativeTime(value) {
     const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000);
-    if (seconds < 60) return "刚刚";
-    if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
-    if (seconds < 86400 * 7) return `${Math.floor(seconds / 86400)} 天前`;
-    return new Date(value).toLocaleDateString("zh-CN");
+    if (seconds < 60) return t("刚刚");
+    if (seconds < 3600) return t`${Math.floor(seconds / 60)} 分钟前`;
+    if (seconds < 86400) return t`${Math.floor(seconds / 3600)} 小时前`;
+    if (seconds < 86400 * 7) return t`${Math.floor(seconds / 86400)} 天前`;
+    return new Date(value).toLocaleDateString(locale);
   }
 
   // categoryLabel shows common memory categories in Chinese while keeping custom ones verbatim.
   function categoryLabel(value) {
-    const names = { convention: "约定规范", architecture: "架构设计", decision: "决策记录", troubleshooting: "排障经验", environment: "环境配置", runbook: "操作手册", preference: "个人偏好", note: "笔记", workflow: "工作流程", reference: "参考资料" };
+    const names = { convention: t("约定规范"), architecture: t("架构设计"), decision: t("决策记录"), troubleshooting: t("排障经验"), environment: t("环境配置"), runbook: t("操作手册"), preference: t("个人偏好"), note: t("笔记"), workflow: t("工作流程"), reference: t("参考资料") };
     return names[value] ? `${names[value]} · ${value}` : value;
   }
 
   // confirmDialog asks before irreversible actions and resolves to the person's choice.
-  function confirmDialog({ title, message, confirmText = "确认", danger = true }) {
+  function confirmDialog({ title, message, confirmText = t("确认"), danger = true }) {
     const modal = $("confirm-modal");
     $("confirm-title").textContent = title;
     $("confirm-message").textContent = message;
@@ -963,7 +965,7 @@
 
   // showFormError places the failure next to the field or submit button that caused it.
   function showFormError(form, err) {
-    const message = (err && err.message) || "操作失败，请重试。";
+    const message = (err && err.message) || t("操作失败，请重试。");
     const field = err && err.field ? $(err.field) : null;
     if (field) {
       const hint = document.createElement("small");
@@ -999,15 +1001,15 @@
     $("prin-existing").required = !creating;
     const principal = state.principals.find((item) => item.id === $("prin-existing").value);
     const membership = principal && (principal.tenant_roles || []).find((role) => role.tenant_id === $("prin-tenant").value);
-    $("prin-existing-hint").textContent = principal ? `成员：${principal.display_name} · 当前租户角色：${membership ? TENANT_ROLES[membership.role] || membership.role : "尚未绑定"}。${mode === "update_role" ? "提交将明确替换此租户角色。" : "绑定不会修改成员名称或已有角色。"}` : "请先创建成员。";
-    $("btn-save-principal").textContent = { create: "创建新成员", bind: "绑定到当前租户", update_role: "保存租户角色变更" }[mode];
+    $("prin-existing-hint").textContent = principal ? t`成员：${principal.display_name} · 当前租户角色：${membership ? TENANT_ROLES[membership.role] || membership.role : t("尚未绑定")}。${mode === "update_role" ? t("提交将明确替换此租户角色。") : t("绑定不会修改成员名称或已有角色。")}` : t("请先创建成员。");
+    $("btn-save-principal").textContent = { create: t("创建新成员"), bind: t("绑定到当前租户"), update_role: t("保存租户角色变更") }[mode];
   }
 
   async function copyText(text) {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
-        showToast("已复制到剪贴板");
+        showToast(t("已复制到剪贴板"));
         return;
       }
     } catch (_) {
@@ -1021,9 +1023,9 @@
     ta.select();
     try {
       document.execCommand("copy");
-      showToast("已复制到剪贴板");
+      showToast(t("已复制到剪贴板"));
     } catch (_) {
-      showToast("复制失败，请手动选中复制", true);
+      showToast(t("复制失败，请手动选中复制"), true);
     } finally {
       document.body.removeChild(ta);
     }
@@ -1061,7 +1063,7 @@
     wrapper.className = "table-scroll";
     wrapper.tabIndex = 0;
     wrapper.setAttribute("role", "region");
-    wrapper.setAttribute("aria-label", (table.closest(".card, .glossary-section")?.querySelector("h2, h3")?.textContent || "数据表格") + "，可横向滚动");
+    wrapper.setAttribute("aria-label", (table.closest(".card, .glossary-section")?.querySelector("h2, h3")?.textContent || t("数据表格")) + t("，可横向滚动"));
     table.before(wrapper);
     wrapper.appendChild(table);
   });
@@ -1136,7 +1138,7 @@
     const curPwd = $("current-admin-password").value;
     const p1 = $("new-admin-password").value;
     const p2 = $("confirm-admin-password").value;
-    if (p1 !== p2) throw new FormError("两次输入的密码不一致，请重新确认。", "confirm-admin-password");
+    if (p1 !== p2) throw new FormError(t("两次输入的密码不一致，请重新确认。"), "confirm-admin-password");
     const s = await api("/api/admin/change-password", {
       method: "POST",
       body: JSON.stringify({
@@ -1147,14 +1149,14 @@
     $("current-admin-password").value = "";
     $("new-admin-password").value = "";
     $("confirm-admin-password").value = "";
-    showToast("管理员密码已更新！");
+    showToast(t("管理员密码已更新！"));
     renderView(s);
   });
 
   $("btn-open-change-pwd").addEventListener("click", () => {
     document.querySelector(".account-menu").open = false;
-    $("pwd-view-title").textContent = "修改管理员密码";
-    $("pwd-view-subtitle").textContent = "请输入当前密码，再设置新的管理员密码。修改后其他会话需要重新登录。";
+    $("pwd-view-title").textContent = t("修改管理员密码");
+    $("pwd-view-subtitle").textContent = t("请输入当前密码，再设置新的管理员密码。修改后其他会话需要重新登录。");
     $("app-view").classList.add("hidden");
     $("current-admin-password-group").classList.remove("hidden");
     $("current-admin-password").required = true;
@@ -1215,10 +1217,10 @@
     // Fold the form away so a second click cannot silently issue another credential.
     $("quickstart-form").classList.add("hidden");
     $("qs-result").classList.remove("hidden");
-    const notes = [`已为客户端「${res.token_name}」生成密钥。`];
-    if (res.project_reused) notes.push(`项目「${$("qs-project").value.trim()}」已存在，已直接复用。`);
-    if (res.remote_elsewhere) notes.push("该仓库地址已关联到其他项目，未重复关联。");
-    notes.push("下一步选择你的 AI 客户端并复制配置。");
+    const notes = [t`已为客户端「${res.token_name}」生成密钥。`];
+    if (res.project_reused) notes.push(t`项目「${$("qs-project").value.trim()}」已存在，已直接复用。`);
+    if (res.remote_elsewhere) notes.push(t("该仓库地址已关联到其他项目，未重复关联。"));
+    notes.push(t("下一步选择你的 AI 客户端并复制配置。"));
     $("qs-result-summary").textContent = notes.join("");
     $("qs-result-box").textContent = JSON.stringify(
       {
@@ -1233,7 +1235,7 @@
       null,
       2
     );
-    showToast("接入信息已就绪，下一步复制客户端配置。");
+    showToast(t("接入信息已就绪，下一步复制客户端配置。"));
     await refreshAllData();
     $("qs-result").scrollIntoView({ behavior: "smooth", block: "center" });
   });
@@ -1245,7 +1247,7 @@
       body: JSON.stringify({ name: $("tenant-name").value }),
     });
     $("tenant-name").value = "";
-    showToast("租户已创建");
+    showToast(t("租户已创建"));
     refreshAllData();
   });
 
@@ -1267,7 +1269,7 @@
     });
     $("prin-subject").value = "";
     $("prin-name").value = "";
-    showToast({ create: "新成员已创建并授权", bind: "已有成员已绑定，名称和其他权限未变更", update_role: "当前租户角色已更新" }[$("prin-mode").value]);
+    showToast({ create: t("新成员已创建并授权"), bind: t("已有成员已绑定，名称和其他权限未变更"), update_role: t("当前租户角色已更新") }[$("prin-mode").value]);
     refreshAllData();
   });
 
@@ -1286,7 +1288,7 @@
     $("proj-name").value = "";
     $("proj-remote").value = "";
     $("proj-workspace").value = "";
-    showToast("项目注册成功");
+    showToast(t("项目注册成功"));
     refreshAllData();
   });
 
@@ -1300,7 +1302,7 @@
         role: $("pm-role").value,
       }),
     });
-    showToast("项目成员角色已更新");
+    showToast(t("项目成员角色已更新"));
     refreshAllData();
   });
 
@@ -1316,7 +1318,7 @@
     });
     $("pr-remote").value = "";
     $("pr-workspace").value = "";
-    showToast("仓库地址已添加");
+    showToast(t("仓库地址已添加"));
     refreshAllData();
   });
 
@@ -1340,7 +1342,7 @@
     renderClientGuides();
     $("new-token-box").classList.remove("hidden");
     $("new-token-content").textContent = formatMCPConfig(res.token);
-    showToast("客户端密钥已生成，下一步复制配置。");
+    showToast(t("客户端密钥已生成，下一步复制配置。"));
     await refreshAllData();
     $("client-guides-card").open = true;
     $("client-guides-card").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1381,7 +1383,7 @@
   $("btn-delete-memory").addEventListener("click", async () => {
     const mem = state.selectedMemory;
     if (!mem) return;
-    const confirmed = await confirmDialog({ title: "删除这条知识？", message: `「${mem.title}」将移入回收站，AI 客户端将不再检索到它。之后可在回收站中恢复。`, confirmText: "移入回收站" });
+    const confirmed = await confirmDialog({ title: t("删除这条知识？"), message: t`「${mem.title}」将移入回收站，AI 客户端将不再检索到它。之后可在回收站中恢复。`, confirmText: t("移入回收站") });
     if (confirmed) memoryAction("delete", mem);
   });
   $("btn-confirm-ok").addEventListener("click", () => state.confirmResolve && state.confirmResolve(true));
@@ -1418,20 +1420,20 @@
     const button = $("btn-check-mcp");
     const token = $("guide-token-input").value.trim();
     const report = (text, kind) => { output.textContent = text; output.className = "check-result " + (kind || ""); };
-    if (!token) { report("请先选择或生成客户端密钥。", "warn"); return; }
+    if (!token) { report(t("请先选择或生成客户端密钥。"), "warn"); return; }
     renderClientGuides();
     if (!$("guide-server-input").checkValidity()) { $("guide-server-input").reportValidity(); return; }
     const origin = new URL($("guide-server-input").value.trim() || location.origin).origin;
-    if (origin !== location.origin) { report("跨地址检查请在 AI 客户端完成；此页面只检查当前服务，避免把密钥发送到其他地址。", "warn"); return; }
+    if (origin !== location.origin) { report(t("跨地址检查请在 AI 客户端完成；此页面只检查当前服务，避免把密钥发送到其他地址。"), "warn"); return; }
     button.disabled = true;
-    report("正在检查 MCP 连接…");
+    report(t("正在检查 MCP 连接…"));
     try {
       const response = await fetch("/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "engram-web-check", version: "1" } } }), signal: AbortSignal.timeout(10000) });
-      if (!response.ok) throw new Error("连接失败，请检查密钥是否有效以及服务是否可用。");
+      if (!response.ok) throw new Error(t("连接失败，请检查密钥是否有效以及服务是否可用。"));
       const body = await response.text();
-      if (!body.includes('"protocolVersion"') || body.includes('"error"')) throw new Error("服务未返回有效的 MCP 初始化结果。");
-      report("✓ 服务与密钥连接正常。接下来在 AI 客户端里重新连接 Engram，让它查询一次记忆即可。", "ok");
-    } catch (err) { report("✕ " + (err.name === "TimeoutError" ? "连接超时，请稍后重试。" : err.message), "error"); }
+      if (!body.includes('"protocolVersion"') || body.includes('"error"')) throw new Error(t("服务未返回有效的 MCP 初始化结果。"));
+      report(t("✓ 服务与密钥连接正常。接下来在 AI 客户端里重新连接 Engram，让它查询一次记忆即可。"), "ok");
+    } catch (err) { report("✕ " + (err.name === "TimeoutError" ? t("连接超时，请稍后重试。") : err.message), "error"); }
     finally { button.disabled = false; }
   });
 
@@ -1533,7 +1535,7 @@
         const cnt = resp.headers.get("X-Exported-Count");
         const saved = await saveBlobToLocal(blob, "engram-markdown-export.zip");
         if (saved) {
-          showToast(cnt ? `Markdown 压缩包已导出（共 ${cnt} 条记录）` : "Markdown 压缩包已导出");
+          showToast(cnt ? t`Markdown 压缩包已导出（共 ${cnt} 条记录）` : t("Markdown 压缩包已导出"));
         }
       } catch (err) {
         showToast(err.message, true);
@@ -1550,9 +1552,9 @@
   }
 
   const PURGE_MODES = {
-    soft: { deleted: "active", verb: "清空", effect: "备份保存后才会清空。清空的条目进入回收站，之后仍可逐条恢复；", button: "下载备份并清空" },
-    hard: { deleted: "all", verb: "彻底删除", effect: "备份保存后才会删除。条目连同版本历史从数据库中移除，无法恢复，只能依靠这份备份；", button: "下载备份并彻底删除" },
-    trash: { deleted: "deleted", verb: "彻底删除", effect: "只处理回收站里的条目，正常条目不受影响。删除后无法恢复，只能依靠这份备份；", button: "下载备份并彻底删除" },
+    soft: { deleted: "active", verb: t("清空"), effect: t("备份保存后才会清空。清空的条目进入回收站，之后仍可逐条恢复；"), button: t("下载备份并清空") },
+    hard: { deleted: "all", verb: t("彻底删除"), effect: t("备份保存后才会删除。条目连同版本历史从数据库中移除，无法恢复，只能依靠这份备份；"), button: t("下载备份并彻底删除") },
+    trash: { deleted: "deleted", verb: t("彻底删除"), effect: t("只处理回收站里的条目，正常条目不受影响。删除后无法恢复，只能依靠这份备份；"), button: t("下载备份并彻底删除") },
   };
 
   // refreshPurgePreview counts the active memories in scope and names the word the person must type.
@@ -1567,8 +1569,8 @@
     $("btn-run-purge").disabled = true;
     $("purge-project-group").classList.toggle("hidden", scope !== "project");
     $("purge-confirm-word").textContent = project ? project.name : tenant ? tenant.name : "";
-    if (!tenant || (scope === "project" && !project)) { $("purge-summary").textContent = scope === "project" ? "这个租户下还没有项目。" : "请先选择租户。"; return; }
-    $("purge-summary").textContent = "正在统计…";
+    if (!tenant || (scope === "project" && !project)) { $("purge-summary").textContent = scope === "project" ? t("这个租户下还没有项目。") : t("请先选择租户。"); return; }
+    $("purge-summary").textContent = t("正在统计…");
     const params = new URLSearchParams({ page_size: 1, deleted: modeInfo.deleted, tenant_id: tenant.id });
     if (scope) params.set("scope", scope);
     if (project) params.set("project_id", project.id);
@@ -1576,8 +1578,8 @@
       const res = await api("/api/admin/memories?" + params.toString());
       if (request !== state.purgePreviewRequest) return;
       state.purgeCount = res.total;
-      const target = (project ? `项目「${escapeHtml(project.name)}」` : `租户「${escapeHtml(tenant.name)}」${scope === "global" ? "的全局记忆" : "（全局记忆和所有项目）"}`) + (mode === "trash" ? "回收站里" : mode === "hard" ? "（含回收站）" : "");
-      $("purge-summary").innerHTML = res.total ? `将${modeInfo.verb}${target}的知识，共 <strong>${res.total}</strong> 条。` : `${target}没有需要${modeInfo.verb}的知识。`;
+      const target = (project ? t`项目「${escapeHtml(project.name)}」` : t`租户「${escapeHtml(tenant.name)}」${scope === "global" ? t("的全局记忆") : t("（全局记忆和所有项目）")}`) + (mode === "trash" ? t("回收站里") : mode === "hard" ? t("（含回收站）") : "");
+      $("purge-summary").innerHTML = res.total ? t`将${modeInfo.verb}${target}的知识，共 <strong>${res.total}</strong> 条。` : t`${target}没有需要${modeInfo.verb}的知识。`;
       updatePurgeButton();
     } catch (err) {
       if (request === state.purgePreviewRequest) $("purge-summary").textContent = err.message;
@@ -1598,7 +1600,7 @@
 
   // openPurgeModal starts from the knowledge-base filters so the scope matches what is on screen.
   function openPurgeModal() {
-    if (!state.tenants.length) { showToast("还没有租户，无需清空。", true); return; }
+    if (!state.tenants.length) { showToast(t("还没有租户，无需清空。"), true); return; }
     const project = state.projects.find((p) => p.id === $("mem-filter-project").value);
     const tenantID = project ? project.tenant_id : $("mem-filter-tenant").value || state.tenants[0].id;
     $("purge-tenant").innerHTML = state.tenants.map((t) => `<option value="${t.id}">${escapeHtml(tenantLabel(t))}</option>`).join("");
@@ -1633,7 +1635,7 @@
     const body = { tenant_id: selection.tenant.id, scope: selection.scope || "", project_id: selection.project ? selection.project.id : "", memory_id: selection.memory ? selection.memory.id : "", mode: selection.mode };
     const resp = await fetch("/api/admin/memories/purge/backup", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!resp.ok) {
-      let message = `备份失败（${resp.status}），本次没有删除任何知识。`;
+      let message = t`备份失败（${resp.status}），本次没有删除任何知识。`;
       try { const data = await resp.json(); message = ERROR_CODES[data.code] || translateError(data.message || "") || data.message || message; } catch (_) {}
       throw new Error(message);
     }
@@ -1641,7 +1643,7 @@
     const count = Number(resp.headers.get("X-Purge-Count") || 0);
     const filename = backupFilename(selection);
     const saved = await saveBlobToLocal(await resp.blob(), filename);
-    if (!saved) throw new Error("已取消保存备份，本次没有删除任何知识。");
+    if (!saved) throw new Error(t("已取消保存备份，本次没有删除任何知识。"));
     if (!count) return { purged: 0, filename };
     const res = await api("/api/admin/memories/purge", { method: "POST", body: JSON.stringify({ purge_token: token }) });
     return { purged: res.purged, filename };
@@ -1662,23 +1664,23 @@
     const selection = purgeSelection();
     const { purged, filename } = await runPurge(selection);
     closePurgeModal();
-    if (!purged) { showToast("范围内没有需要删除的知识。"); return; }
+    if (!purged) { showToast(t("范围内没有需要删除的知识。")); return; }
     showToast(selection.mode === "soft"
-      ? `已清空 ${purged} 条知识，备份已保存为 ${filename}。需要时可在回收站恢复。`
-      : `已彻底删除 ${purged} 条知识，备份已保存为 ${filename}。`);
+      ? t`已清空 ${purged} 条知识，备份已保存为 ${filename}。需要时可在回收站恢复。`
+      : t`已彻底删除 ${purged} 条知识，备份已保存为 ${filename}。`);
     await refreshAllData();
   });
 
   $("btn-hard-delete-memory").addEventListener("click", async () => {
     const mem = state.selectedMemory;
     if (!mem) return;
-    const confirmed = await confirmDialog({ title: "彻底删除这条知识？", message: `「${mem.title}」会先下载为 Markdown 备份，然后连同版本历史从数据库中移除，无法再恢复。`, confirmText: "下载备份并彻底删除" });
+    const confirmed = await confirmDialog({ title: t("彻底删除这条知识？"), message: t`「${mem.title}」会先下载为 Markdown 备份，然后连同版本历史从数据库中移除，无法再恢复。`, confirmText: t("下载备份并彻底删除") });
     if (!confirmed) return;
     const tenant = state.tenants.find((t) => t.id === mem.tenant_id) || { id: mem.tenant_id, name: mem.tenant_id.slice(0, 8) };
     try {
       const { purged, filename } = await runPurge({ tenant, memory: mem, mode: "trash" });
       closeMemoryDetail();
-      showToast(purged ? `「${mem.title}」已彻底删除，备份已保存为 ${filename}。` : "这条知识已不在回收站，未删除。");
+      showToast(purged ? t`「${mem.title}」已彻底删除，备份已保存为 ${filename}。` : t("这条知识已不在回收站，未删除。"));
       await refreshAllData({ quiet: true });
     } catch (err) {
       showToast(err.message, true);
@@ -1709,7 +1711,7 @@
       if (saved) {
         const enc = resp.headers.get("X-Snapshot-Encrypted") === "true";
         const mems = resp.headers.get("X-Snapshot-Memories") || "0";
-        showToast(`系统迁移包已导出（${enc ? "已加密" : "未加密"}，含 ${mems} 条记忆）`);
+        showToast(t`系统迁移包已导出（${enc ? t("已加密") : t("未加密")}，含 ${mems} 条记忆）`);
       }
     });
   }
@@ -1718,7 +1720,7 @@
     onSubmit("migration-import-form", async (e) => {
       e.preventDefault();
       const fileInput = $("mig-import-file");
-      if (!fileInput || !fileInput.files || fileInput.files.length === 0) throw new FormError("请先选择要还原的系统迁移包（.zip）。", "mig-import-file");
+      if (!fileInput || !fileInput.files || fileInput.files.length === 0) throw new FormError(t("请先选择要还原的系统迁移包（.zip）。"), "mig-import-file");
       const fd = new FormData();
       fd.append("file", fileInput.files[0]);
       fd.append("passphrase", $("mig-import-passphrase") ? $("mig-import-passphrase").value : "");
@@ -1745,7 +1747,7 @@
         $("mig-import-result-box").textContent = JSON.stringify(data, null, 2);
       }
       if ($("mig-import-passphrase")) $("mig-import-passphrase").value = "";
-      showToast("系统快照还原成功！");
+      showToast(t("系统快照还原成功！"));
       await refreshAllData();
     });
   }
