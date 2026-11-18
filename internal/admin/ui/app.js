@@ -322,7 +322,6 @@
         <td>
           <div class="row-actions">
             <button type="button" class="secondary small btn-manage-member" data-id="${p.id}" aria-controls="member-detail-card" aria-expanded="${p.id === state.selectedPrincipal}">${t("管理")}</button>
-            <button type="button" class="secondary small btn-rename-member" data-id="${p.id}">${t("改名")}</button>
             <button type="button" class="danger-outline small btn-delete-member" data-id="${p.id}">${t("删除")}</button>
           </div>
         </td>
@@ -400,7 +399,7 @@
       const members = visiblePrincipals().filter((person) => tenantMembership(person, tenant.id));
       const projects = state.projects.filter((project) => project.tenant_id === tenant.id && project.status === "active");
       const tokens = state.tokens.filter((token) => token.tenant_id === tenant.id && !token.revoked_at);
-      return `<tr><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button><button type="button" class="secondary small btn-rename-tenant" data-id="${tenant.id}">${t("改名")}</button><button type="button" class="danger-outline small btn-delete-tenant" data-id="${tenant.id}">${t("删除")}</button></div></td></tr>`;
+      return `<tr><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button><button type="button" class="danger-outline small btn-delete-tenant" data-id="${tenant.id}">${t("删除")}</button></div></td></tr>`;
     }).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无租户，请先新建租户。")}</td></tr>`;
   }
 
@@ -1646,8 +1645,6 @@
   $("tenants-table").addEventListener("click", (event) => {
     const openBtn = event.target.closest(".btn-open-tenant");
     if (openBtn) { openTenant(openBtn.dataset.id); return; }
-    const renameBtn = event.target.closest(".btn-rename-tenant");
-    if (renameBtn) { promptRenameTenant(renameBtn.dataset.id); return; }
     const deleteBtn = event.target.closest(".btn-delete-tenant");
     if (deleteBtn) confirmDeleteTenant(deleteBtn.dataset.id);
   });
@@ -1677,8 +1674,6 @@
   $("principals-table").addEventListener("click", (event) => {
     const manageBtn = event.target.closest(".btn-manage-member");
     if (manageBtn) { openTenant(state.memberTenant, manageBtn.dataset.id); return; }
-    const renameBtn = event.target.closest(".btn-rename-member");
-    if (renameBtn) { promptRenameMember(renameBtn.dataset.id); return; }
     const deleteBtn = event.target.closest(".btn-delete-member");
     if (deleteBtn) confirmDeleteMember(deleteBtn.dataset.id);
   });
