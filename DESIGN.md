@@ -145,7 +145,7 @@ github.com/eagle/project-a
 
 ### 5.3 项目注册
 
-项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.engram-project` Marker 以及签发 API Token）统一在 `memory-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
+项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.engram-project` Marker 以及签发 API Token）统一在 `engram-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
 
 没有 Remote 的项目（或 Monorepo 子项目）可在 Web UI 中一键生成并复制 `.engram-project` Marker UUID。该文件只保存项目 UUID，不保存服务地址或凭证，建议提交到仓库。
 
@@ -712,7 +712,7 @@ updated_at: 2026-11-16T10:00:00Z
 Nomad Job 建议：
 
 ```text
-memory-server     长期运行，可多副本
+engram-server     长期运行，可多副本
 memory-exporter   Periodic Job
 memory-backup     Periodic Job
 postgresql        独立持久化服务或托管实例

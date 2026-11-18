@@ -1,4 +1,4 @@
-job "memory-server" {
+job "engram-server" {
   datacenters = ["dc1"]
   type        = "service"
 
@@ -12,7 +12,7 @@ job "memory-server" {
     }
 
     service {
-      name = "memory-server"
+      name = "engram-server"
       port = "http"
 
       check {
@@ -32,13 +32,13 @@ job "memory-server" {
       }
     }
 
-    task "memory-server" {
+    task "engram-server" {
       driver = "docker"
 
       config {
         image = "engram:v1"
         ports = ["http"]
-        args  = ["/usr/local/bin/memory-server", "--config", "/etc/engram/config.toml"]
+        args  = ["/usr/local/bin/engram-server", "--config", "/etc/engram/config.toml"]
         volumes = [
           "/opt/engram/config:/etc/engram:ro",
           "/opt/engram/export:/data/export:rw",

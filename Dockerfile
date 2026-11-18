@@ -5,11 +5,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/memory-server ./cmd/memory-server
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/engram-server ./cmd/engram-server
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates git tzdata
-COPY --from=builder /out/memory-server /usr/local/bin/memory-server
+COPY --from=builder /out/engram-server /usr/local/bin/engram-server
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/memory-server"]
+ENTRYPOINT ["/usr/local/bin/engram-server"]

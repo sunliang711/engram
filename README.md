@@ -6,7 +6,7 @@ See [DESIGN.md](./DESIGN.md) for the complete technical design specification.
 
 ## Features
 
-- **Embedded Admin Web UI (`/`)**: Complete initialization and management console compiled into the single `memory-server` binary (no separate CLI required):
+- **Embedded Admin Web UI (`/`)**: Complete initialization and management console compiled into the single `engram-server` binary (no separate CLI required):
   - First-boot temporary admin password printed to console output; forced password change on initial login.
   - Password reset flow triggered via `RESET_ADMIN=true` (or `reset_admin=true`) environment variable.
   - 1-click Quick Bootstrap wizard for Tenant, Principal, Project, Git Remote, `.engram-project` Marker, and API Token with ready-to-copy MCP configuration.
@@ -26,13 +26,13 @@ make build
 make test
 
 # 3. Start server (prints initial admin password on first startup)
-./bin/memory-server --config config.example.toml
+./bin/engram-server --config config.example.toml
 
 # 4. Open http://localhost:8080 in browser, sign in with the printed temporary password,
 #    set a new admin password, and use the Web UI to initialize tenants, projects, and API tokens.
 
 # 5. Reset admin password if forgotten
-RESET_ADMIN=true ./bin/memory-server --config config.example.toml
+RESET_ADMIN=true ./bin/engram-server --config config.example.toml
 ```
 
 ### Docker Compose
