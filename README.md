@@ -53,3 +53,51 @@ ENGRAM_CONTEXT_SIGN_KEY="$(openssl rand -hex 32)" docker compose up -d
   openssl rand -hex 32
   ```
   Placeholder values containing `change-me`, `replace-with`, or `example` are rejected on startup. When omitted, an ephemeral random key is generated at startup (existing context tokens and admin sessions will be invalidated across restarts).
+
+## MCP Client Configuration
+
+Engram exposes a **Streamable HTTP** MCP endpoint at `/mcp` (not `stdio`). First issue an API Token (`aim_...`) in the Admin Web UI (`http://localhost:8080`).
+
+### Codex (`~/.codex/config.toml`)
+
+**Option 1: `http_headers` (recommended — works in both Codex Desktop App and CLI)**
+
+```toml
+[mcp_servers.engram]
+enabled = true
+url = "http://localhost:8080/mcp"
+http_headers = { Authorization = "Bearer <YOUR_API_TOKEN>" }
+```
+
+**Option 2: `bearer_token_env_var` (for terminal/CLI workflows)**
+
+```toml
+[mcp_servers.engram]
+enabled = true
+url = "http://localhost:8080/mcp"
+bearer_token_env_var = "ENGRAM_API_TOKEN"
+```
+
+Then export the variable before launching `codex`:
+
+```bash
+export ENGRAM_API_TOKEN="<YOUR_API_TOKEN>"
+```
+
+> **Note:** `bearer_token_env_var` expects the **name of an environment variable** (such as `ENGRAM_API_TOKEN`), not the raw `aim_...` token string. On macOS, GUI apps launched from the Dock/Finder usually do not inherit `~/.zshrc` exports, so Option 1 (`http_headers`) is recommended for the Codex Desktop App.
+
+### JSON Clients (Claude Code / Cursor / etc.)
+
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "type": "streamable-http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_API_TOKEN>"
+      }
+    }
+  }
+}
+```
