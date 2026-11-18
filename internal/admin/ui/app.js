@@ -8,6 +8,7 @@
     tokens: [],
     memberTenant: "",
     selectedPrincipal: "",
+    selectedProject: "",
     memories: [],
     facets: { categories: [], tags: [] },
     lastRefresh: 0,
@@ -75,7 +76,7 @@
   const ERROR_MESSAGES = [
     [/^(invalid remote url|remote host cannot be empty|invalid repository path)/i, t("仓库地址格式不正确，请填写 SSH 或 HTTPS 形式的 Git 地址。")],
     [/^(path must be relative|relative path must not contain)/i, t("子目录请填写相对仓库根目录的路径，不能以 / 开头，也不能包含 . 或 ..。")],
-    [/^principal is not a member of the specified tenant/i, t("该成员还不属于所选租户，请先在「租户与成员」页把成员绑定到这个租户。")],
+    [/^principal is not a member of the specified tenant/i, t("该成员还不属于所选租户，请先在「租户管理」页把成员绑定到这个租户。")],
     [/^principal must be a member of the project's tenant/i, t("该成员还不属于这个项目所在的租户，请先绑定租户。")],
     [/^project name is required/i, t("请填写项目名称。")],
     [/^tenant name is required/i, t("请填写租户名称。")],
@@ -184,16 +185,10 @@
       $("overview-description").textContent = initialized ? t("浏览最近沉淀的知识，管理项目和客户端接入。") : t("创建空间、关联项目，再复制客户端配置，即可开始共享记忆。");
       if (state.initialized === null) {
         $("quickstart-panel").open = !initialized;
-        $("create-token-panel").open = !state.tokens.length;
-        $("project-forms-panel").open = !state.projects.length;
       }
       state.initialized = initialized;
       renderSelectors();
-      renderTenantContext();
-      renderPrincipalsTable();
-      renderMemberDetail();
-      renderProjectsTable();
-      renderTokensTable();
+      renderManagementViews();
       if (!state.locationReady) {
         state.locationReady = true;
         await restoreLocation();
@@ -217,7 +212,7 @@
 
   // renderSelectors preserves valid selections when shared administration data refreshes.
   function renderSelectors() {
-    const tenantSelects = ["member-tenant", "proj-tenant", "tok-tenant"];
+    const tenantSelects = ["proj-tenant"];
     tenantSelects.forEach((id) => {
       const sel = $(id);
       if (!sel) return;
@@ -233,28 +228,6 @@
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
 
-    const prinSelects = ["pm-principal", "tok-principal"];
-    prinSelects.forEach((id) => {
-      const sel = $(id);
-      if (!sel) return;
-      const prev = sel.value;
-      sel.innerHTML = visiblePrincipals()
-        .map((p) => t`<option value="${p.id}">${escapeHtml(p.display_name)}（${escapeHtml(p.subject)}）</option>`)
-        .join("");
-      if (prev && Array.from(sel.options).some((option) => option.value === prev)) sel.value = prev;
-    });
-
-    const projSelects = ["pm-project", "pr-project"];
-    projSelects.forEach((id) => {
-      const sel = $(id);
-      if (!sel) return;
-      const prev = sel.value;
-      sel.innerHTML = state.projects
-        .map((p) => `<option value="${p.id}">${escapeHtml(projectLabel(p))}</option>`)
-        .join("");
-      if (prev && Array.from(sel.options).some((option) => option.value === prev)) sel.value = prev;
-    });
-    renderClientMemberOptions();
   }
 
   // fillSelect rebuilds a filter list behind an "all" option, keeping a still-requested value selectable.
@@ -304,16 +277,11 @@
 
   // renderTenantContext keeps member operations scoped to one tenant across refreshes.
   function renderTenantContext() {
-    if (!state.tenants.some((tenant) => tenant.id === state.memberTenant)) {
-      state.memberTenant = $("member-tenant").value;
-      state.selectedPrincipal = "";
-    }
-    $("member-tenant").value = state.memberTenant;
     $("prin-tenant").value = state.memberTenant;
     const tenant = state.tenants.find((item) => item.id === state.memberTenant);
     const active = tenant && tenant.status === "active";
     $("btn-add-member").disabled = !active;
-    $("member-tenant").disabled = !state.tenants.length;
+    $("tenant-detail-title").textContent = tenant ? tenant.name : "";
     $("tenant-status").textContent = tenant ? statusLabel(tenant.status) : t("尚无租户");
     $("tenant-status").className = "badge " + (active ? "success" : "danger");
     const members = visiblePrincipals().filter((principal) => tenantMembership(principal));
@@ -388,47 +356,132 @@
     }).join("") || t('<tr><td colspan="3" class="empty-state">当前租户还没有项目，可前往“项目”页注册。</td></tr>');
   }
 
-  // renderClientMemberOptions prevents issuing a token for an unrelated tenant identity.
-  function renderClientMemberOptions() {
-    const select = $("tok-principal");
-    const previous = select.value;
-    const principals = visiblePrincipals().filter((principal) => principal.status === "active" && tenantMembership(principal, $("tok-tenant").value));
-    select.innerHTML = principals.map((principal) => `<option value="${principal.id}">${escapeHtml(principal.display_name)}（${escapeHtml(principal.subject)}）</option>`).join("");
-    if (principals.some((principal) => principal.id === previous)) select.value = previous;
-    select.disabled = !principals.length;
-    $("create-token-form").querySelector('button[type="submit"]').disabled = !principals.length;
+  // renderManagementViews validates parent contexts before displaying any scoped management data.
+  function renderManagementViews() {
+    const tenant = state.tenants.find((item) => item.id === state.memberTenant);
+    if (!tenant) { state.memberTenant = ""; state.selectedPrincipal = ""; }
+    if (!selectedMember()) state.selectedPrincipal = "";
+    const member = selectedMember();
+    $("tenant-list-view").classList.toggle("hidden", !!tenant);
+    $("tenant-detail-view").classList.toggle("hidden", !tenant || !!member);
+    $("tenant-breadcrumb").classList.toggle("hidden", !tenant);
+    $("btn-tenant-detail").textContent = tenant ? tenant.name : "";
+    $("btn-tenant-detail").disabled = !member;
+    $("btn-tenant-detail").setAttribute("aria-current", member ? "false" : "page");
+    $("member-breadcrumb-name").textContent = member ? member.display_name : "";
+    $("member-breadcrumb-separator").classList.toggle("hidden", !member);
+    renderTenantsTable();
+    renderTenantContext();
+    renderPrincipalsTable();
+    renderMemberDetail();
+    renderProjectsTable();
+    renderProjectDetail();
+    renderTokensTable();
   }
 
-  // renderProjectsTable keeps project names primary and technical identifiers compact.
+  // renderTenantsTable makes the tenant list the starting point for member and key management.
+  function renderTenantsTable() {
+    const tbody = $("tenants-table").querySelector("tbody");
+    tbody.innerHTML = state.tenants.map((tenant) => {
+      const members = visiblePrincipals().filter((person) => tenantMembership(person, tenant.id));
+      const projects = state.projects.filter((project) => project.tenant_id === tenant.id && project.status === "active");
+      const tokens = state.tokens.filter((token) => token.tenant_id === tenant.id && !token.revoked_at);
+      return `<tr><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button></td></tr>`;
+    }).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无租户，请先新建租户。")}</td></tr>`;
+  }
+
+  // openTenant changes the tenant/member route together so browser history retains each level.
+  function openTenant(tenantID, principalID = "") {
+    state.memberTenant = tenantID;
+    state.selectedPrincipal = principalID;
+    $("tenant-forms-panel").classList.add("hidden");
+    $("create-tenant-card").classList.add("hidden");
+    switchMainTab("tab-tenants", false);
+    syncLocation(true);
+    $(principalID && selectedMember() ? "member-detail-title" : state.memberTenant ? "tenant-detail-title" : "tenant-list-title").focus();
+  }
+
+  // projectPrincipals includes tenant administrators whose project access is inherited.
+  function projectPrincipals(project) {
+    return visiblePrincipals().filter((person) => {
+      const membership = tenantMembership(person, project.tenant_id);
+      return membership && (membership.role === "admin" || (project.members || []).some((member) => member.principal_id === person.id));
+    });
+  }
+
+  // renderProjectsTable leaves detailed repositories and permissions on the project detail page.
   function renderProjectsTable() {
-    const tbody = $("projects-table").querySelector("tbody");
-    if (!state.projects.length) { tbody.innerHTML = t('<tr><td colspan="5" class="empty-state">尚未关联项目，可在下方注册第一个项目。</td></tr>'); return; }
-    tbody.innerHTML = state.projects
-      .map((p) => {
-        const markerHtml = p.marker
-          ? `${identifier(p.marker)}`
-          : t`<span class="muted">未生成</span>`;
-        const reposHtml = (p.repositories || [])
-          .map(
-            (r) =>
-              `<div><code>${escapeHtml(r.canonical_remote)}</code> ${
-                r.workspace_path ? t`<span class="badge">子目录 ${escapeHtml(r.workspace_path)}</span>` : ""
-              }</div>`
-          )
-          .join("");
-        const membersHtml = (p.members || [])
-          .map((m) => `<span class="badge">${escapeHtml(m.display_name)} · ${escapeHtml(PROJECT_ROLES[m.role] || m.role)}</span>`)
-          .join(" ");
-        return `
-      <tr>
-        <td><strong>${escapeHtml(p.name)}</strong><br/>${identifier(p.id)}</td>
-        <td>${escapeHtml(p.tenant_name)}</td>
-        <td>${markerHtml}</td>
-        <td>${reposHtml || t('<span class="muted">未关联仓库，通过标记文件识别</span>')}</td>
-        <td>${membersHtml || t('<span class="muted">仅租户管理员</span>')}</td>
-      </tr>`;
-      })
-      .join("");
+    $("projects-table").querySelector("tbody").innerHTML = state.projects.map((project) => `<tr><td><button type="button" class="text-button btn-open-project" data-id="${project.id}">${escapeHtml(project.name)}</button></td><td>${escapeHtml(project.tenant_name)}</td><td>${(project.repositories || []).length}</td><td>${projectPrincipals(project).length}</td><td><span class="badge ${project.status === "active" ? "success" : "danger"}">${statusLabel(project.status)}</span></td><td><button type="button" class="secondary small btn-open-project" data-id="${project.id}">${t("管理")}</button></td></tr>`).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无项目，请注册第一个项目。")}</td></tr>`;
+  }
+
+  // renderProjectDetail binds all repository and permission operations to the displayed project.
+  function renderProjectDetail() {
+    const project = state.projects.find((item) => item.id === state.selectedProject);
+    if (!project) state.selectedProject = "";
+    $("project-list-view").classList.toggle("hidden", !!project);
+    $("project-detail-view").classList.toggle("hidden", !project);
+    $("project-breadcrumb").classList.toggle("hidden", !project);
+    if (!project) return;
+    if ($("add-project-remote-form").dataset.project !== project.id) {
+      $("add-project-remote-form").reset();
+      clearFormErrors($("add-project-remote-form"));
+      clearFormErrors($("add-project-member-form"));
+      $("add-project-remote-form").dataset.project = project.id;
+    }
+    $("project-breadcrumb-name").textContent = project.name;
+    $("project-detail-title").textContent = project.name;
+    $("project-detail-context").textContent = t`所属租户：${project.tenant_name}`;
+    $("project-detail-status").textContent = statusLabel(project.status);
+    $("project-detail-status").className = "badge " + (project.status === "active" ? "success" : "danger");
+    $("project-identity").innerHTML = `<p>${t("项目 ID")} · ${identifier(project.id)}</p><p>${t("标记文件 UUID")} · ${project.marker ? identifier(project.marker) : t("未生成")}</p><p class="field-hint">${t("创建时间")} · ${formatDate(project.created_at)}</p>`;
+    $("project-remotes-table").querySelector("tbody").innerHTML = (project.repositories || []).map((remote) => `<tr><td><code>${escapeHtml(remote.canonical_remote)}</code></td><td>${escapeHtml(remote.workspace_path || t("仓库根目录"))}</td></tr>`).join("") || `<tr><td colspan="2" class="empty-state">${t("未关联仓库，通过标记文件识别")}</td></tr>`;
+    $("project-members-table").querySelector("tbody").innerHTML = projectPrincipals(project).map((person) => {
+      const inherited = tenantMembership(person, project.tenant_id).role === "admin";
+      const grant = (project.members || []).find((item) => item.principal_id === person.id);
+      return `<tr><td>${escapeHtml(person.display_name)}</td><td>${inherited ? t("维护者 · 由租户管理员角色自动获得") : escapeHtml(PROJECT_ROLES[grant.role] || grant.role)}</td><td>${statusLabel(person.status)}</td></tr>`;
+    }).join("") || `<tr><td colspan="3" class="empty-state">${t("尚无项目成员，请从当前租户选择成员授权。")}</td></tr>`;
+    const select = $("pm-principal");
+    const previous = select.dataset.project === project.id ? select.value : "";
+    const previousRole = $("pm-role").value;
+    const savedRole = $("pm-role").dataset.saved;
+    select.dataset.project = project.id;
+    const members = visiblePrincipals().filter((person) => person.status === "active" && tenantMembership(person, project.tenant_id));
+    select.innerHTML = members.map((person) => t`<option value="${person.id}">${escapeHtml(person.display_name)}（${escapeHtml(person.subject)}）</option>`).join("");
+    if (members.some((person) => person.id === previous)) select.value = previous;
+    const tenant = state.tenants.find((item) => item.id === project.tenant_id);
+    const enabled = project.status === "active" && tenant && tenant.status === "active";
+    $("add-project-remote-form").querySelectorAll("input, button").forEach((element) => { element.disabled = !enabled; });
+    select.disabled = !enabled || !members.length;
+    renderProjectRole();
+    if (previous === select.value && savedRole === $("pm-role").dataset.saved && !$("pm-role").disabled) $("pm-role").value = previousRole;
+  }
+
+  // renderProjectRole shows existing grants and prevents editing inherited administrator access.
+  function renderProjectRole() {
+    const project = state.projects.find((item) => item.id === state.selectedProject);
+    const person = visiblePrincipals().find((item) => item.id === $("pm-principal").value);
+    const membership = project && person && tenantMembership(person, project.tenant_id);
+    const inherited = membership && membership.role === "admin";
+    const grant = project && (project.members || []).find((item) => item.principal_id === $("pm-principal").value);
+    $("pm-role").value = inherited ? "maintainer" : grant ? grant.role : "reader";
+    $("pm-role").dataset.saved = $("pm-role").value;
+    const disabled = $("pm-principal").disabled || !membership || inherited;
+    $("pm-role").disabled = disabled;
+    $("add-project-member-form").querySelector('button[type="submit"]').disabled = disabled;
+  }
+
+  // openProject resets form drafts when moving between project contexts.
+  function openProject(projectID) {
+    if (state.selectedProject !== projectID) {
+      $("add-project-remote-form").reset();
+      clearFormErrors($("add-project-remote-form"));
+      clearFormErrors($("add-project-member-form"));
+    }
+    state.selectedProject = projectID;
+    $("project-forms-panel").classList.add("hidden");
+    switchMainTab("tab-projects", false);
+    syncLocation(true);
+    $(state.selectedProject ? "project-detail-title" : "project-list-title").focus();
   }
 
   async function resolveTokenSecret(tokenId) {
@@ -448,14 +501,13 @@
 
   // renderTokensTable lists client credentials and exposes their configuration actions.
   function renderTokensTable() {
-    renderTokenRows("tokens-table", state.tokens);
     renderTokenRows("member-tokens-table", state.tokens.filter((token) => token.tenant_id === state.memberTenant && token.principal_id === state.selectedPrincipal));
   }
 
   // renderTokenRows shares credential actions between the client list and member detail.
   function renderTokenRows(tableID, tokens) {
     const tbody = $(tableID).querySelector("tbody");
-    if (!tokens.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("尚无客户端密钥，可签发新密钥连接客户端。")}</td></tr>`; return; }
+    if (!tokens.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${t("尚无客户端密钥，可签发新密钥连接客户端。")}</td></tr>`; return; }
     tbody.innerHTML = tokens
       .map((tk) => {
         const active = !tk.revoked_at;
@@ -469,7 +521,7 @@
           ? t`
             <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? t("隐藏") : t("查看")}</button>
             <button type="button" class="secondary small btn-copy-token" data-id="${tk.id}">复制</button>
-            <button type="button" class="secondary small btn-apply-token" data-id="${tk.id}">填入配置</button>
+            <button type="button" class="secondary small btn-apply-token" data-id="${tk.id}">配置客户端</button>
           `
           : "";
         const lastUsed = tk.last_used_at
@@ -479,7 +531,6 @@
       <tr class="${active ? "" : "row-muted"}">
         <td><strong>${escapeHtml(tk.name)}</strong></td>
         <td>${tokenCell}</td>
-        <td>${escapeHtml(tk.tenant_name)}<div class="field-hint">${escapeHtml(tk.principal_name)}</div></td>
         <td><span class="badge nowrap ${active ? "success" : "danger"}">${active ? t("正常") : t("已吊销")}</span></td>
         <td class="date-cell">${lastUsed}</td>
         <td class="date-cell">${formatDate(tk.created_at)}</td>
@@ -529,12 +580,7 @@
           if ($("guide-token-input")) {
             $("guide-token-input").value = tok;
           }
-          renderClientGuides();
-          switchMainTab("tab-tokens");
-          const card = $("client-guides-card");
-          card.open = true;
-          if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
-          showToast(t("已把密钥填入客户端接入配置"));
+          openClientGuides(state.tokens.find((token) => token.id === btn.dataset.id));
         } catch (err) {
           showToast(err.message, true);
         }
@@ -924,18 +970,45 @@
     if ($("guide-gemini-rules")) $("guide-gemini-rules").textContent = instructions;
   }
 
+  // openClientGuides keeps credential configuration inside the originating management flow.
+  function openClientGuides(token) {
+    state.clientConfigOpener = document.activeElement;
+    $("client-config-context").textContent = token ? `${token.tenant_name} / ${token.principal_name} / ${token.name}` : t("使用快速接入生成的密钥配置客户端。");
+    $("guide-token-input").value = token ? state.latestToken : state.quickstartToken || "";
+    $("mcp-check-result").textContent = "";
+    renderClientGuides();
+    $("client-guides-card").open = true;
+    $("client-config-modal").classList.remove("hidden");
+    document.body.classList.add("client-config-open");
+    $("btn-close-client-config").focus();
+  }
+
+  // closeClientGuides hides credential text and restores focus to its invoking control.
+  function closeClientGuides(restoreFocus = true) {
+    const modal = $("client-config-modal");
+    const wasOpen = !modal.classList.contains("hidden");
+    modal.classList.add("hidden");
+    document.body.classList.remove("client-config-open");
+    if (wasOpen && restoreFocus && state.clientConfigOpener && state.clientConfigOpener.isConnected) state.clientConfigOpener.focus({ preventScroll: true });
+  }
+
   // activeTab returns the current navigation destination for URL persistence.
   function activeTab() { return document.querySelector(".tab-btn.active").dataset.tab; }
 
   // switchMainTab maintains navigation state without carrying an unrelated detail panel.
   function switchMainTab(tabId, updateURL = true) {
+    if (tabId === "tab-tokens") tabId = "tab-tenants";
     if (!document.querySelector(`.tab-btn[data-tab="${tabId}"]`)) tabId = "tab-overview";
+    if (updateURL && tabId === "tab-tenants") { state.memberTenant = ""; state.selectedPrincipal = ""; }
+    if (updateURL && tabId === "tab-projects") state.selectedProject = "";
+    closeClientGuides(false);
     closeMemoryDetail(false, false);
     document.querySelectorAll(".tab-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.tab === tabId);
       b.setAttribute("aria-current", b.dataset.tab === tabId ? "page" : "false");
     });
     document.querySelectorAll(".tab-pane").forEach((p) => p.classList.toggle("hidden", p.id !== tabId));
+    renderManagementViews();
     if (updateURL) syncLocation(true);
   }
 
@@ -949,6 +1022,11 @@
       params.set("size", state.memoryPageSize);
       if (state.selectedMemory) params.set("memory", state.selectedMemory.id);
     }
+    if (activeTab() === "tab-tenants" && state.memberTenant) {
+      params.set("tenant", state.memberTenant);
+      if (state.selectedPrincipal) params.set("member", state.selectedPrincipal);
+    }
+    if (activeTab() === "tab-projects" && state.selectedProject) params.set("project", state.selectedProject);
     const hash = "#" + params.toString();
     if (location.hash !== hash) history[push ? "pushState" : "replaceState"](null, "", hash);
   }
@@ -959,9 +1037,18 @@
     const params = new URLSearchParams(location.hash.slice(1));
     const tab = params.get("tab");
     const allowed = Array.from(document.querySelectorAll(".tab-btn")).map((button) => button.dataset.tab);
-    switchMainTab(allowed.includes(tab) ? tab : "tab-overview", false);
+    state.memberTenant = tab === "tab-tenants" ? params.get("tenant") || "" : "";
+    state.selectedPrincipal = tab === "tab-tenants" ? params.get("member") || "" : "";
+    const projectID = tab === "tab-projects" ? params.get("project") || "" : "";
+    if (state.selectedProject !== projectID) $("add-project-remote-form").reset();
+    state.selectedProject = projectID;
+    $("tenant-forms-panel").classList.add("hidden");
+    $("create-tenant-card").classList.add("hidden");
+    $("project-forms-panel").classList.add("hidden");
+    switchMainTab(tab === "tab-tokens" ? "tab-tenants" : allowed.includes(tab) ? tab : "tab-overview", false);
+    const filterParams = tab === "tab-memories" ? params : new URLSearchParams();
     MEMORY_FILTERS.forEach(([key, id]) => {
-      const el = $(id); const fallback = key === "deleted" ? "active" : ""; const value = params.get(key) || fallback;
+      const el = $(id); const fallback = key === "deleted" ? "active" : ""; const value = filterParams.get(key) || fallback;
       if (el.tagName === "SELECT" && value && !Array.from(el.options).some((option) => option.value === value)) {
         // Deep links may name a category, tag or project that has no active entries yet.
         if (["category", "tag", "project"].includes(key)) el.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`);
@@ -1203,10 +1290,7 @@
 
   if ($("btn-go-client-guides")) {
     $("btn-go-client-guides").addEventListener("click", () => {
-      switchMainTab("tab-tokens");
-      const card = $("client-guides-card");
-      card.open = true;
-      if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+      openClientGuides();
     });
   }
 
@@ -1265,6 +1349,7 @@
   $("btn-logout").addEventListener("click", async () => {
     await api("/api/admin/logout", { method: "POST" });
     state.latestToken = "";
+    state.quickstartToken = "";
     state.revealedTokens = {};
     if ($("guide-token-input")) {
       $("guide-token-input").value = "";
@@ -1274,8 +1359,7 @@
     $("qs-result").classList.add("hidden");
     $("quickstart-form").classList.remove("hidden");
     $("qs-result-box").textContent = "";
-    $("new-token-box").classList.add("hidden");
-    $("new-token-content").textContent = "";
+    closeClientGuides(false);
     $("client-guides-card").open = false;
     document.querySelector(".account-menu").open = false;
     renderView({ authenticated: false });
@@ -1297,6 +1381,7 @@
       }),
     });
     state.latestToken = res.token || "";
+    state.quickstartToken = state.latestToken;
     if (res.token_id && res.token) {
       state.revealedTokens[res.token_id] = res.token;
     }
@@ -1343,18 +1428,26 @@
     $("tenant-forms-panel").classList.add("hidden");
     showToast(t("租户已创建"));
     await refreshAllData();
+    openTenant(res.id);
   });
 
-  // Tenant changes clear member context before rebuilding any permission or token view.
-  $("member-tenant").addEventListener("change", () => {
-    state.memberTenant = $("member-tenant").value;
-    state.selectedPrincipal = "";
-    $("tenant-forms-panel").classList.add("hidden");
-    renderTenantContext();
-    renderPrincipalsTable();
-    renderMemberDetail();
-    renderTokensTable();
+  // Parent navigation always rebuilds the scoped member and credential lists.
+  $("tenants-table").addEventListener("click", (event) => {
+    const button = event.target.closest(".btn-open-tenant");
+    if (button) openTenant(button.dataset.id);
   });
+  $("btn-tenant-list").addEventListener("click", () => openTenant(""));
+  $("btn-tenant-detail").addEventListener("click", () => openTenant(state.memberTenant));
+  $("projects-table").addEventListener("click", (event) => {
+    const button = event.target.closest(".btn-open-project");
+    if (button) openProject(button.dataset.id);
+  });
+  $("btn-project-list").addEventListener("click", () => openProject(""));
+  $("btn-new-project").addEventListener("click", () => { $("project-forms-panel").classList.remove("hidden"); $("proj-name").focus(); });
+  $("btn-cancel-project").addEventListener("click", () => { $("project-forms-panel").classList.add("hidden"); $("btn-new-project").focus(); });
+  $("pm-principal").addEventListener("change", renderProjectRole);
+  $("btn-close-client-config").addEventListener("click", () => closeClientGuides());
+  $("client-config-modal").addEventListener("click", (event) => { if (event.target === $("client-config-modal")) closeClientGuides(); });
   $("btn-new-tenant").addEventListener("click", () => { $("create-tenant-card").classList.remove("hidden"); $("tenant-name").focus(); });
   $("btn-cancel-tenant").addEventListener("click", () => { $("create-tenant-card").classList.add("hidden"); $("btn-new-tenant").focus(); });
   $("btn-add-member").addEventListener("click", () => {
@@ -1367,25 +1460,11 @@
   $("principals-table").addEventListener("click", (event) => {
     const button = event.target.closest(".btn-manage-member");
     if (!button) return;
-    state.selectedPrincipal = button.dataset.id;
-    $("tenant-forms-panel").classList.add("hidden");
-    renderPrincipalsTable();
-    renderMemberDetail();
-    renderTokensTable();
-    $("member-detail-title").focus();
+    openTenant(state.memberTenant, button.dataset.id);
   });
-  $("btn-close-member").addEventListener("click", () => {
-    const previous = state.selectedPrincipal;
-    state.selectedPrincipal = "";
-    renderPrincipalsTable();
-    renderMemberDetail();
-    renderTokensTable();
-    const button = Array.from($("principals-table").querySelectorAll(".btn-manage-member")).find((item) => item.dataset.id === previous);
-    if (button) button.focus();
-  });
+  $("btn-close-member").addEventListener("click", () => openTenant(state.memberTenant));
   ["prin-mode", "prin-existing", "prin-role"].forEach((id) => $(id).addEventListener("change", updatePrincipalMode));
   $("member-role").addEventListener("change", () => { $("member-role-hint").textContent = tenantRoleHint($("member-role").value); });
-  $("tok-tenant").addEventListener("change", renderClientMemberOptions);
 
   onSubmit("create-principal-form", async (e) => {
     e.preventDefault();
@@ -1412,7 +1491,7 @@
     }
     showToast(mode === "create" ? t("新成员已创建并授权") : t("已有成员已加入当前租户，其他租户的权限未变更"));
     await refreshAllData();
-    if (selectedMember() && state.memberTenant === tenantID) $("member-detail-title").focus();
+    if (selectedMember() && state.memberTenant === tenantID) openTenant(tenantID, res.principal_id);
   });
 
   onSubmit("member-role-form", async (e) => {
@@ -1467,7 +1546,7 @@
 
   onSubmit("create-project-form", async (e) => {
     e.preventDefault();
-    await api("/api/admin/projects", {
+    const res = await api("/api/admin/projects", {
       method: "POST",
       body: JSON.stringify({
         tenant_id: $("proj-tenant").value,
@@ -1481,15 +1560,19 @@
     $("proj-remote").value = "";
     $("proj-workspace").value = "";
     showToast(t("项目注册成功"));
-    refreshAllData();
+    await refreshAllData();
+    openProject(res.project_id);
   });
 
   onSubmit("add-project-member-form", async (e) => {
     e.preventDefault();
+    const project = state.projects.find((item) => item.id === state.selectedProject);
+    const principal = visiblePrincipals().find((item) => item.id === $("pm-principal").value);
+    if (!project || !principal || !tenantMembership(principal, project.tenant_id) || $("pm-role").disabled) throw new Error(t("请选择当前项目所属租户的有效成员。"));
     await api("/api/admin/projects/members", {
       method: "POST",
       body: JSON.stringify({
-        project_id: $("pm-project").value,
+        project_id: project.id,
         principal_id: $("pm-principal").value,
         role: $("pm-role").value,
       }),
@@ -1500,10 +1583,12 @@
 
   onSubmit("add-project-remote-form", async (e) => {
     e.preventDefault();
+    const project = state.projects.find((item) => item.id === state.selectedProject);
+    if (!project) throw new Error(t("项目不存在，请刷新后重新选择。"));
     await api("/api/admin/projects/remotes", {
       method: "POST",
       body: JSON.stringify({
-        project_id: $("pr-project").value,
+        project_id: project.id,
         remote_url: $("pr-remote").value,
         workspace_path: $("pr-workspace").value,
       }),
@@ -1512,32 +1597,6 @@
     $("pr-workspace").value = "";
     showToast(t("仓库地址已添加"));
     refreshAllData();
-  });
-
-  onSubmit("create-token-form", async (e) => {
-    e.preventDefault();
-    const res = await api("/api/admin/tokens", {
-      method: "POST",
-      body: JSON.stringify({
-        tenant_id: $("tok-tenant").value,
-        principal_id: $("tok-principal").value,
-        name: $("tok-name").value,
-      }),
-    });
-    state.latestToken = res.token || "";
-    if (res.id && res.token) {
-      state.revealedTokens[res.id] = res.token;
-    }
-    if ($("guide-token-input")) {
-      $("guide-token-input").value = state.latestToken;
-    }
-    renderClientGuides();
-    $("new-token-box").classList.remove("hidden");
-    $("new-token-content").textContent = formatMCPConfig(res.token);
-    showToast(t("客户端密钥已生成，下一步复制配置。"));
-    await refreshAllData();
-    $("client-guides-card").open = true;
-    $("client-guides-card").scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
   onSubmit("filter-memories-form", async (e) => {
@@ -1654,15 +1713,17 @@
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
     const purgeOpen = !$("purge-modal").classList.contains("hidden");
     const glossaryOpen = !$("glossary-modal").classList.contains("hidden");
+    const clientConfigOpen = !$("client-config-modal").classList.contains("hidden");
     const detailOpen = !$("memory-detail-card").classList.contains("hidden");
     if (e.key === "Escape") {
       if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
       else if (purgeOpen) closePurgeModal();
       else if (glossaryOpen) toggleGlossaryModal(false);
+      else if (clientConfigOpen) closeClientGuides();
       else if (detailOpen) closeMemoryDetail();
     }
-    if (e.key === "Tab" && (confirmOpen || purgeOpen || glossaryOpen || detailOpen)) {
-      const dialog = $(confirmOpen ? "confirm-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : "memory-detail-card");
+    if (e.key === "Tab" && (confirmOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen)) {
+      const dialog = $(confirmOpen ? "confirm-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
       if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { e.preventDefault(); last.focus(); }

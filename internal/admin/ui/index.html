@@ -97,8 +97,7 @@
       <button class="tab-btn active" data-tab="tab-overview">概览</button>
       <button class="tab-btn" data-tab="tab-memories">知识库</button>
       <button class="tab-btn" data-tab="tab-projects">项目</button>
-      <button class="tab-btn" data-tab="tab-tenants">租户与成员</button>
-      <button class="tab-btn" data-tab="tab-tokens">客户端</button>
+      <button class="tab-btn" data-tab="tab-tenants">租户管理</button>
       <button class="tab-btn" data-tab="tab-migration">系统迁移</button>
     </nav>
 
@@ -112,7 +111,7 @@
         <div class="grid-stats" id="stats-grid">
           <button class="stat-card" data-open-tab="tab-memories"><span class="label">知识条目</span><strong class="value" id="stat-memories">0</strong></button>
           <button class="stat-card" data-open-tab="tab-projects"><span class="label">已关联项目</span><strong class="value" id="stat-projects">0</strong></button>
-          <button class="stat-card" data-open-tab="tab-tokens"><span class="label">活跃客户端密钥</span><strong class="value" id="stat-tokens">0</strong></button>
+          <button class="stat-card" data-open-tab="tab-tenants"><span class="label">活跃客户端密钥</span><strong class="value" id="stat-tokens">0</strong></button>
         </div>
         <details class="secondary-stats">
           <summary>更多统计</summary>
@@ -153,7 +152,7 @@
               <div class="form-group">
                 <label for="qs-client">客户端名称（可选）</label>
                 <input type="text" id="qs-client" placeholder="例如：macbook-codex" />
-                <small class="field-hint">便于在客户端列表中区分设备，留空则自动命名。</small>
+                <small class="field-hint">便于在成员的密钥列表中区分设备，留空则自动命名。</small>
               </div>
             </div>
             <details class="advanced-options">
@@ -190,22 +189,28 @@
 
       <!-- TAB 2: Tenants & Principals -->
       <section id="tab-tenants" class="tab-pane hidden">
-        <div class="card tenant-context">
-          <div class="section-heading">
-            <div><p class="eyebrow">租户与成员</p><h2>先选择租户，再管理成员的访问权限</h2></div>
-            <button type="button" class="secondary" id="btn-new-tenant">新建租户</button>
+        <nav class="breadcrumbs hidden" id="tenant-breadcrumb" aria-label="租户管理导航">
+          <button type="button" class="text-button" id="btn-tenant-list">租户列表</button><span aria-hidden="true">/</span><button type="button" class="text-button" id="btn-tenant-detail"></button><span id="member-breadcrumb-separator" class="hidden" aria-hidden="true">/</span><span id="member-breadcrumb-name" aria-current="page"></span>
+        </nav>
+        <div id="tenant-list-view">
+          <div class="card">
+            <div class="section-heading"><div><h2 tabindex="-1" id="tenant-list-title">租户列表</h2><p class="desc">选择租户，管理成员、访问权限和客户端密钥。</p></div><button type="button" id="btn-new-tenant">新建租户</button></div>
+            <table id="tenants-table"><thead><tr><th>租户名称</th><th>成员数</th><th>有效项目</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
           </div>
-          <div class="tenant-picker"><label for="member-tenant">当前租户</label><select id="member-tenant"></select><span id="tenant-status" class="badge"></span></div>
-          <p class="desc">同一租户共享全局记忆，项目记忆按权限访问。不同租户的数据互相隔离。</p>
-          <div id="tenant-summary" class="compact-stats" role="status"></div>
-          <details class="identity-details"><summary>租户详情</summary><div id="tenant-identity"></div></details>
-        </div>
         <div class="card hidden" id="create-tenant-card">
           <div class="section-heading"><h2>新建租户</h2><button type="button" class="secondary small" id="btn-cancel-tenant">取消</button></div>
           <form id="create-tenant-form">
             <div class="form-group"><label for="tenant-name">租户名称</label><input type="text" id="tenant-name" placeholder="例如：engineering" required /></div>
             <button type="submit">创建租户</button>
           </form>
+        </div>
+        </div>
+        <div id="tenant-detail-view" class="hidden">
+        <div class="card tenant-context">
+          <div class="section-heading"><div><p class="eyebrow">租户详情</p><h2 id="tenant-detail-title" tabindex="-1"></h2></div><span id="tenant-status" class="badge"></span></div>
+          <p class="desc">同一租户共享全局记忆，项目记忆按权限访问。不同租户的数据互相隔离。</p>
+          <div id="tenant-summary" class="compact-stats" role="status"></div>
+          <details class="identity-details"><summary>租户详情</summary><div id="tenant-identity"></div></details>
         </div>
         <div class="card">
           <div class="section-heading"><div><h2>当前租户的成员</h2><p class="desc">选择“管理”，集中查看全局权限、项目授权和客户端密钥。</p></div><button type="button" id="btn-add-member">添加成员</button></div>
@@ -264,8 +269,9 @@
               <button type="submit" id="btn-save-principal">创建新成员</button>
             </form>
         </div>
+        </div>
         <article class="card member-detail hidden" id="member-detail-card" aria-labelledby="member-detail-title">
-          <div class="section-heading"><div><p class="eyebrow" id="member-detail-context"></p><h2 id="member-detail-title" tabindex="-1"></h2></div><button type="button" class="secondary small" id="btn-close-member">关闭详情</button></div>
+          <div class="section-heading"><div><p class="eyebrow" id="member-detail-context"></p><h2 id="member-detail-title" tabindex="-1"></h2></div><button type="button" class="secondary small" id="btn-close-member">返回租户详情</button></div>
           <p class="desc" id="member-detail-status"></p>
           <section class="member-section">
             <h3>全局记忆权限</h3>
@@ -283,7 +289,7 @@
             <h3>客户端密钥</h3>
             <p class="desc">这里仅展示该成员在当前租户下的密钥。新密钥沿用成员权限，旧密钥不会自动失效。</p>
             <form id="member-token-form" class="member-token-form"><div class="form-group"><label for="member-token-name">客户端名称</label><input type="text" id="member-token-name" placeholder="例如：macbook-codex 或 macmini-claude" required /></div><button type="submit">签发新密钥</button></form>
-            <table id="member-tokens-table"><thead><tr><th>客户端名称</th><th>密钥</th><th>租户 / 成员</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+            <table id="member-tokens-table"><thead><tr><th>客户端名称</th><th>密钥</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
           </section>
           <details class="identity-details"><summary>身份详情 · 标识与认证方式</summary><div id="member-identity"></div></details>
         </article>
@@ -291,27 +297,15 @@
 
       <!-- TAB 3: Projects & Repositories -->
       <section id="tab-projects" class="tab-pane hidden">
-        <div class="card">
-          <h2>已关联项目</h2>
-          <table id="projects-table">
-            <thead>
-              <tr>
-                <th>项目名称</th>
-                <th>所属租户</th>
-                <th>标记文件 UUID</th>
-                <th>仓库地址 / 子目录</th>
-                <th>项目成员</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <details class="card setup-panel" id="project-forms-panel">
-          <summary><span>注册项目或调整权限</span><span class="summary-hint">注册项目 · 分配项目角色 · 添加仓库地址</span></summary>
-          <div class="grid-2 nested-grid">
-            <section class="sub-panel">
-              <h3>注册项目</h3>
-              <p class="desc">项目通过 Git 仓库地址或仓库里的 <code>.engram-project</code> 标记文件识别；没有仓库地址的项目请勾选生成标记文件。</p>
+        <nav class="breadcrumbs hidden" id="project-breadcrumb" aria-label="项目管理导航"><button type="button" class="text-button" id="btn-project-list">项目列表</button><span aria-hidden="true">/</span><span id="project-breadcrumb-name" aria-current="page"></span></nav>
+        <div id="project-list-view">
+          <div class="card">
+            <div class="section-heading"><div><h2 id="project-list-title" tabindex="-1">项目列表</h2><p class="desc">选择项目，管理仓库地址和成员权限。</p></div><button type="button" id="btn-new-project">注册项目</button></div>
+            <table id="projects-table"><thead><tr><th>项目名称</th><th>所属租户</th><th>仓库数</th><th>项目成员</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
+          </div>
+          <div class="card hidden" id="project-forms-panel">
+            <div class="section-heading"><h2>注册项目</h2><button type="button" class="secondary small" id="btn-cancel-project">取消</button></div>
+            <p class="desc">项目通过 Git 仓库地址或仓库里的 <code>.engram-project</code> 标记文件识别；没有仓库地址的项目请勾选生成标记文件。</p>
               <form id="create-project-form">
                 <div class="form-row">
                   <div class="form-group">
@@ -338,16 +332,37 @@
                 </div>
                 <button type="submit">注册项目</button>
               </form>
-            </section>
-
-            <section class="sub-panel">
-              <h3>项目权限与仓库地址</h3>
-              <form id="add-project-member-form" class="form-divided">
+          </div>
+        </div>
+        <div id="project-detail-view" class="hidden">
+          <div class="card">
+            <div class="section-heading"><div><p class="eyebrow">项目详情</p><h2 id="project-detail-title" tabindex="-1"></h2></div><span id="project-detail-status" class="badge"></span></div>
+            <p class="desc" id="project-detail-context"></p>
+            <details class="identity-details"><summary>项目标识与标记文件</summary><div id="project-identity"></div></details>
+          </div>
+          <div class="card">
+            <h2>仓库地址</h2>
+            <table id="project-remotes-table"><thead><tr><th>Git 仓库地址</th><th>Monorepo 子目录</th></tr></thead><tbody></tbody></table>
+              <form id="add-project-remote-form">
                 <div class="form-row">
                   <div class="form-group">
-                    <label for="pm-project">选择项目</label>
-                    <select id="pm-project" required></select>
+                    <label for="pr-remote">Git 仓库地址（SSH 或 HTTPS）</label>
+                    <input type="text" id="pr-remote" placeholder="https://github.com/team/repo" required />
                   </div>
+                  <div class="form-group">
+                    <label for="pr-workspace">Monorepo 子目录（可选）</label>
+                    <input type="text" id="pr-workspace" placeholder="如 services/api" />
+                  </div>
+                </div>
+                <button type="submit" class="small">添加仓库地址</button>
+              </form>
+          </div>
+          <div class="card">
+            <h2>项目成员与权限</h2>
+            <p class="desc">租户管理员自动拥有维护者权限；其他成员需要单独授权。</p>
+            <table id="project-members-table"><thead><tr><th>成员名称</th><th>当前权限</th><th>状态</th></tr></thead><tbody></tbody></table>
+              <form id="add-project-member-form" class="form-divided">
+                <div class="form-row">
                   <div class="form-group">
                     <label for="pm-principal">选择成员</label>
                     <select id="pm-principal" required></select>
@@ -365,68 +380,16 @@
                 <button type="submit" class="small">保存权限</button>
               </form>
 
-              <form id="add-project-remote-form">
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="pr-project">选择项目</label>
-                    <select id="pr-project" required></select>
-                  </div>
-                  <div class="form-group">
-                    <label for="pr-remote">Git 仓库地址（SSH 或 HTTPS）</label>
-                    <input type="text" id="pr-remote" placeholder="https://github.com/team/repo" required />
-                  </div>
-                  <div class="form-group">
-                    <label for="pr-workspace">Monorepo 子目录（可选）</label>
-                    <input type="text" id="pr-workspace" placeholder="如 services/api" />
-                  </div>
-                </div>
-                <button type="submit" class="small">添加仓库地址</button>
-              </form>
-            </section>
           </div>
-        </details>
-
+        </div>
       </section>
 
-      <!-- TAB 4: API Tokens -->
-      <section id="tab-tokens" class="tab-pane hidden">
-        <div class="card">
-          <h2>客户端密钥</h2>
-          <table id="tokens-table">
-            <thead>
-              <tr><th>客户端名称</th><th>密钥</th><th>租户 / 成员</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-        <details class="card setup-panel" id="create-token-panel">
-          <summary><span>新增客户端密钥</span><span class="summary-hint">为每台设备或每个 AI 客户端签发独立密钥</span></summary>
-          <p class="desc">同一个成员（如你本人）名下，可为 MacBook 上的 Codex、Mac mini 上的 Claude 等分别签发密钥，方便单独吊销。</p>
-          <form id="create-token-form">
-            <div class="form-row">
-              <div class="form-group">
-                <label for="tok-tenant">所属租户</label>
-                <select id="tok-tenant" required></select>
-              </div>
-              <div class="form-group">
-                <label for="tok-principal">所属成员</label>
-                <select id="tok-principal" required></select>
-              </div>
-              <div class="form-group">
-                <label for="tok-name">客户端名称</label>
-                <input type="text" id="tok-name" placeholder="例如：macbook-codex 或 macmini-claude" value="default-client" required />
-              </div>
-            </div>
-            <button type="submit">生成密钥</button>
-          </form>
-
-          <div id="new-token-box" class="hidden" style="margin-top:16px;">
-            <span class="badge success">密钥已签发，之后可在上方列表中随时查看、复制或填入配置</span>
-            <pre class="code-box" id="new-token-content"></pre>
-          </div>
-        </details>
-
-        <details class="card setup-panel" id="client-guides-card">
+      <!-- Client configuration is shared by member credentials and quickstart. -->
+      <div id="client-config-modal" class="modal-backdrop hidden">
+        <section class="modal-card client-config-dialog" role="dialog" aria-modal="true" aria-labelledby="client-config-title">
+          <div class="section-heading"><h2 id="client-config-title">配置客户端</h2><button type="button" class="secondary small" id="btn-close-client-config">关闭</button></div>
+          <p class="desc" id="client-config-context"></p>
+        <details class="setup-panel" id="client-guides-card" open>
           <summary><span>客户端接入配置</span><span class="summary-hint">选择客户端 · 复制配置 · 验证连接</span></summary>
           <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
             <div>
@@ -536,10 +499,11 @@
               <pre class="code-box" id="guide-gemini-rules"></pre>
             </div>
           </div>
-          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">先在这里确认服务和密钥可用，再在 AI 客户端里重新连接 Engram 并查询一次记忆。客户端真正连上后，客户端列表中对应密钥的「最近使用」会显示为刚刚。</p><button type="button" class="secondary small" id="btn-check-mcp">检查连接</button><p id="mcp-check-result" class="check-result" role="status"></p></div>
+          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">先在这里确认服务和密钥可用，再在 AI 客户端里重新连接 Engram 并查询一次记忆。客户端真正连上后，成员详情中对应密钥的「最近使用」会显示为刚刚。</p><button type="button" class="secondary small" id="btn-check-mcp">检查连接</button><p id="mcp-check-result" class="check-result" role="status"></p></div>
         </details>
 
-      </section>
+        </section>
+      </div>
 
       <!-- TAB 5: Memories, Revisions, Restore & Export -->
       <section id="tab-memories" class="tab-pane hidden">
