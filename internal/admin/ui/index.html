@@ -4,12 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Engram - 管理控制台</title>
+  <link rel="icon" type="image/svg+xml" href="/ui/favicon.svg" />
   <link rel="stylesheet" href="/ui/styles.css" />
 </head>
 <body>
   <!-- Persistent RESET_ADMIN Warning Banner -->
   <div id="reset-admin-banner" class="banner-warning hidden">
-    ⚠️ 检测到环境变量 <code>RESET_ADMIN</code> 处于启用状态。完成管理员密码设置后，请从部署环境变量中移除 <code>RESET_ADMIN</code>，以免下次服务重启时再次重置密码。
+    检测到环境变量 <code>RESET_ADMIN</code> 处于启用状态。完成管理员密码设置后，请从部署环境变量中移除 <code>RESET_ADMIN</code>，以免下次服务重启时再次重置密码。
   </div>
 
   <!-- 1. Login View -->
@@ -67,11 +68,11 @@
       </div>
       <div class="topbar-actions">
         <span id="last-refresh" class="refresh-status" role="status" aria-live="polite"></span>
-        <button type="button" class="secondary small" id="btn-refresh" title="重新加载所有数据">↻ 刷新</button>
+        <button type="button" class="secondary small" id="btn-refresh" title="重新加载所有数据">刷新</button>
         <details class="account-menu">
           <summary><span id="current-admin-user">admin</span> · 账号</summary>
           <div class="account-actions">
-            <button class="secondary small" id="btn-open-glossary">术语与权限说明</button>
+            <button class="secondary small" id="btn-open-glossary">使用说明</button>
             <button class="secondary small" id="btn-open-change-pwd">修改密码</button>
             <button class="secondary small" id="btn-logout">退出登录</button>
           </div>
@@ -93,7 +94,7 @@
       <section id="tab-overview" class="tab-pane">
         <div class="page-heading">
           <div><p class="eyebrow">共享记忆工作台</p><h1 id="overview-title">连接你的第一个 AI 客户端</h1><p class="desc" id="overview-description">创建空间、关联项目，再复制客户端配置，即可开始共享记忆。</p></div>
-          <button type="button" class="secondary" data-open-tab="tab-memories">浏览知识库 →</button>
+          <button type="button" class="secondary" data-open-tab="tab-memories">浏览知识库</button>
         </div>
         <div class="grid-stats" id="stats-grid">
           <button class="stat-card" data-open-tab="tab-memories"><span class="label">知识条目</span><strong class="value" id="stat-memories">0</strong></button>
@@ -156,14 +157,14 @@
                 </div>
               </div>
             </details>
-            <button type="submit">创建并生成客户端配置</button>
+            <button type="submit">生成配置</button>
           </form>
           <div id="qs-result" class="hidden success-panel" role="status">
             <h3>接入信息已就绪</h3>
             <p id="qs-result-summary">客户端密钥已保存。下一步选择你的 AI 客户端并复制配置。</p>
             <div class="button-row">
-              <button type="button" id="btn-go-client-guides">配置 Codex / Claude / Gemini →</button>
-              <button type="button" class="secondary" id="btn-qs-again">再接入一个客户端</button>
+              <button type="button" id="btn-go-client-guides">配置客户端</button>
+              <button type="button" class="secondary" id="btn-qs-again">继续接入</button>
             </div>
             <details><summary>查看初始化详情</summary><pre class="code-box" id="qs-result-box"></pre></details>
           </div>
@@ -337,7 +338,7 @@
                     <small class="field-hint">只影响该项目的项目记忆；租户管理员自动拥有维护者权限。</small>
                   </div>
                 </div>
-                <button type="submit" class="small">保存项目成员权限</button>
+                <button type="submit" class="small">保存权限</button>
               </form>
 
               <form id="add-project-remote-form">
@@ -392,7 +393,7 @@
                 <input type="text" id="tok-name" placeholder="例如：macbook-codex 或 macmini-claude" value="default-client" required />
               </div>
             </div>
-            <button type="submit">生成客户端密钥</button>
+            <button type="submit">生成密钥</button>
           </form>
 
           <div id="new-token-box" class="hidden" style="margin-top:16px;">
@@ -422,7 +423,7 @@
           <div class="client-tabs" role="tablist">
             <button type="button" class="client-tab-btn active" data-client="codex">Codex</button>
             <button type="button" class="client-tab-btn" data-client="claude">Claude Code</button>
-            <button type="button" class="client-tab-btn" data-client="gemini">Gemini (CLI / Antigravity)</button>
+            <button type="button" class="client-tab-btn" data-client="gemini">Gemini</button>
           </div>
 
           <!-- Codex Guide -->
@@ -511,7 +512,7 @@
               <pre class="code-box" id="guide-gemini-rules"></pre>
             </div>
           </div>
-          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">先在这里确认服务和密钥可用，再在 AI 客户端里重新连接 Engram 并查询一次记忆。客户端真正连上后，客户端列表中对应密钥的「最近使用」会显示为刚刚。</p><button type="button" class="secondary small" id="btn-check-mcp">检查服务与密钥</button><p id="mcp-check-result" class="check-result" role="status"></p></div>
+          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">先在这里确认服务和密钥可用，再在 AI 客户端里重新连接 Engram 并查询一次记忆。客户端真正连上后，客户端列表中对应密钥的「最近使用」会显示为刚刚。</p><button type="button" class="secondary small" id="btn-check-mcp">检查连接</button><p id="mcp-check-result" class="check-result" role="status"></p></div>
         </details>
 
       </section>
@@ -525,7 +526,7 @@
               <p class="desc" style="margin-bottom:0;">浏览所有租户和项目的知识，查看修订历史，从回收站恢复条目，或导出为 Markdown 压缩包。</p>
             </div>
             <div class="button-row">
-              <button type="button" id="btn-download-export-zip" class="secondary">📦 导出 Markdown（.zip）</button>
+              <button type="button" id="btn-download-export-zip" class="secondary" title="下载 Markdown 压缩包（.zip）">导出 Markdown</button>
               <button type="button" id="btn-open-purge" class="danger-outline">批量清空…</button>
             </div>
           </div>
@@ -591,7 +592,7 @@
       <section id="tab-migration" class="tab-pane hidden">
         <div class="grid-2">
           <div class="card">
-            <h2>📦 导出迁移包</h2>
+            <h2>导出迁移包</h2>
             <p class="desc">用于整体迁移到另一台 Engram 服务。迁移包包含租户、成员与权限、项目及仓库地址、客户端密钥、全部知识（含回收站）、版本历史和变更记录；不包含管理员登录密码。</p>
             <form id="migration-export-form">
               <div class="form-group">
@@ -601,12 +602,12 @@
                   建议设置口令（整包使用 AES-256-GCM 加密）。加密的迁移包会携带密钥明文，导入到签名密钥 <code>ENGRAM_CONTEXT_SIGN_KEY</code> 不同的服务后，仍能在控制台查看和复制客户端密钥；未加密的迁移包导入后，密钥仍可用于客户端鉴权，但不能再在控制台查看。
                 </small>
               </div>
-              <button type="submit">📦 导出迁移包（.zip）</button>
+              <button type="submit" title="下载迁移包（.zip）">导出迁移包</button>
             </form>
           </div>
 
           <div class="card">
-            <h2>📥 导入迁移包</h2>
+            <h2>导入迁移包</h2>
             <p class="desc">把另一台服务导出的迁移包（<code>engram-system-snapshot-*.zip</code>）完整还原到当前服务。还原在单个数据库事务内完成，失败时自动回滚，现有数据不受影响。</p>
             <form id="migration-import-form">
               <div class="form-group">
@@ -623,7 +624,7 @@
                   <span>我确认清空当前服务的全部业务数据并用迁移包覆盖（管理员账号密码保留；当前为空库时可不勾选）</span>
                 </label>
               </div>
-              <button type="submit" class="danger">📥 上传并还原</button>
+              <button type="submit" class="danger">上传并还原</button>
             </form>
 
             <div id="mig-import-result" class="hidden" style="margin-top:16px;">
