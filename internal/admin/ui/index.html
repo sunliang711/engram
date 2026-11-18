@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Shared Memory Server - 管理控制台</title>
+  <link rel="stylesheet" href="/ui/styles.css" />
+</head>
+<body>
+  <!-- Persistent RESET_ADMIN Warning Banner -->
+  <div id="reset-admin-banner" class="banner-warning hidden">
+    ⚠️ 检测到环境变量 <code>RESET_ADMIN</code> 处于启用状态。完成管理员密码设置后，请从部署环境变量中移除 <code>RESET_ADMIN</code>，以免下次服务重启时再次重置密码。
+  </div>
+
+  <!-- 1. Login View -->
+  <div id="login-view" class="auth-wrapper hidden">
+    <div class="auth-card">
+      <h1>AI Shared Memory Server</h1>
+      <p class="subtitle">管理员登录（首次启动或设置 <code>RESET_ADMIN</code> 时请使用服务启动日志打印的临时密码）</p>
+      <form id="login-form">
+        <div class="form-group">
+          <label>管理员账号</label>
+          <input type="text" id="login-username" value="admin" required />
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input type="password" id="login-password" placeholder="输入临时密码或管理员密码" required autofocus />
+        </div>
+        <button type="submit" style="width:100%; margin-top:8px;">登 录</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 2. Force Password Reset View -->
+  <div id="force-password-view" class="auth-wrapper hidden">
+    <div class="auth-card">
+      <h1>重置管理员密码</h1>
+      <p class="subtitle">当前使用的是首次启动或 <code>RESET_ADMIN</code> 生成的临时密码。请立即设置新的管理员密码以激活控制台。</p>
+      <form id="force-password-form">
+        <div class="form-group">
+          <label>新密码（至少 8 位）</label>
+          <input type="password" id="new-admin-password" minlength="8" placeholder="请输入新密码" required />
+        </div>
+        <div class="form-group">
+          <label>确认新密码</label>
+          <input type="password" id="confirm-admin-password" minlength="8" placeholder="请再次输入新密码" required />
+        </div>
+        <button type="submit" style="width:100%; margin-top:8px;">保存新密码并进入控制台</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 3. Main Admin Console -->
+  <div id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="brand">
+        <span>AI Shared Memory Server</span>
+        <span class="badge">V1 Admin Console</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span id="current-admin-user" style="font-size:13px; color:var(--text-muted);">admin</span>
+        <button class="secondary small" id="btn-open-change-pwd">修改密码</button>
+        <button class="secondary small" id="btn-logout">退出登录</button>
+      </div>
+    </header>
+
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="tab-overview">1. 概览与一键初始化</button>
+      <button class="tab-btn" data-tab="tab-tenants">2. 租户与成员身份</button>
+      <button class="tab-btn" data-tab="tab-projects">3. 项目与仓库识别</button>
+      <button class="tab-btn" data-tab="tab-tokens">4. API Token 与客户端配置</button>
+      <button class="tab-btn" data-tab="tab-memories">5. 知识治理、恢复与导出</button>
+    </nav>
+
+    <main class="container">
+      <!-- TAB 1: Overview & Quickstart -->
+      <section id="tab-overview" class="tab-pane">
+        <div class="grid-stats" id="stats-grid">
+          <div class="stat-card"><div class="label">Tenants (租户)</div><div class="value" id="stat-tenants">0</div></div>
+          <div class="stat-card"><div class="label">Principals (身份)</div><div class="value" id="stat-principals">0</div></div>
+          <div class="stat-card"><div class="label">Projects (项目)</div><div class="value" id="stat-projects">0</div></div>
+          <div class="stat-card"><div class="label">Active Memories</div><div class="value" id="stat-memories">0</div></div>
+          <div class="stat-card"><div class="label">Deleted Memories</div><div class="value" id="stat-deleted">0</div></div>
+          <div class="stat-card"><div class="label">Active Tokens</div><div class="value" id="stat-tokens">0</div></div>
+          <div class="stat-card"><div class="label">Total Events</div><div class="value" id="stat-events">0</div></div>
+        </div>
+
+        <div class="card">
+          <h2>🚀 一键快速初始化向导 (Quick Bootstrap)</h2>
+          <p class="desc">一步创建 Tenant、Principal（授予 global_writer/admin）、注册首个项目及 Git Remote，并签发 MCP 客户端 API Token。</p>
+          <form id="quickstart-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label>租户名称 (Tenant Name)</label>
+                <input type="text" id="qs-tenant" placeholder="例如：personal 或 team-core" value="default" required />
+              </div>
+              <div class="form-group">
+                <label>客户端身份标识 (Principal Subject)</label>
+                <input type="text" id="qs-subject" placeholder="例如：macbook-pro" value="agent-default" required />
+              </div>
+              <div class="form-group">
+                <label>显示名称 (Display Name)</label>
+                <input type="text" id="qs-display" placeholder="例如：Eagle MacBook" value="Default AI Agent" required />
+              </div>
+              <div class="form-group">
+                <label>Tenant 角色</label>
+                <select id="qs-tenant-role">
+                  <option value="admin">admin (全权限)</option>
+                  <option value="global_writer" selected>global_writer (可读写全局知识)</option>
+                  <option value="member">member (仅读全局知识)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>初始项目名称 (可选)</label>
+                <input type="text" id="qs-project" placeholder="例如：ai-memory" />
+              </div>
+              <div class="form-group">
+                <label>Git Remote URL (可选)</label>
+                <input type="text" id="qs-remote" placeholder="例如：git@github.com:eagle/ai-memory.git" />
+              </div>
+              <div class="form-group">
+                <label>Monorepo 子路径 workspace_path (可选)</label>
+                <input type="text" id="qs-workspace" placeholder="例如：services/api（根目录留空）" />
+              </div>
+            </div>
+            <button type="submit">一键完成初始化并生成 Token</button>
+          </form>
+
+          <div id="qs-result" class="hidden" style="margin-top:18px;">
+            <span class="badge success">初始化成功 — 请妥善保存以下 API Token（仅展示一次）</span>
+            <pre class="code-box" id="qs-result-box"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: Tenants & Principals -->
+      <section id="tab-tenants" class="tab-pane hidden">
+        <div class="grid-2">
+          <div class="card">
+            <h2>创建租户 (Tenant)</h2>
+            <p class="desc">Global Memory 在同一 Tenant 内跨项目共享，不同 Tenant 严格物理隔离。</p>
+            <form id="create-tenant-form">
+              <div class="form-group">
+                <label>租户名称</label>
+                <input type="text" id="tenant-name" placeholder="例如：engineering" required />
+              </div>
+              <button type="submit">创建 Tenant</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>创建身份并绑定租户角色 (Principal & Role)</h2>
+            <p class="desc">为设备、用户或 Agent 创建身份并授予 Tenant 权限。</p>
+            <form id="create-principal-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>所属租户</label>
+                  <select id="prin-tenant" required></select>
+                </div>
+                <div class="form-group">
+                  <label>认证方式 (Provider)</label>
+                  <select id="prin-provider">
+                    <option value="api_token">api_token</option>
+                    <option value="oidc">oidc</option>
+                    <option value="mtls">mtls</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>唯一标识 (Subject)</label>
+                  <input type="text" id="prin-subject" placeholder="例如：claude-code-mac" required />
+                </div>
+                <div class="form-group">
+                  <label>显示名称</label>
+                  <input type="text" id="prin-name" placeholder="例如：Claude Code (Mac)" required />
+                </div>
+                <div class="form-group">
+                  <label>Tenant 角色</label>
+                  <select id="prin-role">
+                    <option value="global_writer">global_writer</option>
+                    <option value="member">member</option>
+                    <option value="admin">admin</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit">创建 Principal 并授权</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>租户列表 (Tenants)</h2>
+          <table id="tenants-table">
+            <thead>
+              <tr><th>Tenant ID</th><th>名称</th><th>状态</th><th>创建时间</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>身份与租户角色列表 (Principals & Tenant Memberships)</h2>
+          <table id="principals-table">
+            <thead>
+              <tr><th>Principal ID</th><th>显示名称</th><th>Provider / Subject</th><th>状态</th><th>已绑定的 Tenant 角色</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 3: Projects & Repositories -->
+      <section id="tab-projects" class="tab-pane hidden">
+        <div class="grid-2">
+          <div class="card">
+            <h2>注册项目 (Register Project)</h2>
+            <p class="desc">注册逻辑项目、绑定标准化 Git Remote、Monorepo 子路径或生成 <code>.ai-memory-project</code> Marker UUID。</p>
+            <form id="create-project-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>所属租户</label>
+                  <select id="proj-tenant" required></select>
+                </div>
+                <div class="form-group">
+                  <label>项目名称</label>
+                  <input type="text" id="proj-name" placeholder="例如：project-a" required />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Git Remote URL (可选)</label>
+                  <input type="text" id="proj-remote" placeholder="git@github.com:eagle/project-a.git" />
+                </div>
+                <div class="form-group">
+                  <label>Monorepo workspace_path (可选)</label>
+                  <input type="text" id="proj-workspace" placeholder="例如：services/api" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label><input type="checkbox" id="proj-with-marker" checked /> 同时生成 <code>.ai-memory-project</code> Marker UUID</label>
+              </div>
+              <button type="submit">注册项目</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>配置项目成员权限 & 追加 Remote 别名</h2>
+            <form id="add-project-member-form" style="margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--border);">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>选择项目</label>
+                  <select id="pm-project" required></select>
+                </div>
+                <div class="form-group">
+                  <label>选择 Principal</label>
+                  <select id="pm-principal" required></select>
+                </div>
+                <div class="form-group">
+                  <label>项目角色</label>
+                  <select id="pm-role">
+                    <option value="maintainer">maintainer (读写+删除恢复)</option>
+                    <option value="writer">writer (读写)</option>
+                    <option value="reader">reader (只读)</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit" class="small">保存项目成员权限</button>
+            </form>
+
+            <form id="add-project-remote-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>选择项目</label>
+                  <select id="pr-project" required></select>
+                </div>
+                <div class="form-group">
+                  <label>Git Remote URL (支持 SSH/HTTPS/别名)</label>
+                  <input type="text" id="pr-remote" placeholder="https://github.com/eagle/project-a.git" required />
+                </div>
+                <div class="form-group">
+                  <label>workspace_path (可选)</label>
+                  <input type="text" id="pr-workspace" placeholder="services/api" />
+                </div>
+              </div>
+              <button type="submit" class="small">添加仓库映射 / Remote 别名</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>已注册项目、Marker、Remote 映射与项目成员</h2>
+          <table id="projects-table">
+            <thead>
+              <tr>
+                <th>项目名称 / ID</th>
+                <th>所属 Tenant</th>
+                <th><code>.ai-memory-project</code> Marker</th>
+                <th>标准化 Remote &amp; workspace_path</th>
+                <th>项目成员角色</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 4: API Tokens -->
+      <section id="tab-tokens" class="tab-pane hidden">
+        <div class="card">
+          <h2>签发客户端 API Token</h2>
+          <p class="desc">为 Codex、Claude Code 等 MCP 客户端生成 Bearer Token，并自动生成 MCP 客户端配置。</p>
+          <form id="create-token-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label>所属租户 (Tenant)</label>
+                <select id="tok-tenant" required></select>
+              </div>
+              <div class="form-group">
+                <label>绑定身份 (Principal)</label>
+                <select id="tok-principal" required></select>
+              </div>
+              <div class="form-group">
+                <label>Token 备注名称</label>
+                <input type="text" id="tok-name" placeholder="例如：claude-code-macbook" value="default-client" required />
+              </div>
+            </div>
+            <button type="submit">生成新 API Token</button>
+          </form>
+
+          <div id="new-token-box" class="hidden" style="margin-top:16px;">
+            <span class="badge warning">请立即复制保存：明文 Token 仅在创建时显示一次</span>
+            <pre class="code-box" id="new-token-content"></pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>已签发 API Token 列表</h2>
+          <table id="tokens-table">
+            <thead>
+              <tr><th>备注名称</th><th>前缀</th><th>Tenant</th><th>Principal</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 5: Memories, Revisions, Restore & Export -->
+      <section id="tab-memories" class="tab-pane hidden">
+        <div class="card">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+            <div>
+              <h2>知识库浏览、软删除恢复与 Markdown 导出</h2>
+              <p class="desc" style="margin-bottom:0;">支持查看所有 Tenant 与项目的知识、审查历史修订快照（Revisions）、恢复已软删除条目以及手动触发确定性 Markdown 导出。</p>
+            </div>
+            <button id="btn-trigger-export" class="secondary">📦 立即执行 Markdown 导出</button>
+          </div>
+
+          <form id="filter-memories-form" class="form-row" style="align-items:end;">
+            <div class="form-group">
+              <label>租户过滤</label>
+              <select id="mem-filter-tenant"><option value="">全部租户</option></select>
+            </div>
+            <div class="form-group">
+              <label>作用域 (Scope)</label>
+              <select id="mem-filter-scope">
+                <option value="">全部 (Global + Project)</option>
+                <option value="global">Global</option>
+                <option value="project">Project</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>包含已删除状态</label>
+              <select id="mem-filter-deleted">
+                <option value="all">全部 (正常 + 已软删除)</option>
+                <option value="active">仅未删除</option>
+                <option value="deleted">仅已软删除 (回收站)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>关键词搜索</label>
+              <input type="text" id="mem-filter-q" placeholder="标题或正文关键词..." />
+            </div>
+            <div class="form-group">
+              <button type="submit">查询刷新</button>
+            </div>
+          </form>
+
+          <table id="memories-table" style="margin-top:12px;">
+            <thead>
+              <tr>
+                <th>标题 / ID</th>
+                <th>作用域 / 项目</th>
+                <th>分类 / 标签</th>
+                <th>版本 / 状态</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div id="memory-detail-card" class="card hidden">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2 id="detail-title">Memory 详情与修订历史</h2>
+            <button class="secondary small" id="btn-close-detail">关闭详情</button>
+          </div>
+          <pre class="code-box" id="detail-content"></pre>
+          <h2 style="margin-top:16px;">历史版本快照 (Revisions)</h2>
+          <pre class="code-box" id="detail-revisions"></pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/ui/app.js"></script>
+</body>
+</html>
