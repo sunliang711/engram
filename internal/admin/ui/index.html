@@ -19,12 +19,12 @@
       <p class="subtitle">管理员登录（首次启动或设置 <code>RESET_ADMIN</code> 时请使用服务启动日志打印的临时密码）</p>
       <form id="login-form">
         <div class="form-group">
-          <label>管理员账号</label>
-          <input type="text" id="login-username" value="admin" required />
+          <label for="login-username">管理员账号</label>
+          <input type="text" id="login-username" autocomplete="username" value="admin" required />
         </div>
         <div class="form-group">
-          <label>密码</label>
-          <input type="password" id="login-password" placeholder="输入临时密码或管理员密码" required autofocus />
+          <label for="login-password">密码</label>
+          <input type="password" id="login-password" autocomplete="current-password" placeholder="输入临时密码或管理员密码" required autofocus />
         </div>
         <button type="submit" style="width:100%; margin-top:8px;">登 录</button>
       </form>
@@ -38,17 +38,18 @@
       <p class="subtitle" id="pwd-view-subtitle">当前使用的是首次启动或 <code>RESET_ADMIN</code> 生成的临时密码。请立即设置新的管理员密码以激活控制台。</p>
       <form id="force-password-form">
         <div class="form-group hidden" id="current-admin-password-group">
-          <label>当前密码</label>
-          <input type="password" id="current-admin-password" placeholder="请输入当前管理员密码" />
+          <label for="current-admin-password">当前密码</label>
+          <input type="password" id="current-admin-password" autocomplete="current-password" placeholder="请输入当前管理员密码" />
         </div>
         <div class="form-group">
-          <label>新密码（8 ~ 72 位）</label>
-          <input type="password" id="new-admin-password" minlength="8" maxlength="72" placeholder="请输入新密码" required />
+          <label for="new-admin-password">新密码（8 ~ 72 位）</label>
+          <input type="password" id="new-admin-password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="请输入新密码" required />
         </div>
         <div class="form-group">
-          <label>确认新密码</label>
-          <input type="password" id="confirm-admin-password" minlength="8" maxlength="72" placeholder="请再次输入新密码" required />
+          <label for="confirm-admin-password">确认新密码</label>
+          <input type="password" id="confirm-admin-password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="请再次输入新密码" required />
         </div>
+        <label class="checkbox-label"><input type="checkbox" id="show-admin-passwords" /> 显示密码</label>
         <div style="display:flex; gap:10px; margin-top:8px;">
           <button type="submit" style="flex:1;">保存新密码</button>
           <button type="button" id="btn-cancel-change-pwd" class="secondary hidden">取消返回</button>
@@ -64,91 +65,100 @@
         <span>Engram</span>
         <span class="badge">V1 Admin Console</span>
       </div>
-      <div style="display:flex; align-items:center; gap:12px;">
-        <span id="current-admin-user" style="font-size:13px; color:var(--text-muted);">admin</span>
-        <button class="secondary small" id="btn-open-glossary">术语与权限说明</button>
-        <button class="secondary small" id="btn-open-change-pwd">修改密码</button>
-        <button class="secondary small" id="btn-logout">退出登录</button>
-      </div>
+      <details class="account-menu">
+        <summary><span id="current-admin-user">admin</span> · 账号</summary>
+        <div class="account-actions">
+          <button class="secondary small" id="btn-open-glossary">术语与权限说明</button>
+          <button class="secondary small" id="btn-open-change-pwd">修改密码</button>
+          <button class="secondary small" id="btn-logout">退出登录</button>
+        </div>
+      </details>
     </header>
 
     <nav class="nav-tabs">
-      <button class="tab-btn active" data-tab="tab-overview">1. 概览与一键初始化</button>
-      <button class="tab-btn" data-tab="tab-tenants">2. 租户与成员身份</button>
-      <button class="tab-btn" data-tab="tab-projects">3. 项目与仓库识别</button>
-      <button class="tab-btn" data-tab="tab-tokens">4. API Token 与客户端配置</button>
-      <button class="tab-btn" data-tab="tab-memories">5. 知识治理、恢复与导出</button>
-      <button class="tab-btn" data-tab="tab-migration">6. 系统迁移与还原</button>
+      <button class="tab-btn active" data-tab="tab-overview">概览</button>
+      <button class="tab-btn" data-tab="tab-memories">知识库</button>
+      <button class="tab-btn" data-tab="tab-projects">项目</button>
+      <button class="tab-btn" data-tab="tab-tenants">租户与成员</button>
+      <button class="tab-btn" data-tab="tab-tokens">客户端</button>
+      <button class="tab-btn" data-tab="tab-migration">系统迁移</button>
     </nav>
 
     <main class="container">
       <!-- TAB 1: Overview & Quickstart -->
       <section id="tab-overview" class="tab-pane">
-        <div class="grid-stats" id="stats-grid">
-          <div class="stat-card"><div class="label">Tenants (租户)</div><div class="value" id="stat-tenants">0</div></div>
-          <div class="stat-card"><div class="label">Principals (身份)</div><div class="value" id="stat-principals">0</div></div>
-          <div class="stat-card"><div class="label">Projects (项目)</div><div class="value" id="stat-projects">0</div></div>
-          <div class="stat-card"><div class="label">Active Memories</div><div class="value" id="stat-memories">0</div></div>
-          <div class="stat-card"><div class="label">Deleted Memories</div><div class="value" id="stat-deleted">0</div></div>
-          <div class="stat-card"><div class="label">Active Tokens</div><div class="value" id="stat-tokens">0</div></div>
-          <div class="stat-card"><div class="label">Total Events</div><div class="value" id="stat-events">0</div></div>
+        <div class="page-heading">
+          <div><p class="eyebrow">共享记忆工作台</p><h1 id="overview-title">连接你的第一个 AI 客户端</h1><p class="desc" id="overview-description">创建空间、关联项目，再复制客户端配置，即可开始共享记忆。</p></div>
+          <button type="button" class="secondary" data-open-tab="tab-memories">浏览知识库 →</button>
         </div>
+        <div class="grid-stats" id="stats-grid">
+          <button class="stat-card" data-open-tab="tab-memories"><span class="label">知识条目</span><strong class="value" id="stat-memories">0</strong></button>
+          <button class="stat-card" data-open-tab="tab-projects"><span class="label">已关联项目</span><strong class="value" id="stat-projects">0</strong></button>
+          <button class="stat-card" data-open-tab="tab-tokens"><span class="label">活跃客户端密钥</span><strong class="value" id="stat-tokens">0</strong></button>
+        </div>
+        <details class="secondary-stats">
+          <summary>更多统计</summary>
+          <div class="compact-stats">
+            <span>租户 <strong id="stat-tenants">0</strong></span><span>成员 <strong id="stat-principals">0</strong></span><span>已删除知识 <strong id="stat-deleted">0</strong></span><span>变更事件 <strong id="stat-events">0</strong></span>
+          </div>
+        </details>
 
-        <div class="card">
-          <h2>🚀 一键快速初始化向导 (Quick Bootstrap)</h2>
-          <p class="desc">一步创建 Tenant、Principal（授予 global_writer/admin）、注册首个项目及 Git Remote，并签发 MCP 客户端 API Token。</p>
+        <details class="card setup-panel" id="quickstart-panel" open>
+          <summary><span>快速接入</span><span class="summary-hint">创建空间与首个客户端</span></summary>
+          <p class="desc">填写基本信息即可生成客户端密钥。个人使用可保留默认值。</p>
           <form id="quickstart-form">
             <div class="form-row">
               <div class="form-group">
-                <label>租户名称 (Tenant Name)</label>
+                <label for="qs-tenant">租户名称</label>
                 <input type="text" id="qs-tenant" placeholder="例如：personal 或 team-core" value="default" required />
-                <small class="field-hint">顶层隔离边界；同一 Tenant 内共享 Global 记忆，跨 Tenant 完全隔离。</small>
+                <small class="field-hint">同一租户共享全局记忆，不同租户互相隔离。</small>
               </div>
               <div class="form-group">
-                <label>成员/主体标识 (Principal Subject)</label>
+                <label for="qs-subject">成员标识</label>
                 <input type="text" id="qs-subject" placeholder="例如：eagle 或 owner" value="owner" required />
-                <small class="field-hint">唯一标识使用记忆库的人或自动化角色（如 <code>eagle</code>）；个人多台设备/Agent 可共用此主体，再按设备签发多张 Token。</small>
+                <small class="field-hint">一个人可在多台设备、多个 Agent 中共用此成员。</small>
               </div>
               <div class="form-group">
-                <label>显示名称 (Display Name)</label>
+                <label for="qs-display">显示名称</label>
                 <input type="text" id="qs-display" placeholder="例如：Eagle" value="Owner" required />
-                <small class="field-hint">控制台与审计记录中的可读名称（<code>created_by</code>/<code>updated_by</code>），不影响鉴权。</small>
-              </div>
-              <div class="form-group">
-                <label>Tenant 角色</label>
-                <select id="qs-tenant-role">
-                  <option value="admin">admin (全局读写 + 自动拥有全项目 maintainer)</option>
-                  <option value="global_writer" selected>global_writer (可读写全局知识)</option>
-                  <option value="member">member (仅读全局知识)</option>
-                </select>
-                <small class="field-hint">控制 Global 记忆权限；若填写下方初始项目，会自动授予该项目 <code>maintainer</code>。</small>
               </div>
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label>初始项目名称 (可选)</label>
+                <label for="qs-project">初始项目（可选）</label>
                 <input type="text" id="qs-project" placeholder="例如：engram" />
-                <small class="field-hint">用于隔离存放单个代码库的 Project 记忆；留空则仅创建 Tenant 与 Principal。</small>
               </div>
               <div class="form-group">
-                <label>Git Remote URL (可选)</label>
-                <input type="text" id="qs-remote" placeholder="例如：git@github.com:eagle/engram.git" />
-              </div>
-              <div class="form-group">
-                <label>Monorepo 子路径 workspace_path (可选)</label>
-                <input type="text" id="qs-workspace" placeholder="例如：services/api（根目录留空）" />
+                <label for="qs-remote">Git 仓库地址（可选）</label>
+                <input type="text" id="qs-remote" placeholder="git@github.com:team/engram.git" />
               </div>
             </div>
-            <button type="submit">一键完成初始化并生成 Token</button>
+            <details class="advanced-options">
+              <summary>高级选项 · 权限与 Monorepo</summary>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="qs-tenant-role">租户角色</label>
+                  <select id="qs-tenant-role"><option value="global_writer" selected>全局读写者</option><option value="member">全局只读成员</option><option value="admin">租户管理员</option></select>
+                  <small class="field-hint">初始项目将自动授予维护者权限。</small>
+                </div>
+                <div class="form-group">
+                  <label for="qs-workspace">Monorepo 子路径（可选）</label>
+                  <input type="text" id="qs-workspace" placeholder="services/api（根目录留空）" />
+                </div>
+              </div>
+            </details>
+            <button type="submit">创建并生成客户端配置</button>
           </form>
-
-          <div id="qs-result" class="hidden" style="margin-top:18px;">
-            <span class="badge success">初始化成功 — Token 已加密保存，后续可在「API Token 与客户端配置」中随时查看与复制</span>
-            <pre class="code-box" id="qs-result-box"></pre>
-            <div style="margin-top:10px;">
-              <button type="button" class="secondary small" id="btn-go-client-guides">查看 Codex / Claude / Gemini 接入配置 →</button>
-            </div>
+          <div id="qs-result" class="hidden success-panel" role="status">
+            <h3>接入信息已就绪</h3>
+            <p>客户端密钥已保存。下一步选择你的 AI 客户端并复制配置。</p>
+            <button type="button" id="btn-go-client-guides">配置 Codex / Claude / Gemini →</button>
+            <details><summary>查看初始化详情</summary><pre class="code-box" id="qs-result-box"></pre></details>
           </div>
+        </details>
+        <div class="card" id="recent-memories-card">
+          <div class="section-heading"><h2>最近更新的知识</h2><button type="button" class="secondary small" data-open-tab="tab-memories">查看全部</button></div>
+          <div id="recent-memories" class="recent-list"></div>
         </div>
       </section>
 
@@ -156,28 +166,37 @@
       <section id="tab-tenants" class="tab-pane hidden">
         <div class="grid-2">
           <div class="card">
-            <h2>创建租户 (Tenant)</h2>
+            <h2>创建租户</h2>
             <p class="desc">Global Memory 在同一 Tenant 内跨项目共享，不同 Tenant 严格物理隔离。</p>
             <form id="create-tenant-form">
               <div class="form-group">
-                <label>租户名称</label>
+                <label for="tenant-name">租户名称</label>
                 <input type="text" id="tenant-name" placeholder="例如：engineering" required />
               </div>
-              <button type="submit">创建 Tenant</button>
+              <button type="submit">创建租户</button>
             </form>
           </div>
 
           <div class="card">
-            <h2>创建成员身份并绑定租户角色 (Principal & Role)</h2>
+            <h2>成员与租户权限</h2>
             <p class="desc">为用户或独立自动化角色（如 CI 机器人）创建权限主体并授予 Tenant 权限；个人多台设备或多种 Agent 可共用同一 Principal。</p>
             <form id="create-principal-form">
+              <div class="form-group">
+                <label for="prin-mode">操作</label>
+                <select id="prin-mode"><option value="create">创建新成员</option><option value="bind">绑定已有成员</option><option value="update_role">调整已有成员的租户角色</option></select>
+              </div>
+              <div class="form-group hidden" id="prin-existing-group">
+                <label for="prin-existing">已有成员</label>
+                <select id="prin-existing"></select>
+                <small id="prin-existing-hint" class="field-hint"></small>
+              </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label>所属租户</label>
+                  <label for="prin-tenant">所属租户</label>
                   <select id="prin-tenant" required></select>
                 </div>
-                <div class="form-group">
-                  <label>认证方式 (Provider)</label>
+                <div class="form-group" id="prin-provider-group">
+                  <label for="prin-provider">认证方式</label>
                   <select id="prin-provider">
                     <option value="api_token">api_token</option>
                     <option value="oidc">oidc</option>
@@ -187,45 +206,45 @@
                 </div>
               </div>
               <div class="form-row">
-                <div class="form-group">
-                  <label>唯一标识 (Subject)</label>
+                <div class="form-group" id="prin-subject-group">
+                  <label for="prin-subject">成员标识</label>
                   <input type="text" id="prin-subject" placeholder="例如：eagle 或 ci-bot" required />
                   <small class="field-hint">同一 Provider 下不可重复，用于区分不同成员或自动化角色。</small>
                 </div>
-                <div class="form-group">
-                  <label>显示名称</label>
+                <div class="form-group" id="prin-name-group">
+                  <label for="prin-name">显示名称</label>
                   <input type="text" id="prin-name" placeholder="例如：Eagle 或 CI 只读机器人" required />
                 </div>
                 <div class="form-group">
-                  <label>Tenant 角色</label>
+                  <label for="prin-role">租户角色</label>
                   <select id="prin-role">
-                    <option value="global_writer">global_writer (可读写全局知识)</option>
-                    <option value="member">member (仅读全局知识)</option>
-                    <option value="admin">admin (全局读写 + 全项目 maintainer)</option>
+                    <option value="global_writer">全局读写者</option>
+                    <option value="member">全局只读成员</option>
+                    <option value="admin">租户管理员</option>
                   </select>
                   <small class="field-hint">控制 Global 记忆权限；<code>admin</code> 自动拥有所有活跃项目的 <code>maintainer</code>。</small>
                 </div>
               </div>
-              <button type="submit">创建 Principal 并授权</button>
+              <button type="submit" id="btn-save-principal">创建新成员</button>
             </form>
           </div>
         </div>
 
         <div class="card">
-          <h2>租户列表 (Tenants)</h2>
+          <h2>租户列表</h2>
           <table id="tenants-table">
             <thead>
-              <tr><th>Tenant ID</th><th>名称</th><th>状态</th><th>创建时间</th></tr>
+              <tr><th>租户标识</th><th>名称</th><th>状态</th><th>创建时间</th></tr>
             </thead>
             <tbody></tbody>
           </table>
         </div>
 
         <div class="card">
-          <h2>身份与租户角色列表 (Principals & Tenant Memberships)</h2>
+          <h2>成员与已绑定角色</h2>
           <table id="principals-table">
             <thead>
-              <tr><th>Principal ID</th><th>显示名称</th><th>Provider / Subject</th><th>状态</th><th>已绑定的 Tenant 角色</th></tr>
+              <tr><th>成员标识</th><th>显示名称</th><th>认证方式 / 成员标识</th><th>状态</th><th>已绑定的 租户角色</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -234,28 +253,43 @@
 
       <!-- TAB 3: Projects & Repositories -->
       <section id="tab-projects" class="tab-pane hidden">
+        <div class="card">
+          <h2>已关联项目</h2>
+          <table id="projects-table">
+            <thead>
+              <tr>
+                <th>项目名称</th>
+                <th>所属租户</th>
+                <th><code>.engram-project</code> Marker</th>
+                <th>标准化 Remote &amp; workspace_path</th>
+                <th>项目成员角色</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
         <div class="grid-2">
           <div class="card">
-            <h2>注册项目 (Register Project)</h2>
+            <h2>注册项目</h2>
             <p class="desc">注册逻辑项目、绑定标准化 Git Remote、Monorepo 子路径或生成 <code>.engram-project</code> Marker UUID。</p>
             <form id="create-project-form">
               <div class="form-row">
                 <div class="form-group">
-                  <label>所属租户</label>
+                  <label for="proj-tenant">所属租户</label>
                   <select id="proj-tenant" required></select>
                 </div>
                 <div class="form-group">
-                  <label>项目名称</label>
+                  <label for="proj-name">项目名称</label>
                   <input type="text" id="proj-name" placeholder="例如：project-a" required />
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group">
-                  <label>Git Remote URL (可选)</label>
+                  <label for="proj-remote">Git Remote URL (可选)</label>
                   <input type="text" id="proj-remote" placeholder="git@github.com:eagle/project-a.git" />
                 </div>
                 <div class="form-group">
-                  <label>Monorepo workspace_path (可选)</label>
+                  <label for="proj-workspace">Monorepo workspace_path (可选)</label>
                   <input type="text" id="proj-workspace" placeholder="例如：services/api" />
                 </div>
               </div>
@@ -267,23 +301,23 @@
           </div>
 
           <div class="card">
-            <h2>配置项目成员权限 & 追加 Remote 别名</h2>
+            <h2>项目权限与仓库地址</h2>
             <form id="add-project-member-form" style="margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--border);">
               <div class="form-row">
                 <div class="form-group">
-                  <label>选择项目</label>
+                  <label for="pm-project">选择项目</label>
                   <select id="pm-project" required></select>
                 </div>
                 <div class="form-group">
-                  <label>选择 Principal</label>
+                  <label for="pm-principal">选择成员</label>
                   <select id="pm-principal" required></select>
                 </div>
                 <div class="form-group">
-                  <label>项目角色</label>
+                  <label for="pm-role">项目角色</label>
                   <select id="pm-role">
-                    <option value="maintainer">maintainer (读写 + 软删除/恢复)</option>
-                    <option value="writer">writer (创建与更新，不可删除)</option>
-                    <option value="reader">reader (仅只读)</option>
+                    <option value="maintainer">维护者 · 读写与恢复</option>
+                    <option value="writer">编辑者 · 创建与更新</option>
+                    <option value="reader">只读成员</option>
                   </select>
                   <small class="field-hint">仅控制该项目的 Project 记忆（Tenant 为 <code>admin</code> 时自动具备 <code>maintainer</code>）。</small>
                 </div>
@@ -294,15 +328,15 @@
             <form id="add-project-remote-form">
               <div class="form-row">
                 <div class="form-group">
-                  <label>选择项目</label>
+                  <label for="pr-project">选择项目</label>
                   <select id="pr-project" required></select>
                 </div>
                 <div class="form-group">
-                  <label>Git Remote URL (支持 SSH/HTTPS/别名)</label>
+                  <label for="pr-remote">Git Remote URL (支持 SSH/HTTPS/别名)</label>
                   <input type="text" id="pr-remote" placeholder="https://github.com/eagle/project-a.git" required />
                 </div>
                 <div class="form-group">
-                  <label>workspace_path (可选)</label>
+                  <label for="pr-workspace">workspace_path (可选)</label>
                   <input type="text" id="pr-workspace" placeholder="services/api" />
                 </div>
               </div>
@@ -311,64 +345,64 @@
           </div>
         </div>
 
-        <div class="card">
-          <h2>已注册项目、Marker、Remote 映射与项目成员</h2>
-          <table id="projects-table">
-            <thead>
-              <tr>
-                <th>项目名称 / ID</th>
-                <th>所属 Tenant</th>
-                <th><code>.engram-project</code> Marker</th>
-                <th>标准化 Remote &amp; workspace_path</th>
-                <th>项目成员角色</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
       </section>
 
       <!-- TAB 4: API Tokens -->
       <section id="tab-tokens" class="tab-pane hidden">
         <div class="card">
-          <h2>签发客户端 API Token</h2>
+          <h2>客户端密钥</h2>
+          <table id="tokens-table">
+            <thead>
+              <tr><th>备注名称</th><th>Token / 前缀</th><th>租户</th><th>成员</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h2>新增客户端密钥</h2>
           <p class="desc">在同一个 Principal（如你本人）名下，可为 MacBook Codex、Mac mini Claude、Gemini CLI 等不同设备或客户端分别签发独立 Token，方便按客户端单独吊销。</p>
           <form id="create-token-form">
             <div class="form-row">
               <div class="form-group">
-                <label>所属租户 (Tenant)</label>
+                <label for="tok-tenant">所属租户</label>
                 <select id="tok-tenant" required></select>
               </div>
               <div class="form-group">
-                <label>绑定主体 (Principal)</label>
+                <label for="tok-principal">所属成员</label>
                 <select id="tok-principal" required></select>
               </div>
               <div class="form-group">
-                <label>Token 备注名称（建议填设备/客户端名）</label>
+                <label for="tok-name">客户端名称</label>
                 <input type="text" id="tok-name" placeholder="例如：macbook-codex 或 macmini-claude" value="default-client" required />
               </div>
             </div>
-            <button type="submit">生成新 API Token</button>
+            <button type="submit">生成客户端密钥</button>
           </form>
 
           <div id="new-token-box" class="hidden" style="margin-top:16px;">
-            <span class="badge success">API Token 已签发 — 后续可在下方列表中随时查看、复制或一键填入配置</span>
+            <span class="badge success">API Token 已签发 — 后续可在上方列表中随时查看、复制或一键填入配置</span>
             <pre class="code-box" id="new-token-content"></pre>
           </div>
         </div>
 
-        <div class="card" id="client-guides-card">
+        <details class="card setup-panel" id="client-guides-card">
+          <summary><span>客户端接入配置</span><span class="summary-hint">选择客户端 · 复制配置 · 验证连接</span></summary>
           <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
             <div>
               <h2>客户端接入配置建议（Codex / Claude Code / Gemini）</h2>
-              <p class="desc" style="margin-bottom:0;">分两步完成：1) 配置 Engram MCP Server；2) 在各自全局指令文件中加入会话开始时的项目识别与记忆读写规范。</p>
+              <p class="desc" style="margin-bottom:0;">按三个步骤完成：配置 MCP、加入记忆使用说明，再检查连接。</p>
             </div>
-            <div style="min-width:280px; flex:0 1 360px;">
+            <div class="guide-credentials">
               <label for="guide-token-input" style="margin-bottom:4px;">当前预览用 API Token（签发后自动填入，也可手动粘贴）</label>
               <input type="text" id="guide-token-input" placeholder="aim_...（留空则显示占位符 &lt;YOUR_API_TOKEN&gt;）" />
             </div>
           </div>
 
+          <div class="form-group">
+            <label for="guide-server-input">客户端可访问的服务地址</label>
+            <input type="url" id="guide-server-input" placeholder="https://memory.example.com" />
+            <small class="field-hint" id="guide-server-hint">跨设备使用时，请填写客户端能够访问的地址。</small>
+          </div>
           <div class="client-tabs" role="tablist">
             <button type="button" class="client-tab-btn active" data-client="codex">Codex</button>
             <button type="button" class="client-tab-btn" data-client="claude">Claude Code</button>
@@ -422,6 +456,17 @@
               </div>
               <pre class="code-box" id="guide-claude-rules"></pre>
             </div>
+            <div class="guide-step">
+              <h3>建议：关闭本地自动记忆</h3>
+              <p class="guide-note">在 <code>~/.claude/settings.json</code> 的现有配置中合并 <code>"autoMemoryEnabled": false</code>，禁用 Claude Code 的本地自动记忆，让 Engram 成为记忆的唯一来源。</p>
+              <div class="code-header">
+                <span><code>~/.claude/settings.json</code></span>
+                <button type="button" class="secondary small copy-btn" data-copy-target="guide-claude-memory-settings">复制配置</button>
+              </div>
+              <pre class="code-box" id="guide-claude-memory-settings">{
+  "autoMemoryEnabled": false
+}</pre>
+            </div>
           </div>
 
           <!-- Gemini Guide -->
@@ -450,17 +495,9 @@
               <pre class="code-box" id="guide-gemini-rules"></pre>
             </div>
           </div>
-        </div>
+          <div class="guide-step"><h3>第 3 步：验证连接</h3><p class="guide-note">保存配置后重新连接客户端中的 Engram MCP，尝试查询共享记忆。连接成功后即可开始使用。</p><button type="button" class="secondary small" id="btn-check-mcp">检查服务端 MCP 连接</button><p id="mcp-check-result" class="field-hint" role="status"></p></div>
+        </details>
 
-        <div class="card">
-          <h2>已签发 API Token 列表</h2>
-          <table id="tokens-table">
-            <thead>
-              <tr><th>备注名称</th><th>Token / 前缀</th><th>Tenant</th><th>Principal</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
       </section>
 
       <!-- TAB 5: Memories, Revisions, Restore & Export -->
@@ -468,7 +505,7 @@
         <div class="card">
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
             <div>
-              <h2>知识库浏览、软删除恢复与 Markdown 导出</h2>
+              <h2>知识库</h2>
               <p class="desc" style="margin-bottom:0;">支持查看所有 Tenant 与项目的知识、审查历史修订快照（Revisions）、恢复已软删除条目，以及打包下载确定性 Markdown 压缩包保存到本机。</p>
             </div>
             <button type="button" id="btn-download-export-zip" class="secondary">📦 导出并下载 Markdown (.zip)</button>
@@ -476,19 +513,19 @@
 
           <form id="filter-memories-form" class="form-row" style="align-items:end;">
             <div class="form-group">
-              <label>租户过滤</label>
+              <label for="mem-filter-tenant">租户过滤</label>
               <select id="mem-filter-tenant"><option value="">全部租户</option></select>
             </div>
             <div class="form-group">
-              <label>作用域 (Scope)</label>
+              <label for="mem-filter-scope">记忆范围</label>
               <select id="mem-filter-scope">
-                <option value="">全部 (Global + Project)</option>
-                <option value="global">Global</option>
-                <option value="project">Project</option>
+                <option value="">全部范围</option>
+                <option value="global">全局记忆</option>
+                <option value="project">项目记忆</option>
               </select>
             </div>
             <div class="form-group">
-              <label>包含已删除状态</label>
+              <label for="mem-filter-deleted">包含已删除状态</label>
               <select id="mem-filter-deleted">
                 <option value="all">全部 (正常 + 已软删除)</option>
                 <option value="active">仅未删除</option>
@@ -496,14 +533,16 @@
               </select>
             </div>
             <div class="form-group">
-              <label>关键词搜索</label>
+              <label for="mem-filter-q">关键词搜索</label>
               <input type="text" id="mem-filter-q" placeholder="标题或正文关键词..." />
             </div>
             <div class="form-group">
-              <button type="submit">查询刷新</button>
+              <button type="submit">查询</button>
+              <button type="button" class="secondary" id="btn-clear-memory-filters">清除筛选</button>
             </div>
           </form>
 
+          <div class="table-toolbar"><p id="memory-list-status" role="status">正在加载知识…</p><label for="mem-page-size">每页 <select id="mem-page-size"><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label></div>
           <table id="memories-table" style="margin-top:12px;">
             <thead>
               <tr>
@@ -517,16 +556,19 @@
             </thead>
             <tbody></tbody>
           </table>
+          <div class="pagination"><span id="memory-page-info"></span><div><button type="button" class="secondary small" id="btn-memory-prev">上一页</button><button type="button" class="secondary small" id="btn-memory-next">下一页</button></div></div>
         </div>
 
-        <div id="memory-detail-card" class="card hidden">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <h2 id="detail-title">Memory 详情与修订历史</h2>
-            <button class="secondary small" id="btn-close-detail">关闭详情</button>
-          </div>
-          <pre class="code-box" id="detail-content"></pre>
-          <h2 style="margin-top:16px;">历史版本快照 (Revisions)</h2>
-          <pre class="code-box" id="detail-revisions"></pre>
+        <div id="memory-detail-card" class="drawer-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+          <article class="memory-drawer" tabindex="-1">
+            <div class="drawer-header"><div><p class="eyebrow">知识详情</p><h2 id="detail-title">知识详情与历史</h2></div><button class="secondary small" id="btn-close-detail">关闭详情</button></div>
+            <p id="detail-meta" class="desc"></p>
+            <div class="client-tabs" aria-label="正文显示方式"><button type="button" id="btn-detail-preview" class="client-tab-btn active">阅读预览</button><button type="button" id="btn-detail-source" class="client-tab-btn">Markdown 源码</button><button type="button" id="btn-copy-memory" class="secondary small">复制正文</button></div>
+            <div id="detail-preview" class="markdown-body"></div>
+            <pre class="code-box hidden" id="detail-content"></pre>
+            <div class="section-heading"><h2>版本历史</h2><span class="field-hint">展开版本可查看相对上一版本的变化</span></div>
+            <div id="detail-revisions" class="revision-list"></div>
+          </article>
         </div>
       </section>
 
@@ -591,13 +633,13 @@
         <ul class="glossary-list">
           <li><strong>Tenant（租户）</strong>：最高层级的隔离边界（如 <code>default</code>、<code>personal</code>、<code>team-core</code>）。同一 Tenant 内共享 <code>global</code> 记忆，不同 Tenant 之间数据完全隔离。</li>
           <li><strong>Principal（成员 / 权限主体）</strong>：代表使用 Engram 的<strong>人或独立自动化角色</strong>（例如开发者 <code>eagle</code>、只读机器人 <code>ci-bot</code>），决定权限范围与审计归属（<code>created_by</code>/<code>updated_by</code>）。个人的多台设备、多种 Agent（MacBook 上的 Codex、Mac mini 上的 Claude 等）可共用同一个 Principal，并分别签发多张 <strong>API Token</strong> 来区分各客户端凭证。</li>
-          <li><strong>Provider / Subject（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分成员或自动化角色的唯一 ID（如 <code>eagle</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
+          <li><strong>认证方式 / 成员标识（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分成员或自动化角色的唯一 ID（如 <code>eagle</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
           <li><strong>Project（项目）&amp; Marker / Remote</strong>：归属于某个 Tenant 的独立代码库或 Monorepo 子路径（<code>workspace_path</code>），用于存放 <code>project</code> 作用域记忆。可通过 Git Remote 或根目录 <code>.engram-project</code> UUID 文件自动匹配。</li>
         </ul>
       </div>
 
       <div class="glossary-section">
-        <h3>2. Tenant 角色（控制租户级与 Global 记忆权限）</h3>
+        <h3>2. 租户角色（控制租户级与 Global 记忆权限）</h3>
         <table>
           <thead>
             <tr><th>角色</th><th>Global 记忆</th><th>Project 记忆</th><th>典型适用场景</th></tr>
@@ -641,7 +683,8 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <script src="/ui/markdown.js"></script>
   <script src="/ui/app.js"></script>
 </body>
 </html>

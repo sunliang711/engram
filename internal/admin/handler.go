@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -546,6 +547,7 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handlePrincipals lists identities and separates creation, binding, and explicit role changes.
 func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch r.Method {
@@ -610,6 +612,8 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var req struct {
+			Mode             string `json:"mode"`
+			PrincipalID      string `json:"principal_id"`
 			TenantID         string `json:"tenant_id"`
 			IdentityProvider string `json:"identity_provider"`
 			Subject          string `json:"subject"`
@@ -628,12 +632,27 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 		if req.IdentityProvider == "" {
 			req.IdentityProvider = "api_token"
 		}
-		if strings.TrimSpace(req.Subject) == "" || strings.TrimSpace(req.DisplayName) == "" {
+		if req.Mode == "" {
+			req.Mode = "create"
+		}
+		if req.Mode != "create" && req.Mode != "bind" && req.Mode != "update_role" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid principal mode"))
+			return
+		}
+		if req.Mode == "create" && (strings.TrimSpace(req.Subject) == "" || strings.TrimSpace(req.DisplayName) == "") {
 			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "subject and display_name are required"))
 			return
 		}
 		if req.TenantRole == "" {
 			req.TenantRole = "member"
+		}
+		if req.TenantRole != "member" && req.TenantRole != "global_writer" && req.TenantRole != "admin" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant role"))
+			return
+		}
+		if req.IdentityProvider != "api_token" && req.IdentityProvider != "oidc" && req.IdentityProvider != "mtls" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid identity provider"))
+			return
 		}
 
 		tx, err := h.pool.Begin(ctx)
@@ -644,24 +663,53 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		var pid uuid.UUID
-		err = tx.QueryRow(ctx, `
+		if req.Mode == "create" {
+			err = tx.QueryRow(ctx, `
 			INSERT INTO principals (id, identity_provider, subject, display_name, status)
 			VALUES ($1, $2, $3, $4, 'active')
-			ON CONFLICT (identity_provider, subject) DO UPDATE SET display_name = EXCLUDED.display_name
+			ON CONFLICT (identity_provider, subject) DO NOTHING
 			RETURNING id
 		`, uuid.New(), strings.TrimSpace(req.IdentityProvider), strings.TrimSpace(req.Subject), strings.TrimSpace(req.DisplayName)).Scan(&pid)
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSON(w, http.StatusConflict, map[string]any{"code": "PRINCIPAL_EXISTS", "message": "成员标识已存在，请选择绑定已有成员；原有名称和权限未变更。"})
+				return
+			}
+		} else {
+			pid, err = uuid.Parse(req.PrincipalID)
+			if err != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "请选择有效的已有成员"))
+				return
+			}
+			// Binding an existing identity never changes its profile or another tenant's role.
+			err = tx.QueryRow(ctx, `SELECT id FROM principals WHERE id = $1 AND status = 'active' FOR UPDATE`, pid).Scan(&pid)
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "请选择有效的已有成员"))
+				return
+			}
+		}
 		if err != nil {
-			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "upsert principal", err))
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "resolve principal", err))
 			return
 		}
 
-		_, err = tx.Exec(ctx, `
+		var affected int64
+		if req.Mode == "update_role" {
+			tag, updateErr := tx.Exec(ctx, `UPDATE tenant_members SET role = $3 WHERE tenant_id = $1 AND principal_id = $2`, tid, pid, req.TenantRole)
+			err, affected = updateErr, tag.RowsAffected()
+		} else {
+			tag, bindErr := tx.Exec(ctx, `
 			INSERT INTO tenant_members (tenant_id, principal_id, role)
 			VALUES ($1, $2, $3)
-			ON CONFLICT (tenant_id, principal_id) DO UPDATE SET role = EXCLUDED.role
+			ON CONFLICT (tenant_id, principal_id) DO NOTHING
 		`, tid, pid, req.TenantRole)
+			err, affected = bindErr, tag.RowsAffected()
+		}
 		if err != nil {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "bind tenant role", err))
+			return
+		}
+		if affected == 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "MEMBERSHIP_CONFLICT", "message": "成员绑定状态已变化；请刷新后选择绑定或调整角色，已有权限未变更。"})
 			return
 		}
 
@@ -669,7 +717,11 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit principal tx", err))
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"principal_id": pid, "tenant_id": tid, "role": req.TenantRole})
+		status := http.StatusCreated
+		if req.Mode == "update_role" {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, map[string]any{"principal_id": pid, "tenant_id": tid, "role": req.TenantRole, "mode": req.Mode})
 
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1159,6 +1211,7 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "revoked"})
 }
 
+// handleMemories returns a bounded, deterministic page with filter-aware totals.
 func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1169,6 +1222,11 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	scope := strings.TrimSpace(q.Get("scope"))
 	deletedMode := strings.TrimSpace(q.Get("deleted"))
 	keyword := strings.TrimSpace(q.Get("q"))
+	page, pageSize, err := parseMemoryPage(q)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
 
 	var (
 		args  []any
@@ -1201,12 +1259,30 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 		p := addArg(likePat)
 		where = append(where, "(m.title ILIKE "+p+" OR m.content_md ILIKE "+p+")")
 	}
+	if memoryID := q.Get("memory_id"); memoryID != "" {
+		id, err := uuid.Parse(memoryID)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid memory_id"))
+			return
+		}
+		where = append(where, "m.id = "+addArg(id))
+	}
 
 	whereClause := ""
 	if len(where) > 0 {
 		whereClause = "WHERE " + strings.Join(where, " AND ")
 	}
 
+	var total int
+	if err := h.pool.QueryRow(r.Context(), `SELECT count(*) FROM memories m `+whereClause, args...).Scan(&total); err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "count memories", err))
+		return
+	}
+	// Clamp stale pages after a deletion or a restore changes the filtered result set.
+	lastPage := max(1, (total+pageSize-1)/pageSize)
+	page = min(page, lastPage)
+	limitArg := addArg(pageSize)
+	offsetArg := addArg((page - 1) * pageSize)
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT m.id, m.tenant_id, m.scope, m.project_id, coalesce(p.name, ''),
 		       m.category, m.title, m.content_md, m.tags, m.is_pinned, m.status,
@@ -1214,8 +1290,8 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 		FROM memories m
 		LEFT JOIN projects p ON p.id = m.project_id
 		`+whereClause+`
-		ORDER BY m.updated_at DESC
-		LIMIT 100
+		ORDER BY m.updated_at DESC, m.id DESC
+		LIMIT `+limitArg+` OFFSET `+offsetArg+`
 	`, args...)
 	if err != nil {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "list memories", err))
@@ -1257,7 +1333,33 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 			"deleted_at":   deletedAt,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	if err := rows.Err(); err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "iterate memories", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize})
+}
+
+// parseMemoryPage validates pagination before database access and bounds offset arithmetic.
+func parseMemoryPage(q url.Values) (int, int, error) {
+	const defaultPageSize = 20
+	const maxPageSize = 100
+	const maxPage = 1000000
+	page, size := 1, defaultPageSize
+	for _, param := range []struct {
+		key string
+		dst *int
+		max int
+	}{{"page", &page, maxPage}, {"page_size", &size, maxPageSize}} {
+		if raw := q.Get(param.key); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 1 || value > param.max {
+				return 0, 0, apperror.New(apperror.CodeInvalidArgument, "invalid "+param.key)
+			}
+			*param.dst = value
+		}
+	}
+	return page, size, nil
 }
 
 func (h *Handler) handleMemoryRevisions(w http.ResponseWriter, r *http.Request) {
