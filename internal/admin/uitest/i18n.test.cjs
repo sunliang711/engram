@@ -79,3 +79,48 @@ test('English Markdown controls leave Chinese memory content unchanged', () => {
   assert.match(renderer.render(''), /No content/);
   assert.match(renderer.diff('相同正文', '相同正文'), /No content changes/);
 });
+
+test('button preference controls toggle theme and language on a single click', () => {
+  const makeButton = () => {
+    const attrs = {};
+    const listeners = {};
+    return {
+      tagName: 'BUTTON',
+      attrs,
+      innerHTML: '',
+      setAttribute(k, v) { attrs[k] = v; },
+      hasAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k); },
+      getAttribute(k) { return attrs[k]; },
+      addEventListener(type, fn) { listeners[type] = fn; },
+      click() { listeners.click && listeners.click(); },
+    };
+  };
+  const langBtn = makeButton();
+  const themeBtn = makeButton();
+  const storage = new Map();
+  const location = { search: '', href: 'http://localhost/tenants', assign(value) { this.assigned = value; } };
+  const context = vm.createContext({
+    window: { matchMedia: () => ({ matches: false }) },
+    document: {
+      documentElement: { dataset: {} },
+      createTreeWalker: () => ({ nextNode: () => false }),
+      querySelectorAll: (sel) => sel === '[data-ui-language]' ? [langBtn] : sel === '[data-ui-theme]' ? [themeBtn] : [],
+    },
+    navigator: { language: 'zh-CN' }, location, URL, URLSearchParams,
+    localStorage: {
+      getItem: (k) => storage.get(k) ?? null,
+      setItem: (k, v) => storage.set(k, v),
+    },
+  });
+  vm.runInContext(source, context);
+  context.window.EngramI18n.initialize();
+
+  assert.equal(themeBtn.attrs['data-theme-current'], 'dark');
+  themeBtn.click();
+  assert.equal(context.document.documentElement.dataset.theme, 'light');
+  assert.equal(themeBtn.attrs['data-theme-current'], 'light');
+
+  assert.equal(langBtn.attrs['data-lang-current'], 'zh-CN');
+  langBtn.click();
+  assert.equal(new URL(location.assigned).searchParams.get('lang'), 'en');
+});

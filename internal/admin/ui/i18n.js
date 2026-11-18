@@ -649,7 +649,13 @@
     "请填写成员显示名称。": "Enter the member display name.",
     "租户不存在，请刷新后重试。": "Tenant not found. Refresh and try again.",
     "成员不存在，请刷新后重试。": "Member not found. Refresh and try again.",
-    "系统内置账号不允许修改或删除。": "The built-in system account cannot be modified or deleted."
+    "系统内置账号不允许修改或删除。": "The built-in system account cannot be modified or deleted.",
+    "切换语言": "Switch language",
+    "切换主题": "Switch theme",
+    "切换为英文": "Switch to English",
+    "切换为中文": "Switch to 中文",
+    "切换为暗色模式": "Switch to dark theme",
+    "切换为亮色模式": "Switch to light theme"
   };
 
   const languageKey = "engram.language";
@@ -682,11 +688,50 @@
     return translated.replace(/\{(\d+)\}/g, (match, index) => index < values.length ? String(values[index]) : match);
   }
 
+  function renderLanguageControl(control) {
+    if (!control) return;
+    if (control.tagName === "SELECT") {
+      control.value = locale;
+      return;
+    }
+    if (typeof control.setAttribute === "function") {
+      const tip = locale === "zh-CN" ? t("切换为英文") : t("切换为中文");
+      control.setAttribute("title", tip);
+      control.setAttribute("aria-label", tip);
+      control.setAttribute("data-lang-current", locale);
+      control.innerHTML =
+        '<svg class="pref-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">' +
+        '<circle cx="10" cy="10" r="7.5"/>' +
+        '<ellipse cx="10" cy="10" rx="3.2" ry="7.5"/>' +
+        '<path d="M3 10h14"/>' +
+        "</svg>" +
+        `<span class="pref-lang-pair"><span class="${locale === "zh-CN" ? "pref-active" : "pref-dim"}">中</span><span class="pref-sep">/</span><span class="${locale === "en" ? "pref-active" : "pref-dim"}">EN</span></span>`;
+    }
+  }
+
+  function renderThemeControl(control) {
+    if (!control) return;
+    if (control.tagName === "SELECT" || typeof control.setAttribute !== "function") {
+      control.value = theme;
+      return;
+    }
+    const isDark = theme === "dark";
+    const tip = isDark ? t("切换为亮色模式") : t("切换为暗色模式");
+    control.setAttribute("title", tip);
+    control.setAttribute("aria-label", tip);
+    control.setAttribute("aria-pressed", String(isDark));
+    control.setAttribute("data-theme-current", theme);
+    const icon = isDark
+      ? '<svg class="pref-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M16.2 12.6A6.5 6.5 0 0 1 7.4 3.8a6.8 6.8 0 1 0 8.8 8.8Z"/></svg>'
+      : '<svg class="pref-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/></svg>';
+    control.innerHTML = icon + `<span>${isDark ? t("暗色") : t("亮色")}</span>`;
+  }
+
   function setTheme(value) {
     if (!themes.includes(value)) return;
     theme = value;
     document.documentElement.dataset.theme = theme;
-    document.querySelectorAll("[data-ui-theme]").forEach((select) => { select.value = theme; });
+    document.querySelectorAll("[data-ui-theme]").forEach(renderThemeControl);
     savePreference(themeKey, theme);
   }
 
@@ -723,13 +768,21 @@
         if (element.hasAttribute(attribute)) element.setAttribute(attribute, translateText(element.getAttribute(attribute)));
       });
     });
-    document.querySelectorAll("[data-ui-language]").forEach((select) => {
-      select.value = locale;
-      select.addEventListener("change", () => setLanguage(select.value));
+    document.querySelectorAll("[data-ui-language]").forEach((control) => {
+      renderLanguageControl(control);
+      if (control.tagName === "SELECT") {
+        control.addEventListener("change", () => setLanguage(control.value));
+      } else {
+        control.addEventListener("click", () => setLanguage(locale === "zh-CN" ? "en" : "zh-CN"));
+      }
     });
-    document.querySelectorAll("[data-ui-theme]").forEach((select) => {
-      select.value = theme;
-      select.addEventListener("change", () => setTheme(select.value));
+    document.querySelectorAll("[data-ui-theme]").forEach((control) => {
+      renderThemeControl(control);
+      if (control.tagName === "SELECT") {
+        control.addEventListener("change", () => setTheme(control.value));
+      } else {
+        control.addEventListener("click", () => setTheme(theme === "dark" ? "light" : "dark"));
+      }
     });
   }
 

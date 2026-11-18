@@ -962,6 +962,11 @@ pre[id$="-rules"], #guide-claude-cli, #qs-result-box, #mig-import-result-box { w
 /* Preferences stay available in authentication views and the main console. */
 .preferences-controls { display: flex; align-items: center; gap: 8px; }
 .preferences-controls select { width: auto; max-width: 120px; padding: 5px 26px 5px 10px; font-size: 12px; }
+.pref-toggle { gap: 6px; padding: 5px 11px; font-size: 12.5px; white-space: nowrap; }
+.pref-icon { width: 14px; height: 14px; flex-shrink: 0; color: var(--text-accent); }
+.pref-lang-pair { display: inline-flex; align-items: center; gap: 3px; }
+.pref-lang-pair .pref-active { color: var(--text); font-weight: 600; }
+.pref-lang-pair .pref-dim, .pref-lang-pair .pref-sep { color: var(--text-muted); font-weight: 400; }
 .auth-card .preferences-controls { justify-content: flex-end; margin-bottom: 20px; }
 :root[lang="en"] button[aria-busy="true"]::after { content: " · Processing"; }
 
