@@ -1,4 +1,4 @@
-module ai-memory
+module engram
 
 go 1.25.7
 

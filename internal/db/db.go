@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"ai-memory/internal/config"
-	"ai-memory/migrations"
+	"engram/internal/config"
+	"engram/migrations"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )

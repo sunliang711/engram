@@ -13,15 +13,15 @@ job "memory-exporter" {
       driver = "docker"
 
       env {
-        MEMORY_EXPORT_DIR = "/data/export"
+        ENGRAM_EXPORT_DIR = "/data/export"
       }
 
       config {
-        image = "ai-memory:v1"
-        args  = ["--export-once", "--config", "/etc/ai-memory/config.toml"]
+        image = "engram:v1"
+        args  = ["--export-once", "--config", "/etc/engram/config.toml"]
         volumes = [
-          "/opt/ai-memory/config:/etc/ai-memory:ro",
-          "/opt/ai-memory/export:/data/export:rw",
+          "/opt/engram/config:/etc/engram:ro",
+          "/opt/engram/export:/data/export:rw",
         ]
       }
 

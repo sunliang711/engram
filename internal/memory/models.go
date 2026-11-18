@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/project"
-	"ai-memory/internal/security"
+	"engram/internal/apperror"
+	"engram/internal/project"
+	"engram/internal/security"
 
 	"github.com/google/uuid"
 )

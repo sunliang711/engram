@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"ai-memory/internal/apperror"
+	"engram/internal/apperror"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,7 +23,7 @@ import (
 
 const (
 	AdminUsername     = "admin"
-	SessionCookieName = "ai_memory_admin_session"
+	SessionCookieName = "engram_admin_session"
 )
 
 // AdminSessionClaims is the payload signed inside the admin session cookie/token.
@@ -86,7 +86,7 @@ func (m *AuthManager) Bootstrap(ctx context.Context, out io.Writer) (string, err
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// Serialize bootstrap across replicas
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('ai-memory-admin-bootstrap', 0))`); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('engram-admin-bootstrap', 0))`); err != nil {
 		return "", fmt.Errorf("acquire admin bootstrap lock: %w", err)
 	}
 
@@ -153,7 +153,7 @@ func (m *AuthManager) Bootstrap(ctx context.Context, out io.Writer) (string, err
 	}
 
 	fmt.Fprintf(out, "\n========================================================================\n")
-	fmt.Fprintf(out, "  AI Shared Memory Server - Web UI Admin Credentials (%s)\n", reason)
+	fmt.Fprintf(out, "  Engram - Web UI Admin Credentials (%s)\n", reason)
 	fmt.Fprintf(out, "  Username           : %s\n", AdminUsername)
 	fmt.Fprintf(out, "  Temporary Password : %s\n", tempPassword)
 	fmt.Fprintf(out, "  Action Required    : Sign in to the Web UI and set a new password.\n")

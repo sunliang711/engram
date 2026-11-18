@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// Code represents a standard AI Shared Memory Server error code.
+// Code represents a standard Engram Server error code.
 type Code string
 
 const (

@@ -4,11 +4,11 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ai_memory
+      POSTGRES_DB: engram
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_memory"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d engram"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -20,14 +20,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
     environment:
-      MEMORY_LISTEN_ADDR: ":8080"
-      MEMORY_DATABASE_DSN: "postgres://postgres:postgres@postgres:5432/ai_memory?sslmode=disable"
+      ENGRAM_LISTEN_ADDR: "${ENGRAM_LISTEN_ADDR:-:8080}"
+      ENGRAM_DATABASE_DSN: "${ENGRAM_DATABASE_DSN:-postgres://postgres:postgres@postgres:5432/engram?sslmode=disable}"
       # Set a persistent >=32-byte secret key in production (e.g. `openssl rand -hex 32`),
       # via shell environment or .env. Placeholder values containing "change-me",
       # "replace-with", or "example" are rejected; when empty/unset, an ephemeral
       # random key is generated at startup.
-      MEMORY_CONTEXT_SIGN_KEY: "${MEMORY_CONTEXT_SIGN_KEY:-}"
+      ENGRAM_CONTEXT_SIGN_KEY: "${ENGRAM_CONTEXT_SIGN_KEY:-}"
     ports:
       - "8080:8080"
 

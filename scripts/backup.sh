@@ -2,10 +2,10 @@
 set -eu
 
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
-PG_DSN="${MEMORY_DATABASE_DSN:-postgres://postgres:postgres@localhost:5432/ai_memory?sslmode=disable}"
+PG_DSN="${ENGRAM_DATABASE_DSN:-postgres://postgres:postgres@localhost:5432/engram?sslmode=disable}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-OUT_FILE="${BACKUP_DIR}/ai_memory_${TIMESTAMP}.dump"
+OUT_FILE="${BACKUP_DIR}/engram_${TIMESTAMP}.dump"
 
 mkdir -p "${BACKUP_DIR}"
 
@@ -17,6 +17,6 @@ else
   shasum -a 256 "${OUT_FILE}" > "${OUT_FILE}.sha256"
 fi
 
-find "${BACKUP_DIR}" -type f -name "ai_memory_*.dump*" -mtime +"${RETENTION_DAYS}" -exec rm -f {} +
+find "${BACKUP_DIR}" -type f -name "engram_*.dump*" -mtime +"${RETENTION_DAYS}" -exec rm -f {} +
 
 echo "Backup completed: ${OUT_FILE}"

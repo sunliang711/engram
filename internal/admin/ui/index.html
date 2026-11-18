@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Shared Memory Server - 管理控制台</title>
+  <title>Engram - 管理控制台</title>
   <link rel="stylesheet" href="/ui/styles.css" />
 </head>
 <body>
@@ -15,7 +15,7 @@
   <!-- 1. Login View -->
   <div id="login-view" class="auth-wrapper hidden">
     <div class="auth-card">
-      <h1>AI Shared Memory Server</h1>
+      <h1>Engram</h1>
       <p class="subtitle">管理员登录（首次启动或设置 <code>RESET_ADMIN</code> 时请使用服务启动日志打印的临时密码）</p>
       <form id="login-form">
         <div class="form-group">
@@ -61,7 +61,7 @@
   <div id="app-view" class="hidden">
     <header class="topbar">
       <div class="brand">
-        <span>AI Shared Memory Server</span>
+        <span>Engram</span>
         <span class="badge">V1 Admin Console</span>
       </div>
       <div style="display:flex; align-items:center; gap:12px;">
@@ -126,12 +126,12 @@
             <div class="form-row">
               <div class="form-group">
                 <label>初始项目名称 (可选)</label>
-                <input type="text" id="qs-project" placeholder="例如：ai-memory" />
+                <input type="text" id="qs-project" placeholder="例如：engram" />
                 <small class="field-hint">用于隔离存放单个代码库的 Project 记忆；留空则仅创建 Tenant 与 Principal。</small>
               </div>
               <div class="form-group">
                 <label>Git Remote URL (可选)</label>
-                <input type="text" id="qs-remote" placeholder="例如：git@github.com:eagle/ai-memory.git" />
+                <input type="text" id="qs-remote" placeholder="例如：git@github.com:eagle/engram.git" />
               </div>
               <div class="form-group">
                 <label>Monorepo 子路径 workspace_path (可选)</label>
@@ -233,7 +233,7 @@
         <div class="grid-2">
           <div class="card">
             <h2>注册项目 (Register Project)</h2>
-            <p class="desc">注册逻辑项目、绑定标准化 Git Remote、Monorepo 子路径或生成 <code>.ai-memory-project</code> Marker UUID。</p>
+            <p class="desc">注册逻辑项目、绑定标准化 Git Remote、Monorepo 子路径或生成 <code>.engram-project</code> Marker UUID。</p>
             <form id="create-project-form">
               <div class="form-row">
                 <div class="form-group">
@@ -256,7 +256,7 @@
                 </div>
               </div>
               <div class="form-group">
-                <label><input type="checkbox" id="proj-with-marker" checked /> 同时生成 <code>.ai-memory-project</code> Marker UUID</label>
+                <label><input type="checkbox" id="proj-with-marker" checked /> 同时生成 <code>.engram-project</code> Marker UUID</label>
               </div>
               <button type="submit">注册项目</button>
             </form>
@@ -314,7 +314,7 @@
               <tr>
                 <th>项目名称 / ID</th>
                 <th>所属 Tenant</th>
-                <th><code>.ai-memory-project</code> Marker</th>
+                <th><code>.engram-project</code> Marker</th>
                 <th>标准化 Remote &amp; workspace_path</th>
                 <th>项目成员角色</th>
               </tr>
@@ -446,7 +446,7 @@
           <li><strong>Tenant（租户）</strong>：最高层级的隔离边界（如 <code>default</code>、<code>personal</code>、<code>team-core</code>）。同一 Tenant 内共享 <code>global</code> 记忆，不同 Tenant 之间数据完全隔离。</li>
           <li><strong>Principal（身份主体）</strong>：访问 MCP 服务的具体客户端、设备或成员身份（例如 MacBook 上的 Claude Code、另一台电脑上的 Codex）。</li>
           <li><strong>Provider / Subject（认证方式 / 唯一标识）</strong>：<code>Provider</code> 为认证来源（<code>api_token</code> / <code>oidc</code> / <code>mtls</code>）；<code>Subject</code> 是该来源下区分身份的唯一 ID（如 <code>macbook-pro</code>）。<code>(provider, subject)</code> 组合唯一对应一个 Principal。</li>
-          <li><strong>Project（项目）&amp; Marker / Remote</strong>：归属于某个 Tenant 的独立代码库或 Monorepo 子路径（<code>workspace_path</code>），用于存放 <code>project</code> 作用域记忆。可通过 Git Remote 或根目录 <code>.ai-memory-project</code> UUID 文件自动匹配。</li>
+          <li><strong>Project（项目）&amp; Marker / Remote</strong>：归属于某个 Tenant 的独立代码库或 Monorepo 子路径（<code>workspace_path</code>），用于存放 <code>project</code> 作用域记忆。可通过 Git Remote 或根目录 <code>.engram-project</code> UUID 文件自动匹配。</li>
         </ul>
       </div>
 

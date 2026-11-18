@@ -14,7 +14,7 @@ job "memory-backup" {
 
       env {
         BACKUP_DIR          = "/backups"
-        MEMORY_DATABASE_DSN = "postgres://postgres:postgres@postgres.service.consul:5432/ai_memory?sslmode=disable"
+        ENGRAM_DATABASE_DSN = "postgres://postgres:postgres@postgres.service.consul:5432/engram?sslmode=disable"
       }
 
       config {
@@ -22,8 +22,8 @@ job "memory-backup" {
         command = "/bin/sh"
         args    = ["/scripts/backup.sh"]
         volumes = [
-          "/opt/ai-memory/scripts:/scripts:ro",
-          "/opt/ai-memory/backups:/backups:rw",
+          "/opt/engram/scripts:/scripts:ro",
+          "/opt/engram/backups:/backups:rw",
         ]
       }
 

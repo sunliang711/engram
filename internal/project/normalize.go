@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"ai-memory/internal/apperror"
+	"engram/internal/apperror"
 )
 
 var (

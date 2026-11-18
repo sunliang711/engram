@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-memory/internal/apperror"
+	"engram/internal/apperror"
 
 	"github.com/google/uuid"
 )

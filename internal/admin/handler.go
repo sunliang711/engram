@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/auth"
-	"ai-memory/internal/exporter"
-	"ai-memory/internal/memory"
-	"ai-memory/internal/project"
+	"engram/internal/apperror"
+	"engram/internal/auth"
+	"engram/internal/exporter"
+	"engram/internal/memory"
+	"engram/internal/project"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"

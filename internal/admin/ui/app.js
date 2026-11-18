@@ -355,7 +355,7 @@
       {
         token: rawToken,
         mcpServers: {
-          "ai-memory": {
+          engram: {
             type: "streamable-http",
             url: mcpUrl,
             headers: {

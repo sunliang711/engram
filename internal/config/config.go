@@ -20,7 +20,7 @@ type StaticTokenConfig struct {
 	PrincipalID string `toml:"principal_id" json:"principal_id"`
 }
 
-// Config holds the full configuration for the AI Shared Memory Server.
+// Config holds the full configuration for the Engram Server.
 type Config struct {
 	Server   ServerConfig   `toml:"server" json:"server"`
 	Database DatabaseConfig `toml:"database" json:"database"`
@@ -98,7 +98,7 @@ func Default() Config {
 			ContextTTL:     24 * time.Hour,
 		},
 		Database: DatabaseConfig{
-			DSN:             "postgres://postgres:postgres@localhost:5432/ai_memory?sslmode=disable",
+			DSN:             "postgres://postgres:postgres@localhost:5432/engram?sslmode=disable",
 			MaxConns:        20,
 			MinConns:        2,
 			MaxConnLifetime: 30 * time.Minute,
@@ -240,30 +240,30 @@ func normalizeDurationFields(raw map[string]any, structType reflect.Type, prefix
 }
 
 func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("MEMORY_LISTEN_ADDR"); v != "" {
+	if v := os.Getenv("ENGRAM_LISTEN_ADDR"); v != "" {
 		cfg.Server.ListenAddr = v
 	}
-	if v := os.Getenv("MEMORY_CONTEXT_SIGN_KEY"); v != "" {
+	if v := os.Getenv("ENGRAM_CONTEXT_SIGN_KEY"); v != "" {
 		cfg.Server.ContextSignKey = v
 	}
-	if v := os.Getenv("MEMORY_DATABASE_DSN"); v != "" {
+	if v := os.Getenv("ENGRAM_DATABASE_DSN"); v != "" {
 		cfg.Database.DSN = v
 	}
-	if v := os.Getenv("MEMORY_EXPORT_DIR"); v != "" {
+	if v := os.Getenv("ENGRAM_EXPORT_DIR"); v != "" {
 		cfg.Export.OutputDir = v
 	}
-	if v := os.Getenv("MEMORY_EXPORT_ENABLED"); v != "" {
+	if v := os.Getenv("ENGRAM_EXPORT_ENABLED"); v != "" {
 		cfg.Export.Enabled = strings.EqualFold(v, "true") || v == "1"
 	}
-	if v := os.Getenv("MEMORY_LOG_LEVEL"); v != "" {
+	if v := os.Getenv("ENGRAM_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = v
 	}
-	if v := os.Getenv("MEMORY_WRITE_RATE_PER_MINUTE"); v != "" {
+	if v := os.Getenv("ENGRAM_WRITE_RATE_PER_MINUTE"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Limits.WriteRatePerMinute = n
 		}
 	}
-	if v := os.Getenv("MEMORY_COOKIE_SECURE"); v != "" {
+	if v := os.Getenv("ENGRAM_COOKIE_SECURE"); v != "" {
 		cfg.Auth.CookieSecure = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := os.Getenv("RESET_ADMIN"); v != "" {

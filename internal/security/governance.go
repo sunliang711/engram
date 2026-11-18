@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/config"
+	"engram/internal/apperror"
+	"engram/internal/config"
 )
 
 // SourceRef is a controlled source reference entry stored in memories.source_refs.

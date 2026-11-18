@@ -11,16 +11,16 @@ import (
 	"syscall"
 	"time"
 
-	"ai-memory/internal/admin"
-	"ai-memory/internal/auth"
-	"ai-memory/internal/config"
-	"ai-memory/internal/db"
-	"ai-memory/internal/exporter"
-	"ai-memory/internal/mcp"
-	"ai-memory/internal/memory"
-	"ai-memory/internal/notify"
-	"ai-memory/internal/observability"
-	"ai-memory/internal/project"
+	"engram/internal/admin"
+	"engram/internal/auth"
+	"engram/internal/config"
+	"engram/internal/db"
+	"engram/internal/exporter"
+	"engram/internal/mcp"
+	"engram/internal/memory"
+	"engram/internal/notify"
+	"engram/internal/observability"
+	"engram/internal/project"
 )
 
 func main() {
@@ -111,7 +111,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info().Str("listen_addr", cfg.Server.ListenAddr).Msg("starting AI Shared Memory Server (MCP + Admin Web UI)")
+		log.Info().Str("listen_addr", cfg.Server.ListenAddr).Msg("starting Engram Server (MCP + Admin Web UI)")
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -119,7 +119,7 @@ func main() {
 
 	select {
 	case <-ctx.Done():
-		log.Info().Msg("shutting down AI Shared Memory Server")
+		log.Info().Msg("shutting down Engram Server")
 	case err := <-errCh:
 		log.Fatal().Err(err).Msg("http server failed")
 	}

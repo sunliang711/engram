@@ -13,18 +13,18 @@ import (
 	"testing"
 	"time"
 
-	"ai-memory/internal/admin"
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/auth"
-	"ai-memory/internal/config"
-	"ai-memory/internal/db"
-	"ai-memory/internal/exporter"
-	"ai-memory/internal/mcp"
-	"ai-memory/internal/memory"
-	"ai-memory/internal/notify"
-	"ai-memory/internal/observability"
-	"ai-memory/internal/project"
-	"ai-memory/internal/security"
+	"engram/internal/admin"
+	"engram/internal/apperror"
+	"engram/internal/auth"
+	"engram/internal/config"
+	"engram/internal/db"
+	"engram/internal/exporter"
+	"engram/internal/mcp"
+	"engram/internal/memory"
+	"engram/internal/notify"
+	"engram/internal/observability"
+	"engram/internal/project"
+	"engram/internal/security"
 
 	"github.com/google/uuid"
 )
@@ -41,9 +41,9 @@ type testEnv struct {
 
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	dsn := os.Getenv("MEMORY_TEST_DSN")
+	dsn := os.Getenv("ENGRAM_TEST_DSN")
 	if dsn == "" {
-		dsn = "postgres://postgres:postgres@localhost:5432/ai_memory_test?sslmode=disable"
+		dsn = "postgres://postgres:postgres@localhost:5432/engram_test?sslmode=disable"
 	}
 
 	ctx := context.Background()

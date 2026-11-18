@@ -3,7 +3,7 @@ package security
 import (
 	"testing"
 
-	"ai-memory/internal/config"
+	"engram/internal/config"
 )
 
 func TestValidateMemoryContent(t *testing.T) {

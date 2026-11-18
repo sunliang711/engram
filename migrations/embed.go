@@ -40,11 +40,11 @@ func Run(ctx context.Context, pool *pgxpool.Pool) error {
 	defer conn.Release()
 
 	// Serialize migrations across concurrent server instances
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('ai-memory-schema-migrations', 0))`); err != nil {
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtextextended('engram-schema-migrations', 0))`); err != nil {
 		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
 	defer func() {
-		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended('ai-memory-schema-migrations', 0))`)
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended('engram-schema-migrations', 0))`)
 	}()
 
 	_, err = conn.Exec(ctx, `

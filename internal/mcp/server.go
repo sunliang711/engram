@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/auth"
-	"ai-memory/internal/db"
-	"ai-memory/internal/memory"
-	"ai-memory/internal/notify"
-	"ai-memory/internal/observability"
+	"engram/internal/apperror"
+	"engram/internal/auth"
+	"engram/internal/db"
+	"engram/internal/memory"
+	"engram/internal/notify"
+	"engram/internal/observability"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -203,7 +203,7 @@ func (s *Server) handleMCPPost(ctx context.Context, w http.ResponseWriter, r *ht
 				},
 			},
 			"serverInfo": map[string]any{
-				"name":    "ai-memory-server",
+				"name":    "engram-server",
 				"version": "1.0.0",
 			},
 		}

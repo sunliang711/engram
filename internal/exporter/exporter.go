@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"ai-memory/internal/config"
-	"ai-memory/internal/observability"
+	"engram/internal/config"
+	"engram/internal/observability"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -272,8 +272,8 @@ func (e *Exporter) commitGitSnapshot(ctx context.Context, baseDir string) error 
 	}
 
 	commitCmd := exec.CommandContext(ctx, "git",
-		"-c", "user.name=ai-memory-exporter",
-		"-c", "user.email=exporter@ai-memory.local",
+		"-c", "user.name=engram-exporter",
+		"-c", "user.email=exporter@engram.local",
 		"commit", "-m", "chore(export): deterministic snapshot "+time.Now().UTC().Format(time.RFC3339),
 	)
 	commitCmd.Dir = baseDir

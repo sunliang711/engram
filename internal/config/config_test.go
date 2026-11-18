@@ -122,12 +122,50 @@ context_sign_key = "replace-with-at-least-32-byte-hmac-secret-key"
 }
 
 func TestLoadEmptyEnvSignKeyKeepsRandomDefault(t *testing.T) {
-	t.Setenv("MEMORY_CONTEXT_SIGN_KEY", "")
+	t.Setenv("ENGRAM_CONTEXT_SIGN_KEY", "")
 	cfg, err := Load("")
 	if err != nil {
-		t.Fatalf("Load(\"\") failed with empty MEMORY_CONTEXT_SIGN_KEY: %v", err)
+		t.Fatalf("Load(\"\") failed with empty ENGRAM_CONTEXT_SIGN_KEY: %v", err)
 	}
 	if len(cfg.Server.ContextSignKey) < 32 {
 		t.Errorf("ContextSignKey length = %d, want >= 32", len(cfg.Server.ContextSignKey))
+	}
+}
+
+func TestLoadEnvOverrides(t *testing.T) {
+	signKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	t.Setenv("ENGRAM_LISTEN_ADDR", ":9090")
+	t.Setenv("ENGRAM_CONTEXT_SIGN_KEY", signKey)
+	t.Setenv("ENGRAM_DATABASE_DSN", "postgres://user:pass@db:5432/engram?sslmode=disable")
+	t.Setenv("ENGRAM_EXPORT_DIR", "/tmp/engram-export")
+	t.Setenv("ENGRAM_EXPORT_ENABLED", "true")
+	t.Setenv("ENGRAM_LOG_LEVEL", "debug")
+	t.Setenv("ENGRAM_WRITE_RATE_PER_MINUTE", "240")
+	t.Setenv("ENGRAM_COOKIE_SECURE", "1")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load(\"\") failed: %v", err)
+	}
+	if cfg.Server.ListenAddr != ":9090" {
+		t.Errorf("ListenAddr = %q, want :9090", cfg.Server.ListenAddr)
+	}
+	if cfg.Server.ContextSignKey != signKey {
+		t.Errorf("ContextSignKey = %q, want %q", cfg.Server.ContextSignKey, signKey)
+	}
+	if cfg.Database.DSN != "postgres://user:pass@db:5432/engram?sslmode=disable" {
+		t.Errorf("DSN = %q, want overridden DSN", cfg.Database.DSN)
+	}
+	if cfg.Export.OutputDir != "/tmp/engram-export" || !cfg.Export.Enabled {
+		t.Errorf("Export = %+v, want enabled /tmp/engram-export", cfg.Export)
+	}
+	if cfg.Log.Level != "debug" {
+		t.Errorf("Log.Level = %q, want debug", cfg.Log.Level)
+	}
+	if cfg.Limits.WriteRatePerMinute != 240 {
+		t.Errorf("WriteRatePerMinute = %d, want 240", cfg.Limits.WriteRatePerMinute)
+	}
+	if !cfg.Auth.CookieSecure {
+		t.Errorf("CookieSecure = false, want true")
 	}
 }

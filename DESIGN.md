@@ -1,4 +1,4 @@
-# AI Shared Memory Server 技术设计
+# Engram 技术设计
 
 ## 1. 文档信息
 
@@ -104,11 +104,11 @@ git remote -v
 }
 ```
 
-`workspace_path` 是当前工作目录相对于 Git 根目录的路径；`marker_path` 是找到 `.ai-memory-project` 的目录相对于 Git 根目录的路径（位于 Git 根目录时为 `""`），用于支持 Monorepo 中的多个逻辑项目并让服务端判断 Marker 归属层级。
+`workspace_path` 是当前工作目录相对于 Git 根目录的路径；`marker_path` 是找到 `.engram-project` 的目录相对于 Git 根目录的路径（位于 Git 根目录时为 `""`），用于支持 Monorepo 中的多个逻辑项目并让服务端判断 Marker 归属层级。
 
 项目识别规则：
 
-1. 客户端从当前工作目录向 Git 根目录查找最近的 `.ai-memory-project`，并记录其相对路径 `marker_path`。
+1. 客户端从当前工作目录向 Git 根目录查找最近的 `.engram-project`，并记录其相对路径 `marker_path`。
 2. 位于逻辑子项目目录的 Marker（`marker_path != ""`）优先于 Git 根目录 Marker（`marker_path == ""`）；当同时存在已注册的 `canonical_remote + workspace_path` 时，比较 `marker_path` 与匹配到的 `workspace_path` 的路径前缀深度，优先采用更具体（路径更深）的项目身份。
 3. 没有子项目 Marker 时，服务端使用标准化 Remote 和 `workspace_path` 做最长前缀匹配。
 4. Git 根目录 Marker（`marker_path == ""`）只作为整个仓库项目的回退身份，不能覆盖已注册的更具体 `workspace_path`。
@@ -145,9 +145,9 @@ github.com/eagle/project-a
 
 ### 5.3 项目注册
 
-项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.ai-memory-project` Marker 以及签发 API Token）统一在 `memory-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
+项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.engram-project` Marker 以及签发 API Token）统一在 `memory-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
 
-没有 Remote 的项目（或 Monorepo 子项目）可在 Web UI 中一键生成并复制 `.ai-memory-project` Marker UUID。该文件只保存项目 UUID，不保存服务地址或凭证，建议提交到仓库。
+没有 Remote 的项目（或 Monorepo 子项目）可在 Web UI 中一键生成并复制 `.engram-project` Marker UUID。该文件只保存项目 UUID，不保存服务地址或凭证，建议提交到仓库。
 
 `memory_discover` 返回一个不透明的 `project_context`。建议使用服务端 HMAC 签名的无状态 Token，包含 Tenant、Project、Principal 和签发时间，默认有效期 24 小时。Token 过期或在上下文压缩后丢失时，客户端重新调用 `memory_discover`；该上下文只提供项目提示，不能代替认证或每次请求的最新权限校验。
 

@@ -26,7 +26,7 @@ func NewLogger(level string, out io.Writer) zerolog.Logger {
 	zerolog.TimestampFunc = func() time.Time {
 		return time.Now().UTC()
 	}
-	return zerolog.New(out).Level(lvl).With().Timestamp().Str("service", "ai-memory-server").Logger()
+	return zerolog.New(out).Level(lvl).With().Timestamp().Str("service", "engram-server").Logger()
 }
 
 // SanitizeRemoteURL strips any embedded user:password or token from a Git remote URL before logging.

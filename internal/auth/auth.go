@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/config"
+	"engram/internal/apperror"
+	"engram/internal/config"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"

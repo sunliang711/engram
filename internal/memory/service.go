@@ -13,13 +13,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"ai-memory/internal/apperror"
-	"ai-memory/internal/auth"
-	"ai-memory/internal/config"
-	"ai-memory/internal/notify"
-	"ai-memory/internal/observability"
-	"ai-memory/internal/project"
-	"ai-memory/internal/security"
+	"engram/internal/apperror"
+	"engram/internal/auth"
+	"engram/internal/config"
+	"engram/internal/notify"
+	"engram/internal/observability"
+	"engram/internal/project"
+	"engram/internal/security"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,7 +28,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Service implements all AI Shared Memory Server core operations.
+// Service implements all Engram Server core operations.
 type Service struct {
 	pool        *pgxpool.Pool
 	cfg         config.Config

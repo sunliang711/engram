@@ -2,6 +2,7 @@ bin/
 export/
 backups/
 config.toml
+.env
 *.dump
 *.sha256
 .DS_Store
