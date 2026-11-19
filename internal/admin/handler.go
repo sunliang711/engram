@@ -22,6 +22,7 @@ import (
 	"engram/internal/exporter"
 	"engram/internal/memory"
 	"engram/internal/project"
+	"engram/internal/version"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -233,6 +234,11 @@ func (h *Handler) requireActiveAdminCore(next http.HandlerFunc) http.HandlerFunc
 	}
 }
 
+func withSessionVersion(state AdminState) AdminState {
+	state.Version = version.Current()
+	return state
+}
+
 func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -241,13 +247,13 @@ func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
 	token := h.extractSessionToken(r)
 	state, err := h.authMgr.VerifySession(r.Context(), token)
 	if err != nil {
-		writeJSON(w, http.StatusOK, AdminState{
+		writeJSON(w, http.StatusOK, withSessionVersion(AdminState{
 			Authenticated:       false,
 			ResetAdminEnvActive: state.ResetAdminEnvActive,
-		})
+		}))
 		return
 	}
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, withSessionVersion(state))
 }
 
 func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -278,7 +284,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setSessionCookie(w, r, token)
-	writeJSON(w, http.StatusOK, state)
+	writeJSON(w, http.StatusOK, withSessionVersion(state))
 }
 
 func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +323,7 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setSessionCookie(w, r, newToken)
-	writeJSON(w, http.StatusOK, newState)
+	writeJSON(w, http.StatusOK, withSessionVersion(newState))
 }
 
 func (h *Handler) handleOverview(w http.ResponseWriter, r *http.Request) {

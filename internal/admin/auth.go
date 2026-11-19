@@ -42,6 +42,7 @@ type AdminState struct {
 	Username            string `json:"username,omitempty"`
 	MustChangePassword  bool   `json:"must_change_password"`
 	ResetAdminEnvActive bool   `json:"reset_admin_env_active"`
+	Version             string `json:"version,omitempty"`
 }
 
 // AuthManager manages the Web UI admin account, bootstrap password, and session tokens.

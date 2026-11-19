@@ -2,6 +2,7 @@
   const { t, locale } = window.EngramI18n;
   window.EngramI18n.initialize();
   const state = {
+    appVersion: "",
     tenants: [],
     principals: [],
     projects: [],
@@ -118,6 +119,16 @@
 
   // renderView separates first activation from an authenticated administration session.
   function renderView(sessionState) {
+    if (sessionState && sessionState.version) {
+      state.appVersion = String(sessionState.version).trim();
+    }
+    const versionEl = $("app-version");
+    if (versionEl) {
+      versionEl.textContent = state.appVersion || "";
+      versionEl.title = state.appVersion ? `${t("系统版本")}: ${state.appVersion}` : t("系统版本");
+      versionEl.classList.toggle("hidden", !state.appVersion);
+    }
+
     const banner = $("reset-admin-banner");
     if (sessionState && sessionState.reset_admin_env_active) {
       banner.classList.remove("hidden");

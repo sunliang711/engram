@@ -14,6 +14,7 @@ import (
 
 	"engram/internal/config"
 	"engram/internal/db"
+	"engram/internal/version"
 
 	"github.com/google/uuid"
 )
@@ -482,6 +483,35 @@ func TestUIRoutePathsAndMux(t *testing.T) {
 	mux.ServeHTTP(rec404, httptest.NewRequest(http.MethodGet, "/nonexistent-route", nil))
 	if rec404.Code != http.StatusNotFound {
 		t.Fatalf("GET /nonexistent-route = %d, want 404", rec404.Code)
+	}
+}
+
+func TestSessionIncludesServerVersionAndTopbarBadge(t *testing.T) {
+	orig := version.Version
+	version.Version = "v0.0.2-test"
+	defer func() { version.Version = orig }()
+
+	mux := http.NewServeMux()
+	h := &Handler{authMgr: NewAuthManager(nil, "test-signing-key-32bytes-minimum", 0, false)}
+	h.RegisterRoutes(mux)
+
+	recSession := httptest.NewRecorder()
+	mux.ServeHTTP(recSession, httptest.NewRequest(http.MethodGet, "/api/admin/session", nil))
+	if recSession.Code != http.StatusOK {
+		t.Fatalf("GET /api/admin/session = %d: %s", recSession.Code, recSession.Body.String())
+	}
+	var state AdminState
+	if err := json.Unmarshal(recSession.Body.Bytes(), &state); err != nil {
+		t.Fatalf("decode session: %v", err)
+	}
+	if state.Version != "v0.0.2-test" {
+		t.Fatalf("session version = %q, want %q", state.Version, "v0.0.2-test")
+	}
+
+	recUI := httptest.NewRecorder()
+	mux.ServeHTTP(recUI, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recUI.Code != http.StatusOK || !strings.Contains(recUI.Body.String(), `id="app-version"`) {
+		t.Fatalf("GET / missing #app-version badge")
 	}
 }
 

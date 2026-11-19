@@ -21,6 +21,7 @@ import (
 	"engram/internal/notify"
 	"engram/internal/observability"
 	"engram/internal/project"
+	"engram/internal/version"
 )
 
 func main() {
@@ -111,7 +112,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info().Str("listen_addr", cfg.Server.ListenAddr).Msg("starting Engram Server (MCP + Admin Web UI)")
+		log.Info().Str("listen_addr", cfg.Server.ListenAddr).Str("version", version.Current()).Msg("starting Engram Server (MCP + Admin Web UI)")
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

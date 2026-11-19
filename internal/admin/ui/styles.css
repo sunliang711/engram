@@ -222,6 +222,22 @@ body {
   border-color: rgba(239, 68, 68, 0.24);
 }
 
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--bg-tag);
+  border: 1px solid var(--border);
+}
+
 .nav-tabs {
   display: flex;
   gap: 6px;
@@ -1044,8 +1060,9 @@ body:has(.modal-backdrop:not(.hidden)) { overflow: hidden; }
 /* All destinations remain visible on phones; advanced filters open on demand. */
 @media (max-width: 700px) {
   .topbar { flex-wrap: nowrap; padding: 12px 16px; gap: 8px; }
-  .brand { font-size: 16px; }
+  .brand { font-size: 16px; min-width: 0; }
   .brand .badge { display: none; }
+  .brand .version-badge { font-size: 10.5px; padding: 2px 6px; max-width: 84px; overflow: hidden; text-overflow: ellipsis; }
   .topbar-actions { width: auto; flex-wrap: nowrap; gap: 5px; }
   .topbar .preferences-controls { gap: 5px; }
   .topbar .pref-toggle { font-size: 0; gap: 0; width: 32px; height: 34px; padding: 7px; }

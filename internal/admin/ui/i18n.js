@@ -683,7 +683,8 @@
     "切换为英文": "Switch to English",
     "切换为中文": "Switch to 中文",
     "切换为暗色模式": "Switch to dark theme",
-    "切换为亮色模式": "Switch to light theme"
+    "切换为亮色模式": "Switch to light theme",
+    "系统版本": "Server version"
   };
 
   const languageKey = "engram.language";
