@@ -125,3 +125,9 @@ test('button preference controls toggle theme and language on a single click', (
   langBtn.click();
   assert.equal(new URL(location.assigned).searchParams.get('lang'), 'en');
 });
+
+test('project marker and remote placeholders translate the actual app keys', () => {
+  const { ui } = browser({ language: 'en' });
+  assert.equal(ui.t('未生成'), 'Not generated');
+  assert.equal(ui.t('未关联仓库，通过标记文件识别'), 'No remote linked; identified by marker file');
+});

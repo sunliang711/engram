@@ -177,12 +177,12 @@ WireGuard 只解决网络访问安全，不能替代应用层身份认证和项�
 
 | 角色 | 权限 |
 | --- | --- |
-| `member` | 读取 Tenant Global Memory，不默认获得项目权限 |
+| `none` | 无 Global Memory 权限，仍可单独授予项目权限 |
+| `member` | 只读 Tenant Global Memory，不默认获得项目权限 |
 | `reader` | 查询和读取显式授权项目的 Memory |
-| `writer` | 创建、更新显式授权项目的 Memory |
-| `maintainer` | 删除、恢复和管理项目知识 |
+| `writer` | 读取、创建、更新和软删除显式授权项目的 Memory |
+| 后台 `admin` 账户 | 恢复、彻底清理、成员与授权管理；与 API / MCP 成员身份分离 |
 | `global_writer` | 创建或提升 Global Memory |
-| `admin` | Tenant、项目和权限管理 |
 
 ## 7. MCP Tool 设计
 
@@ -352,7 +352,7 @@ CREATE TABLE tenant_members (
     role TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, principal_id),
-    CHECK (role IN ('member', 'global_writer', 'admin'))
+    CHECK (role IN ('none', 'member', 'global_writer'))
 );
 
 CREATE TABLE api_tokens (
@@ -371,7 +371,7 @@ CREATE TABLE api_tokens (
 
 `last_used_at` 记录 Token 最近一次鉴权成功的时间，同一 Token 每分钟最多写入一次；写入失败不影响本次请求。Admin Web UI 在客户端列表中展示该时间，用于确认客户端配置已生效。
 
-所有有效 Tenant Member 可以读取 Tenant Global Memory。只有 `global_writer` 和 `admin` 可以写入或提升 Global Memory。Tenant Member 默认不能访问所有 Project，除 `admin` 外必须在 `project_members` 中获得显式项目权限。
+Tenant Member 的全局记忆权限为 `none`（无权限）、`member`（只读）或 `global_writer`（读写，含软删除及提升）。全局权限不授予任何项目权限；每个项目必须在 `project_members` 中显式授权 `reader`（只读）或 `writer`（读写，含软删除），无权限时不保存项目成员记录。成员没有 `admin` 或 `maintainer` 角色；恢复和彻底清理由后台 admin 负责。
 
 ### 8.2 `projects` 与 `project_members`
 
@@ -393,7 +393,7 @@ CREATE TABLE project_members (
     role TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (project_id, principal_id),
-    CHECK (role IN ('reader', 'writer', 'maintainer'))
+    CHECK (role IN ('reader', 'writer'))
 );
 ```
 

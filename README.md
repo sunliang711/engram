@@ -101,3 +101,22 @@ export ENGRAM_API_TOKEN="<YOUR_API_TOKEN>"
   }
 }
 ```
+
+### Member permissions
+
+The console `admin` account manages members, tokens, grants, restore, and permanent purge. API/MCP members have independent permissions for global memories and each project:
+
+| Scope | No access | Read only | Read/write (including soft delete) |
+| --- | --- | --- | --- |
+| Global memories | `none` | `member` | `global_writer` |
+| Each project | No membership (`role: none` revokes it) | `reader` | `writer` |
+
+Existing JSON fields `tenant_role` and `project_role` remain compatible. `can_maintain_project` is retained as `false`; members cannot restore or purge memories. Default searches and change feeds include only authorized scopes.
+
+Migration `005_scoped_member_permissions.sql` revokes all global and project grants of former member `admin` roles within their tenant. Reauthorize these members in the console after upgrading. Existing `maintainer` grants become `writer`. Importing old system snapshots applies the same conversion. Console audit identities cannot authenticate as API members. Apply the migration with the new server version; rolling back requires restoring a database backup with the matching server version.
+
+Migration 005 also clears **all cached idempotency responses**. A write retried across the upgrade (including `memory_create`) may execute again, even with the same `idempotency_key`. Before upgrading, pause writers and drain pending requests. After upgrading and reauthorizing members, reconcile requests with uncertain outcomes against existing memories before retrying them. Back up the database before migration; there is no automatic down migration.
+
+Existing SSE streams reauthenticate their original credentials and member grants before each notice and every 15-second keepalive, and require the verified tenant and member IDs to match the original subscription. Revoked or expired API tokens therefore terminate existing streams on the next check. A `memory_discover` context without any readable scope receives a signed cursor at revision zero instead of the tenant event high-water mark; query and changes requests remain unauthorized.
+
+Knowledge-bundle imports may create or map to disabled tenants without activating them. Import audit records use the console-only identity, while interactive console memory operations still require an active tenant.

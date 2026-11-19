@@ -32,6 +32,7 @@ type subscriber struct {
 	id        uint64
 	tenantID  uuid.UUID
 	projectID *uuid.UUID
+	global    bool
 	ch        chan ClientNotice
 }
 
@@ -56,7 +57,7 @@ func NewHub(pool *pgxpool.Pool, signer *auth.TokenSigner, log zerolog.Logger) *H
 }
 
 // Subscribe registers an online client session to receive change notifications for its authorized scope.
-func (h *Hub) Subscribe(tenantID uuid.UUID, projectID *uuid.UUID) (<-chan ClientNotice, func()) {
+func (h *Hub) Subscribe(tenantID uuid.UUID, projectID *uuid.UUID, includeGlobal bool) (<-chan ClientNotice, func()) {
 	h.mu.Lock()
 	h.nextID++
 	id := h.nextID
@@ -65,6 +66,7 @@ func (h *Hub) Subscribe(tenantID uuid.UUID, projectID *uuid.UUID) (<-chan Client
 		id:        id,
 		tenantID:  tenantID,
 		projectID: projectID,
+		global:    includeGlobal,
 		ch:        ch,
 	}
 	h.mu.Unlock()
@@ -89,8 +91,11 @@ func (h *Hub) PublishLocal(ev EventPayload) {
 		if sub.tenantID != ev.TenantID {
 			continue
 		}
-		// Global events (ev.ProjectID == nil) apply to all subscribers in the tenant.
+		// Global events apply only to subscribers with explicit global read permission.
 		// Project events apply only to subscribers bound to that specific project.
+		if ev.ProjectID == nil && !sub.global {
+			continue
+		}
 		if ev.ProjectID != nil {
 			if sub.projectID == nil || *sub.projectID != *ev.ProjectID {
 				continue

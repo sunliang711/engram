@@ -196,6 +196,7 @@ func (a *Authenticator) VerifyPrincipalMembership(ctx context.Context, tenantID,
 		  AND tm.principal_id = $2
 		  AND t.status = 'active'
 		  AND pr.status = 'active'
+		  AND pr.identity_provider <> 'system_webui'
 	`, tenantID, principalID).Scan(&p.TenantID, &p.PrincipalID, &p.TenantRole, &p.DisplayName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -207,8 +208,8 @@ func (a *Authenticator) VerifyPrincipalMembership(ctx context.Context, tenantID,
 }
 
 // GetProjectRole queries the caller's live project role in PostgreSQL.
-// Tenant admins automatically receive 'maintainer' privileges on all active projects in their tenant.
-func (a *Authenticator) GetProjectRole(ctx context.Context, tenantID, projectID, principalID uuid.UUID, tenantRole string) (string, error) {
+// Project access always requires an explicit grant, independent of global memory access.
+func (a *Authenticator) GetProjectRole(ctx context.Context, tenantID, projectID, principalID uuid.UUID) (string, error) {
 	var projectActive bool
 	err := a.pool.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -221,10 +222,6 @@ func (a *Authenticator) GetProjectRole(ctx context.Context, tenantID, projectID,
 	}
 	if !projectActive {
 		return "", nil
-	}
-
-	if tenantRole == "admin" {
-		return "maintainer", nil
 	}
 
 	var role string
@@ -242,42 +239,62 @@ func (a *Authenticator) GetProjectRole(ctx context.Context, tenantID, projectID,
 	return role, nil
 }
 
+// CanReadGlobal checks the member's explicit global read permission.
 func CanReadGlobal(tenantRole string) bool {
 	switch tenantRole {
-	case "member", "global_writer", "admin":
+	case "member", "global_writer":
 		return true
 	default:
 		return false
 	}
 }
 
+// CanWriteGlobal checks the member's explicit global write permission.
 func CanWriteGlobal(tenantRole string) bool {
 	switch tenantRole {
-	case "global_writer", "admin":
+	case "global_writer":
 		return true
 	default:
 		return false
 	}
 }
 
+// CanReadProject checks an explicit project read grant.
 func CanReadProject(projectRole string) bool {
 	switch projectRole {
-	case "reader", "writer", "maintainer":
+	case "reader", "writer":
 		return true
 	default:
 		return false
 	}
 }
 
+// CanWriteProject checks an explicit project write grant, including soft deletion.
 func CanWriteProject(projectRole string) bool {
 	switch projectRole {
-	case "writer", "maintainer":
+	case "writer":
 		return true
 	default:
 		return false
 	}
 }
 
-func CanMaintainProject(projectRole string) bool {
-	return projectRole == "maintainer"
+// VerifyAdminActor validates the internal audit identity used only by authenticated console handlers.
+// This identity has no member role and cannot authenticate through member API tokens.
+func (a *Authenticator) VerifyAdminActor(ctx context.Context, tenantID, principalID uuid.UUID) (Principal, error) {
+	var p Principal
+	err := a.pool.QueryRow(ctx, `
+		SELECT t.id, pr.id, pr.display_name
+		FROM tenants t CROSS JOIN principals pr
+		WHERE t.id = $1 AND t.status = 'active'
+		  AND pr.id = $2 AND pr.status = 'active'
+		  AND pr.identity_provider = 'system_webui' AND pr.subject = 'admin'
+	`, tenantID, principalID).Scan(&p.TenantID, &p.PrincipalID, &p.DisplayName)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Principal{}, apperror.New(apperror.CodeUnauthorized, "management console admin required")
+		}
+		return Principal{}, apperror.Wrap(apperror.CodeInternalError, "verify console admin actor", err)
+	}
+	return p, nil
 }

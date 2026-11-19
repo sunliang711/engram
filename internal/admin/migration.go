@@ -743,7 +743,9 @@ func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bo
 	return p, nil
 }
 
+// importSnapshotPayload restores data while applying current member permission boundaries.
 func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, confirmReplace bool) (SnapshotCounts, error) {
+	p = normalizeSnapshotPermissions(p)
 	var counts SnapshotCounts
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -1102,6 +1104,7 @@ func (h *Handler) exportKnowledgeBundlePayload(ctx context.Context, opts Knowled
 	return p, nil
 }
 
+// importKnowledgeBundlePayload imports knowledge and audit history without activating target tenants.
 func (h *Handler) importKnowledgeBundlePayload(ctx context.Context, p KnowledgeBundlePayload, opts KnowledgeImportOptions) (SnapshotCounts, error) {
 	var counts SnapshotCounts
 	mode := strings.TrimSpace(opts.TenantMode)
@@ -1134,7 +1137,8 @@ func (h *Handler) importKnowledgeBundlePayload(ctx context.Context, p KnowledgeB
 		if _, ok := actorByTenant[targetTID]; ok {
 			continue
 		}
-		actorID, err := ensureAdminActorForTenantTx(ctx, tx, targetTID)
+		// Tenant resolution already validated the target; imports must preserve disabled status.
+		actorID, err := ensureConsoleAuditActorTx(ctx, tx)
 		if err != nil {
 			return counts, err
 		}
@@ -1533,21 +1537,22 @@ func allocateUnusedUUID(ctx context.Context, tx pgx.Tx, table string, preferred 
 	return uuid.New(), nil
 }
 
+// ensureAdminActorForTenantTx validates an active tenant before resolving the console audit identity.
 func ensureAdminActorForTenantTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID) (uuid.UUID, error) {
+	var active bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM tenants WHERE id = $1 AND status = 'active')`, tenantID).Scan(&active); err != nil {
+		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "check console actor tenant", err)
+	}
+	if !active {
+		return uuid.Nil, apperror.New(apperror.CodeInvalidArgument, "active tenant required")
+	}
+	return ensureConsoleAuditActorTx(ctx, tx)
+}
+
+// ensureConsoleAuditActorTx resolves only the audit identity, without granting access or changing tenant state.
+func ensureConsoleAuditActorTx(ctx context.Context, tx pgx.Tx) (uuid.UUID, error) {
 	var actorID uuid.UUID
 	err := tx.QueryRow(ctx, `
-		SELECT principal_id FROM tenant_members
-		WHERE tenant_id = $1 AND role = 'admin'
-		LIMIT 1
-	`, tenantID).Scan(&actorID)
-	if err == nil {
-		return actorID, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "query tenant admin principal", err)
-	}
-
-	err = tx.QueryRow(ctx, `
 		INSERT INTO principals (id, identity_provider, subject, display_name, status)
 		VALUES ($1, 'system_webui', 'admin', 'Web UI System Admin', 'active')
 		ON CONFLICT (identity_provider, subject) DO UPDATE SET status = 'active'
@@ -1555,14 +1560,6 @@ func ensureAdminActorForTenantTx(ctx context.Context, tx pgx.Tx, tenantID uuid.U
 	`, uuid.New()).Scan(&actorID)
 	if err != nil {
 		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "ensure system admin principal", err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO tenant_members (tenant_id, principal_id, role)
-		VALUES ($1, $2, 'admin')
-		ON CONFLICT (tenant_id, principal_id) DO UPDATE SET role = 'admin'
-	`, tenantID, actorID); err != nil {
-		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "ensure system admin tenant membership", err)
 	}
 	return actorID, nil
 }
@@ -1908,4 +1905,51 @@ func unsealSnapshotPayload(cipherBytes []byte, passphrase, saltB64 string) ([]by
 		return nil, errors.New("truncated ciphertext")
 	}
 	return gcm.Open(nil, cipherBytes[:nonceSize], cipherBytes[nonceSize:], nil)
+}
+
+// normalizeSnapshotPermissions applies the same least-privilege conversion as migration 005.
+func normalizeSnapshotPermissions(p SnapshotPayload) SnapshotPayload {
+	type membershipKey struct{ tenant, principal uuid.UUID }
+	admins := map[membershipKey]bool{}
+	system := map[uuid.UUID]bool{}
+	projectTenants := map[uuid.UUID]uuid.UUID{}
+	for _, pr := range p.Principals {
+		if pr.IdentityProvider == "system_webui" {
+			system[pr.ID] = true
+		}
+	}
+	for _, proj := range p.Projects {
+		projectTenants[proj.ID] = proj.TenantID
+	}
+	members := make([]snapshotTenantMember, 0, len(p.TenantMembers))
+	for _, tm := range p.TenantMembers {
+		if tm.Role == "admin" {
+			admins[membershipKey{tm.TenantID, tm.PrincipalID}] = true
+			tm.Role = "none"
+		}
+		if !system[tm.PrincipalID] {
+			members = append(members, tm)
+		}
+	}
+	p.TenantMembers = members
+	grants := make([]snapshotProjectMember, 0, len(p.ProjectMembers))
+	for _, pm := range p.ProjectMembers {
+		if system[pm.PrincipalID] || admins[membershipKey{projectTenants[pm.ProjectID], pm.PrincipalID}] {
+			continue
+		}
+		if pm.Role == "maintainer" {
+			pm.Role = "writer"
+		}
+		grants = append(grants, pm)
+	}
+	p.ProjectMembers = grants
+	tokens := append([]snapshotAPIToken(nil), p.APITokens...)
+	for i := range tokens {
+		if system[tokens[i].PrincipalID] && tokens[i].RevokedAt == nil {
+			now := time.Now().UTC()
+			tokens[i].RevokedAt = &now
+		}
+	}
+	p.APITokens = tokens
+	return p
 }

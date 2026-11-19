@@ -86,7 +86,7 @@ func TestAdminUIRegression(t *testing.T) {
 	if _, err := database.Pool.Exec(ctx, `INSERT INTO principals(id, identity_provider, subject, display_name) VALUES($1,'api_token',$2,'Original Name')`, principal, subject); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Pool.Exec(ctx, `INSERT INTO tenant_members(tenant_id,principal_id,role) VALUES($1,$2,'admin')`, tenant, principal); err != nil {
+	if _, err := database.Pool.Exec(ctx, `INSERT INTO tenant_members(tenant_id,principal_id,role) VALUES($1,$2,'global_writer')`, tenant, principal); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Pool.Exec(ctx, `
@@ -254,7 +254,7 @@ func TestAdminUIRegression(t *testing.T) {
 		if err := database.Pool.QueryRow(ctx, `SELECT p.display_name, m.role FROM principals p JOIN tenant_members m ON m.principal_id=p.id WHERE p.id=$1 AND m.tenant_id=$2`, principal, tenant).Scan(&name, &role); err != nil {
 			t.Fatal(err)
 		}
-		if name != "Original Name" || role != "admin" {
+		if name != "Original Name" || role != "global_writer" {
 			t.Fatalf("unexpected overwrite: name=%s role=%s", name, role)
 		}
 	})
@@ -262,7 +262,7 @@ func TestAdminUIRegression(t *testing.T) {
 		postPrincipal(map[string]string{"mode": "bind", "tenant_id": otherTenant.String(), "principal_id": principal.String(), "tenant_role": "member"}, http.StatusCreated)
 		postPrincipal(map[string]string{"mode": "bind", "tenant_id": tenant.String(), "principal_id": principal.String(), "tenant_role": "member"}, http.StatusConflict)
 		postPrincipal(map[string]string{"mode": "update_role", "tenant_id": otherTenant.String(), "principal_id": principal.String(), "tenant_role": "global_writer"}, http.StatusOK)
-		for id, expected := range map[uuid.UUID]string{tenant: "admin", otherTenant: "global_writer"} {
+		for id, expected := range map[uuid.UUID]string{tenant: "global_writer", otherTenant: "global_writer"} {
 			var role string
 			if err := database.Pool.QueryRow(ctx, `SELECT role FROM tenant_members WHERE tenant_id=$1 AND principal_id=$2`, id, principal).Scan(&role); err != nil {
 				t.Fatal(err)

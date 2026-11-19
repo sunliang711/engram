@@ -99,8 +99,8 @@
     return hit ? hit[1] : "";
   }
 
-  const TENANT_ROLES = { member: t("普通成员"), global_writer: t("公共知识编辑"), admin: t("租户管理员") };
-  const PROJECT_ROLES = { reader: t("只读成员"), writer: t("编辑者"), maintainer: t("维护者") };
+  const TENANT_ROLES = { none: t("无权限"), member: t("只读"), global_writer: t("读写") };
+  const PROJECT_ROLES = { none: t("无权限"), reader: t("只读"), writer: t("读写") };
 
   // isSystemPrincipal marks the internal identity the console uses to act on a tenant's behalf.
   function isSystemPrincipal(principal) { return principal && principal.identity_provider === "system_webui"; }
@@ -276,7 +276,7 @@
 
   // tenantRoleHint explains effective abilities without requiring knowledge of role names.
   function tenantRoleHint(role) {
-    if (role === "admin") return t("可读写公共（全局）记忆，并自动维护当前租户下的所有项目。");
+    if (role === "none") return t("无法访问全局记忆；仍可单独授予项目权限。");
     if (role === "global_writer") return t("可读写当前租户的公共（全局）记忆；访问项目记忆仍需单独授权。");
     return t("可查看当前租户的公共（全局）记忆；访问项目记忆仍需单独授权。");
   }
@@ -309,9 +309,9 @@
     tbody.innerHTML = principals
       .map((p) => {
         const membership = tenantMembership(p);
-        const projects = state.projects.filter((project) => project.tenant_id === state.memberTenant && project.status === "active" && (membership.role === "admin" || (project.members || []).some((member) => member.principal_id === p.id)));
+        const projects = state.projects.filter((project) => project.tenant_id === state.memberTenant && project.status === "active" && (project.members || []).some((member) => member.principal_id === p.id));
         const tokens = state.tokens.filter((token) => token.tenant_id === state.memberTenant && token.principal_id === p.id && !token.revoked_at);
-        const projectAccess = membership.role === "admin" ? t("所有有效项目（自动授权）") : projects.length ? t`已授权 ${projects.length} 个项目` : t("未授权任何项目");
+        const projectAccess = projects.length ? t`已授权 ${projects.length} 个项目` : t("未授权任何项目");
         return `
       <tr class="${p.id === state.selectedPrincipal ? "member-selected" : ""}">
         <td><strong>${escapeHtml(p.display_name)}</strong></td>
@@ -352,7 +352,7 @@
     if (!sameContext) { $("member-token-name").value = ""; clearFormErrors($("member-role-form")); clearFormErrors($("member-token-form")); }
     $("member-detail-context").textContent = t`当前租户：${tenant.name}`;
     $("member-detail-title").textContent = principal.display_name;
-    $("member-detail-status").textContent = t`当前角色：${TENANT_ROLES[membership.role] || membership.role} · 成员状态：${statusLabel(principal.status)}`;
+    $("member-detail-status").textContent = t`全局记忆：${TENANT_ROLES[membership.role] || membership.role} · 成员状态：${statusLabel(principal.status)}`;
     $("member-role-hint").textContent = tenantRoleHint($("member-role").value);
     $("member-identity").innerHTML = `${identifier(principal.id)}<p class="field-hint">${escapeHtml(PROVIDERS[principal.identity_provider] || principal.identity_provider)} · <code>${escapeHtml(principal.subject)}</code></p><p class="field-hint">${t("创建时间")} · ${formatDate(principal.created_at)}</p>`;
     const tbody = $("member-projects-table").querySelector("tbody");
@@ -360,12 +360,11 @@
     const projects = state.projects.filter((project) => project.tenant_id === state.memberTenant);
     tbody.innerHTML = projects.map((project) => {
       const member = (project.members || []).find((item) => item.principal_id === principal.id);
-      const inherited = membership.role === "admin";
       const enabled = active && project.status === "active";
-      const role = inherited ? "maintainer" : member ? member.role : "";
-      const label = project.status !== "active" ? t("项目已停用，无法访问") : inherited ? t("维护者 · 由租户管理员角色自动获得") : PROJECT_ROLES[role] || t("未授权");
-      const options = Object.entries(PROJECT_ROLES).map(([value, name]) => `<option value="${value}"${(drafts.get(project.id) || role || "reader") === value ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
-      return `<tr><td><strong>${escapeHtml(project.name)}</strong></td><td>${escapeHtml(label)}</td><td>${inherited ? `<span class="field-hint">${t("无需单独授权")}</span>` : `<div class="row-actions"><select data-project="${project.id}" data-saved="${role || "reader"}" aria-label="${escapeHtml(t`项目「${project.name}」的权限`)}"${enabled ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-member-project" data-project="${project.id}"${enabled ? "" : " disabled"}>${role ? t("保存授权") : t("授予权限")}</button></div>`}</td></tr>`;
+      const role = member ? member.role : "none";
+      const label = project.status !== "active" ? t("项目已停用，无法访问") : PROJECT_ROLES[role] || t("无权限");
+      const options = Object.entries(PROJECT_ROLES).map(([value, name]) => `<option value="${value}"${(drafts.get(project.id) || role) === value ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
+      return `<tr><td><strong>${escapeHtml(project.name)}</strong></td><td>${escapeHtml(label)}</td><td><div class="row-actions"><select data-project="${project.id}" data-saved="${role}" aria-label="${escapeHtml(t`项目「${project.name}」的权限`)}"${enabled ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-member-project" data-project="${project.id}"${enabled ? "" : " disabled"}>${t("保存授权")}</button></div></td></tr>`;
     }).join("") || t('<tr><td colspan="3" class="empty-state">当前租户还没有项目，可前往“项目”页注册。</td></tr>');
   }
 
@@ -414,11 +413,11 @@
     $(principalID && selectedMember() ? "member-detail-title" : state.memberTenant ? "tenant-detail-title" : "tenant-list-title").focus();
   }
 
-  // projectPrincipals includes tenant administrators whose project access is inherited.
+  // projectPrincipals includes only members with an explicit project grant.
   function projectPrincipals(project) {
     return visiblePrincipals().filter((person) => {
       const membership = tenantMembership(person, project.tenant_id);
-      return membership && (membership.role === "admin" || (project.members || []).some((member) => member.principal_id === person.id));
+      return membership && (project.members || []).some((member) => member.principal_id === person.id);
     });
   }
 
@@ -449,9 +448,8 @@
     $("project-identity").innerHTML = `<p>${t("项目 ID")} · ${identifier(project.id)}</p><p>${t("标记文件 UUID")} · ${project.marker ? identifier(project.marker) : t("未生成")}</p><p class="field-hint">${t("创建时间")} · ${formatDate(project.created_at)}</p>`;
     $("project-remotes-table").querySelector("tbody").innerHTML = (project.repositories || []).map((remote) => `<tr><td><code>${escapeHtml(remote.canonical_remote)}</code></td><td>${escapeHtml(remote.workspace_path || t("仓库根目录"))}</td></tr>`).join("") || `<tr><td colspan="2" class="empty-state">${t("未关联仓库，通过标记文件识别")}</td></tr>`;
     $("project-members-table").querySelector("tbody").innerHTML = projectPrincipals(project).map((person) => {
-      const inherited = tenantMembership(person, project.tenant_id).role === "admin";
       const grant = (project.members || []).find((item) => item.principal_id === person.id);
-      return `<tr><td>${escapeHtml(person.display_name)}</td><td>${inherited ? t("维护者 · 由租户管理员角色自动获得") : escapeHtml(PROJECT_ROLES[grant.role] || grant.role)}</td><td>${statusLabel(person.status)}</td></tr>`;
+      return `<tr><td>${escapeHtml(person.display_name)}</td><td>${escapeHtml(PROJECT_ROLES[grant.role] || grant.role)}</td><td>${statusLabel(person.status)}</td></tr>`;
     }).join("") || `<tr><td colspan="3" class="empty-state">${t("尚无项目成员，请从当前租户选择成员授权。")}</td></tr>`;
     const select = $("pm-principal");
     const previous = select.dataset.project === project.id ? select.value : "";
@@ -469,16 +467,15 @@
     if (previous === select.value && savedRole === $("pm-role").dataset.saved && !$("pm-role").disabled) $("pm-role").value = previousRole;
   }
 
-  // renderProjectRole shows existing grants and prevents editing inherited administrator access.
+  // renderProjectRole shows explicit grants and supports revoking project access.
   function renderProjectRole() {
     const project = state.projects.find((item) => item.id === state.selectedProject);
     const person = visiblePrincipals().find((item) => item.id === $("pm-principal").value);
     const membership = project && person && tenantMembership(person, project.tenant_id);
-    const inherited = membership && membership.role === "admin";
     const grant = project && (project.members || []).find((item) => item.principal_id === $("pm-principal").value);
-    $("pm-role").value = inherited ? "maintainer" : grant ? grant.role : "reader";
+    $("pm-role").value = grant ? grant.role : "none";
     $("pm-role").dataset.saved = $("pm-role").value;
-    const disabled = $("pm-principal").disabled || !membership || inherited;
+    const disabled = $("pm-principal").disabled || !membership;
     $("pm-role").disabled = disabled;
     $("add-project-member-form").querySelector('button[type="submit"]').disabled = disabled;
   }
@@ -1735,7 +1732,7 @@
       method: "POST",
       body: JSON.stringify({ mode: "update_role", tenant_id: state.memberTenant, principal_id: principal.id, tenant_role: $("member-role").value }),
     });
-    showToast(t("当前租户角色已更新"));
+    showToast(t("全局记忆权限已更新"));
     await refreshAllData();
   });
 
@@ -1752,7 +1749,7 @@
         method: "POST",
         body: JSON.stringify({ project_id: button.dataset.project, principal_id: principal.id, role: select.value }),
       });
-      showToast(t("项目成员角色已更新"));
+      showToast(t("项目权限已更新"));
       await refreshAllData();
     } catch (err) {
       showToast(err.message, true);
@@ -1810,7 +1807,7 @@
         role: $("pm-role").value,
       }),
     });
-    showToast(t("项目成员角色已更新"));
+    showToast(t("项目权限已更新"));
     refreshAllData();
   });
 

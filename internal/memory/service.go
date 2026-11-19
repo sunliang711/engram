@@ -91,7 +91,7 @@ func (s *Service) verifyAccess(ctx context.Context, projectContextToken string) 
 
 	var projRole string
 	if claims.Mode == auth.ModeProject && claims.ProjectID != nil {
-		projRole, err = s.auth.GetProjectRole(ctx, p.TenantID, *claims.ProjectID, p.PrincipalID, p.TenantRole)
+		projRole, err = s.auth.GetProjectRole(ctx, p.TenantID, *claims.ProjectID, p.PrincipalID)
 		if err != nil {
 			return nil, err
 		}
@@ -104,7 +104,7 @@ func (s *Service) verifyAccess(ctx context.Context, projectContextToken string) 
 		CanWriteGlobal:     auth.CanWriteGlobal(p.TenantRole),
 		CanReadProject:     auth.CanReadProject(projRole),
 		CanWriteProject:    auth.CanWriteProject(projRole),
-		CanMaintainProject: auth.CanMaintainProject(projRole),
+		CanMaintainProject: false,
 	}
 
 	return &verifiedAccess{
@@ -160,7 +160,7 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 				return nil, err
 			}
 		} else {
-			role, err := s.auth.GetProjectRole(ctx, p.TenantID, proj.ID, p.PrincipalID, p.TenantRole)
+			role, err := s.auth.GetProjectRole(ctx, p.TenantID, proj.ID, p.PrincipalID)
 			if err != nil {
 				return nil, err
 			}
@@ -188,9 +188,13 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 		return nil, err
 	}
 
-	globalIdx, err := s.buildScopeIndex(ctx, p.TenantID, "global", nil)
-	if err != nil {
-		return nil, err
+	globalIdx := ScopeIndex{Pinned: []IndexItem{}, CategoryStats: map[string]int{}, Recent: []IndexItem{}}
+	// Do not expose global titles, categories, or pinned content to project-only members.
+	if auth.CanReadGlobal(p.TenantRole) {
+		globalIdx, err = s.buildScopeIndex(ctx, p.TenantID, "global", nil)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var projectIdx *ScopeIndex
@@ -202,7 +206,13 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 		projectIdx = &idx
 	}
 
-	latestCursor, err := s.getLatestCursor(ctx, p.TenantID, projIDPtr)
+	// A member with no readable scope receives a valid zero cursor, without tenant activity metadata.
+	var latestCursor string
+	if auth.CanReadGlobal(p.TenantRole) || auth.CanReadProject(projRole) {
+		latestCursor, err = s.getLatestCursor(ctx, p.TenantID, projIDPtr)
+	} else {
+		latestCursor, err = s.signer.SignCursor(p.TenantID, projIDPtr, 0)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +228,7 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 			CanWriteGlobal:     auth.CanWriteGlobal(p.TenantRole),
 			CanReadProject:     auth.CanReadProject(projRole),
 			CanWriteProject:    auth.CanWriteProject(projRole),
-			CanMaintainProject: auth.CanMaintainProject(projRole),
+			CanMaintainProject: false,
 		},
 		GlobalIndex:  globalIdx,
 		ProjectIndex: projectIdx,
@@ -328,10 +338,15 @@ func (s *Service) Query(ctx context.Context, req QueryRequest) (*QueryResponse, 
 
 	scopes := req.Scopes
 	if len(scopes) == 0 {
-		if access.claims.Mode == auth.ModeProject {
-			scopes = []string{"global", "project"}
-		} else {
-			scopes = []string{"global"}
+		// Default searches include only scopes the member can currently read.
+		if access.perms.CanReadGlobal {
+			scopes = append(scopes, "global")
+		}
+		if access.claims.Mode == auth.ModeProject && access.perms.CanReadProject {
+			scopes = append(scopes, "project")
+		}
+		if len(scopes) == 0 {
+			return nil, apperror.New(apperror.CodeUnauthorized, "no readable memory scope")
 		}
 	}
 
@@ -660,11 +675,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, reqID string) (
 	var targetProjectID *uuid.UUID
 	if req.Scope == "global" {
 		if !access.perms.CanWriteGlobal {
-			return nil, apperror.New(apperror.CodeUnauthorized, "global_writer or admin role required to create global memory")
+			return nil, apperror.New(apperror.CodeUnauthorized, "global write permission required to create global memory")
 		}
 	} else {
 		if access.claims.Mode != auth.ModeProject || access.claims.ProjectID == nil || !access.perms.CanWriteProject {
-			return nil, apperror.New(apperror.CodeUnauthorized, "writer or maintainer role required to create project memory")
+			return nil, apperror.New(apperror.CodeUnauthorized, "project write permission required to create project memory")
 		}
 		targetProjectID = access.claims.ProjectID
 	}
@@ -681,7 +696,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, reqID string) (
 	})
 
 	var resp WriteMemoryResponse
-	err = s.runIdempotentWriteTx(ctx, access.principal, "memory_create", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
+	err = s.runIdempotentWriteTx(ctx, access, "memory_create", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
 		now := time.Now().UTC()
 		memID := uuid.New()
 		cHash := security.ContentHash(req.Content)
@@ -831,8 +846,8 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest, reqID string) (
 	})
 
 	var resp WriteMemoryResponse
-	err = s.runIdempotentWriteTx(ctx, access.principal, "memory_update", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
-		current, err := s.loadMemoryForWriteCheck(ctx, tx, access, memID, false)
+	err = s.runIdempotentWriteTx(ctx, access, "memory_update", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
+		current, err := s.loadMemoryForWriteCheck(ctx, tx, access, memID)
 		if err != nil {
 			return err
 		}
@@ -961,8 +976,8 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest, reqID string) (
 	})
 
 	var resp DeleteResponse
-	err = s.runIdempotentWriteTx(ctx, access.principal, "memory_delete", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
-		current, err := s.loadMemoryForWriteCheck(ctx, tx, access, memID, true)
+	err = s.runIdempotentWriteTx(ctx, access, "memory_delete", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
+		current, err := s.loadMemoryForWriteCheck(ctx, tx, access, memID)
 		if err != nil {
 			return err
 		}
@@ -1036,6 +1051,9 @@ func (s *Service) Changes(ctx context.Context, req ChangesRequest) (*ChangesResp
 		}
 		scopeProjID = access.claims.ProjectID
 	}
+	if scopeProjID == nil && !access.perms.CanReadGlobal {
+		return nil, apperror.New(apperror.CodeUnauthorized, "no readable changes scope")
+	}
 
 	sinceRev, err := s.signer.VerifyCursor(strings.TrimSpace(req.Cursor), access.principal.TenantID, scopeProjID)
 	if err != nil {
@@ -1061,10 +1079,10 @@ func (s *Service) Changes(ctx context.Context, req ChangesRequest) (*ChangesResp
 		FROM memory_events
 		WHERE tenant_id = $1
 		  AND revision > $2
-		  AND (project_id IS NULL OR ($3::uuid IS NOT NULL AND project_id = $3))
+		  AND (($5::boolean AND project_id IS NULL) OR ($3::uuid IS NOT NULL AND project_id = $3))
 		ORDER BY revision ASC
 		LIMIT $4
-	`, access.principal.TenantID, sinceRev, scopeProjID, limit+1)
+	`, access.principal.TenantID, sinceRev, scopeProjID, limit+1, access.perms.CanReadGlobal)
 	if err != nil {
 		return nil, apperror.Wrap(apperror.CodeInternalError, "query memory_events", err)
 	}
@@ -1173,7 +1191,7 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 	})
 
 	var resp WriteMemoryResponse
-	err = s.runIdempotentWriteTx(ctx, access.principal, "memory_promote", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
+	err = s.runIdempotentWriteTx(ctx, access, "memory_promote", req.IdempotencyKey, reqHash, &resp, func(tx pgx.Tx) error {
 		srcMem, err := s.loadMemoryByID(ctx, tx, access.principal.TenantID, srcID)
 		if err != nil {
 			return err
@@ -1182,7 +1200,7 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 			return apperror.New(apperror.CodeMemoryNotFound, "memory not found")
 		}
 		if !access.perms.CanWriteGlobal {
-			return apperror.New(apperror.CodeUnauthorized, "global_writer or admin role required to promote memory to global scope")
+			return apperror.New(apperror.CodeUnauthorized, "global write permission required to promote memory to global scope")
 		}
 		if srcMem.Scope != "project" {
 			return apperror.New(apperror.CodeInvalidArgument, "only project memory can be promoted to global memory")
@@ -1300,7 +1318,7 @@ func (s *Service) Restore(ctx context.Context, req RestoreRequest) (*MemoryDetai
 	return s.adminWrite(ctx, adminWriteSpec{
 		tenantID: req.TenantID, actorID: req.ActorID, memoryID: req.MemoryID,
 		expectedVersion: req.ExpectedVersion, requestID: req.RequestID,
-		operation: "restore", needMaintain: true,
+		operation: "restore",
 		check: func(current *MemoryDetail) error {
 			if current.DeletedAt == nil {
 				return apperror.New(apperror.CodeInvalidArgument, "memory is not deleted")
@@ -1312,12 +1330,12 @@ func (s *Service) Restore(ctx context.Context, req RestoreRequest) (*MemoryDetai
 	})
 }
 
-// AdminDelete soft-deletes a memory from the management console with the actor's own permissions.
+// AdminDelete soft-deletes a memory on behalf of the authenticated console admin.
 func (s *Service) AdminDelete(ctx context.Context, req AdminDeleteRequest) (*MemoryDetail, error) {
 	return s.adminWrite(ctx, adminWriteSpec{
 		tenantID: req.TenantID, actorID: req.ActorID, memoryID: req.MemoryID,
 		expectedVersion: req.ExpectedVersion, requestID: req.RequestID,
-		operation: "delete", needMaintain: true,
+		operation: "delete",
 		check: func(current *MemoryDetail) error {
 			if current.DeletedAt != nil {
 				return apperror.New(apperror.CodeInvalidArgument, "memory is already deleted")
@@ -1380,12 +1398,9 @@ func (s *Service) AdminPurge(ctx context.Context, req AdminPurgeRequest) (int, e
 	if req.ProjectID != nil && req.Scope != "project" {
 		return 0, apperror.New(apperror.CodeInvalidArgument, "project purge requires project scope")
 	}
-	p, err := s.auth.VerifyPrincipalMembership(ctx, req.TenantID, req.ActorID)
+	p, err := s.auth.VerifyAdminActor(ctx, req.TenantID, req.ActorID)
 	if err != nil {
 		return 0, err
-	}
-	if p.TenantRole != "admin" {
-		return 0, apperror.New(apperror.CodeUnauthorized, "tenant admin role required to purge memories")
 	}
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -1519,7 +1534,6 @@ type adminWriteSpec struct {
 	expectedVersion             int64
 	requestID                   string
 	operation                   string
-	needMaintain                bool
 	check                       func(*MemoryDetail) error
 	// setSQL is spliced into the UPDATE; $1 is the actor, $2 the timestamp, $7 onward are setArgs.
 	setSQL  string
@@ -1527,13 +1541,13 @@ type adminWriteSpec struct {
 	apply   func(*MemoryDetail, time.Time)
 }
 
-// adminWrite applies a versioned change on behalf of a tenant member, recording the
+// adminWrite applies a versioned change on behalf of the console admin, recording the
 // revision snapshot and change event in the same transaction as the update.
 func (s *Service) adminWrite(ctx context.Context, spec adminWriteSpec) (*MemoryDetail, error) {
 	if spec.expectedVersion <= 0 {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "expected_version must be > 0")
 	}
-	p, err := s.auth.VerifyPrincipalMembership(ctx, spec.tenantID, spec.actorID)
+	p, err := s.auth.VerifyAdminActor(ctx, spec.tenantID, spec.actorID)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,29 +1561,6 @@ func (s *Service) adminWrite(ctx context.Context, spec adminWriteSpec) (*MemoryD
 	current, err := s.loadMemoryByID(ctx, tx, spec.tenantID, spec.memoryID)
 	if err != nil {
 		return nil, err
-	}
-
-	if current.Scope == "global" {
-		if !auth.CanWriteGlobal(p.TenantRole) {
-			return nil, apperror.New(apperror.CodeUnauthorized, "global_writer or admin role required to change global memory")
-		}
-	} else {
-		if current.ProjectID == nil {
-			return nil, apperror.New(apperror.CodeMemoryNotFound, "memory not found")
-		}
-		projRole, err := s.auth.GetProjectRole(ctx, p.TenantID, *current.ProjectID, p.PrincipalID, p.TenantRole)
-		if err != nil {
-			return nil, err
-		}
-		if !auth.CanReadProject(projRole) {
-			return nil, apperror.New(apperror.CodeMemoryNotFound, "memory not found")
-		}
-		if spec.needMaintain && !auth.CanMaintainProject(projRole) {
-			return nil, apperror.New(apperror.CodeUnauthorized, "maintainer role required to "+spec.operation+" project memory")
-		}
-		if !spec.needMaintain && !auth.CanWriteProject(projRole) {
-			return nil, apperror.New(apperror.CodeUnauthorized, "writer role required to update project memory")
-		}
 	}
 
 	if err := spec.check(current); err != nil {
@@ -1631,9 +1622,9 @@ func (s *Service) adminWrite(ctx context.Context, spec adminWriteSpec) (*MemoryD
 
 // loadMemoryForWriteCheck enforces the Section 9 error decision matrix:
 // 1. Not found, deleted, or no read permission -> MEMORY_NOT_FOUND
-// 2. Has read permission, but lacks write/maintain permission -> UNAUTHORIZED
+// 2. Has read permission, but lacks write permission -> UNAUTHORIZED
 // 3. Version mismatch -> handled either here or on conditional UPDATE
-func (s *Service) loadMemoryForWriteCheck(ctx context.Context, q rowQuerier, access *verifiedAccess, memID uuid.UUID, isDelete bool) (*MemoryDetail, error) {
+func (s *Service) loadMemoryForWriteCheck(ctx context.Context, q rowQuerier, access *verifiedAccess, memID uuid.UUID) (*MemoryDetail, error) {
 	mem, err := s.loadMemoryByID(ctx, q, access.principal.TenantID, memID)
 	if err != nil {
 		return nil, err
@@ -1644,17 +1635,11 @@ func (s *Service) loadMemoryForWriteCheck(ctx context.Context, q rowQuerier, acc
 
 	if mem.Scope == "global" {
 		if !access.perms.CanWriteGlobal {
-			return nil, apperror.New(apperror.CodeUnauthorized, "global_writer or admin role required")
+			return nil, apperror.New(apperror.CodeUnauthorized, "global write permission required")
 		}
 	} else {
-		if isDelete {
-			if !access.perms.CanMaintainProject {
-				return nil, apperror.New(apperror.CodeUnauthorized, "maintainer role required to delete project memory")
-			}
-		} else {
-			if !access.perms.CanWriteProject {
-				return nil, apperror.New(apperror.CodeUnauthorized, "writer or maintainer role required to update project memory")
-			}
+		if !access.perms.CanWriteProject {
+			return nil, apperror.New(apperror.CodeUnauthorized, "project write permission required to change project memory")
 		}
 	}
 	return mem, nil
@@ -1789,13 +1774,14 @@ func (s *Service) appendEventLocked(
 // runIdempotentWriteTx executes fn inside a READ COMMITTED transaction guarded by idempotency_requests (Section 8.7 & 9).
 func (s *Service) runIdempotentWriteTx(
 	ctx context.Context,
-	p auth.Principal,
+	access *verifiedAccess,
 	toolName string,
 	idemKey string,
 	reqHash string,
 	outResp any,
 	fn func(tx pgx.Tx) error,
 ) error {
+	p := access.principal
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return apperror.Wrap(apperror.CodeInternalError, "begin transaction", err)
@@ -1869,6 +1855,10 @@ func (s *Service) runIdempotentWriteTx(
 				Str("idempotency_key", idemKey).
 				Msg("detected abnormally committed in_progress idempotency record")
 			return apperror.New(apperror.CodeIdempotencyInProgress, "idempotent request is in an incomplete state")
+		}
+		// Replays must obey current grants and project context, just like a new write.
+		if err := s.authorizeCachedWrite(ctx, tx, access, toolName, respBytes); err != nil {
+			return err
 		}
 		if s.metrics != nil {
 			s.metrics.IncIdempotencyHit()
@@ -2352,4 +2342,42 @@ func decodeQueryCursor(s string) (queryCursor, error) {
 		return queryCursor{}, apperror.New(apperror.CodeInvalidArgument, "invalid query pagination cursor")
 	}
 	return queryCursor{Offset: n}, nil
+}
+
+// authorizeCachedWrite prevents old idempotent responses from bypassing revoked scope permissions.
+func (s *Service) authorizeCachedWrite(ctx context.Context, tx pgx.Tx, access *verifiedAccess, tool string, raw []byte) error {
+	var cached struct {
+		MemoryID uuid.UUID `json:"memory_id"`
+		Memory   struct {
+			ID             uuid.UUID  `json:"id"`
+			SourceMemoryID *uuid.UUID `json:"source_memory_id"`
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal(raw, &cached); err != nil {
+		return apperror.Wrap(apperror.CodeInternalError, "decode cached write scope", err)
+	}
+	id := cached.Memory.ID
+	if id == uuid.Nil {
+		id = cached.MemoryID
+	}
+	mem, err := s.loadMemoryByID(ctx, tx, access.principal.TenantID, id)
+	if err != nil {
+		return err
+	}
+	if !s.canReadMemory(access, mem) {
+		return apperror.New(apperror.CodeMemoryNotFound, "memory not found")
+	}
+	if (mem.Scope == "global" && !access.perms.CanWriteGlobal) || (mem.Scope == "project" && !access.perms.CanWriteProject) {
+		return apperror.New(apperror.CodeUnauthorized, "write permission required")
+	}
+	if tool == "memory_promote" && cached.Memory.SourceMemoryID != nil {
+		source, err := s.loadMemoryByID(ctx, tx, access.principal.TenantID, *cached.Memory.SourceMemoryID)
+		if err != nil {
+			return err
+		}
+		if !s.canReadMemory(access, source) {
+			return apperror.New(apperror.CodeMemoryNotFound, "memory not found")
+		}
+	}
+	return nil
 }

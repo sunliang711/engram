@@ -248,6 +248,7 @@ func (s *Server) handleMCPPost(ctx context.Context, w http.ResponseWriter, r *ht
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// handleMCPStream limits notifications to authorized scopes and rechecks live grants.
 func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *http.Request, principal auth.Principal, reqID string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -270,7 +271,7 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 			return
 		}
 		if claims.Mode == auth.ModeProject && claims.ProjectID != nil {
-			role, err := s.auth.GetProjectRole(ctx, principal.TenantID, *claims.ProjectID, principal.PrincipalID, principal.TenantRole)
+			role, err := s.auth.GetProjectRole(ctx, principal.TenantID, *claims.ProjectID, principal.PrincipalID)
 			if err != nil || !auth.CanReadProject(role) {
 				appErr := apperror.New(apperror.CodeUnauthorized, "unauthorized project stream").WithRequestID(reqID)
 				w.Header().Set("Content-Type", "application/json")
@@ -280,6 +281,27 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 			}
 			projID = claims.ProjectID
 		}
+	}
+
+	includeGlobal := auth.CanReadGlobal(principal.TenantRole)
+	if projID == nil && !includeGlobal {
+		appErr := apperror.New(apperror.CodeUnauthorized, "no readable stream scope").WithRequestID(reqID)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(appErr.HTTPStatus())
+		_ = json.NewEncoder(w).Encode(appErr)
+		return
+	}
+	// Recheck the original credentials as well as grants so revoked or expired tokens close existing streams.
+	stillAuthorized := func() bool {
+		p, err := s.auth.AuthenticateRequest(ctx, r)
+		if err != nil || p.TenantID != principal.TenantID || p.PrincipalID != principal.PrincipalID || (includeGlobal != auth.CanReadGlobal(p.TenantRole)) {
+			return false
+		}
+		if projID != nil {
+			role, err := s.auth.GetProjectRole(ctx, p.TenantID, *projID, p.PrincipalID)
+			return err == nil && auth.CanReadProject(role)
+		}
+		return true
 	}
 
 	// Disable the global server WriteTimeout for long-lived SSE streams
@@ -292,7 +314,7 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch, unsubscribe := s.hub.Subscribe(principal.TenantID, projID)
+	ch, unsubscribe := s.hub.Subscribe(principal.TenantID, projID, includeGlobal)
 	defer unsubscribe()
 
 	keepalive := time.NewTicker(15 * time.Second)
@@ -303,6 +325,9 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 		case <-ctx.Done():
 			return
 		case <-keepalive.C:
+			if !stillAuthorized() {
+				return
+			}
 			_ = rc.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
 				return
@@ -310,7 +335,7 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 			flusher.Flush()
 			_ = rc.SetWriteDeadline(time.Time{})
 		case notice, ok := <-ch:
-			if !ok {
+			if !ok || !stillAuthorized() {
 				return
 			}
 			rpcNotice := map[string]any{

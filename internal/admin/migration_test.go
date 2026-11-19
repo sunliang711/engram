@@ -330,7 +330,7 @@ func TestKnowledgeMigrationPostgreSQL(t *testing.T) {
 	if _, err := database.Pool.Exec(ctx, `INSERT INTO principals (id, identity_provider, subject, display_name) VALUES ($1, 'api_token', $2, 'Target Member')`, targetPrincipal, "tgt-"+targetPrincipal.String()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.Pool.Exec(ctx, `INSERT INTO tenant_members (tenant_id, principal_id, role) VALUES ($1, $2, 'admin')`, targetMerged, targetPrincipal); err != nil {
+	if _, err := database.Pool.Exec(ctx, `INSERT INTO tenant_members (tenant_id, principal_id, role) VALUES ($1, $2, 'global_writer')`, targetMerged, targetPrincipal); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Pool.Exec(ctx, `INSERT INTO projects (id, tenant_id, name, marker, status) VALUES ($1, $2, 'svc-a', $3, 'active')`, srcProj, srcT1, srcMarker); err != nil {
@@ -435,5 +435,23 @@ func TestKnowledgeMigrationPostgreSQL(t *testing.T) {
 	var memberCount int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*)::int FROM tenant_members WHERE tenant_id = $1 AND principal_id = $2`, targetMerged, targetPrincipal).Scan(&memberCount); err != nil || memberCount != 1 {
 		t.Fatalf("expected target member preserved, count=%d err=%v", memberCount, err)
+	}
+}
+
+// TestNormalizeSnapshotPermissions keeps old backups from restoring member administrator privileges.
+func TestNormalizeSnapshotPermissions(t *testing.T) {
+	p := sampleSnapshotPayload()
+	tenant, formerAdmin, project := p.Tenants[0].ID, p.Principals[0].ID, p.Projects[0].ID
+	ordinary, system, otherTenant, otherProject := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	p.Principals = append(p.Principals, snapshotPrincipal{ID: ordinary, IdentityProvider: "api_token"}, snapshotPrincipal{ID: system, IdentityProvider: "system_webui"})
+	p.Projects = append(p.Projects, snapshotProject{ID: otherProject, TenantID: otherTenant})
+	p.TenantMembers = append(p.TenantMembers, snapshotTenantMember{TenantID: tenant, PrincipalID: ordinary, Role: "member"}, snapshotTenantMember{TenantID: tenant, PrincipalID: system, Role: "admin"})
+	p.ProjectMembers = append(p.ProjectMembers, snapshotProjectMember{ProjectID: project, PrincipalID: ordinary, Role: "maintainer"}, snapshotProjectMember{ProjectID: project, PrincipalID: system, Role: "maintainer"}, snapshotProjectMember{ProjectID: otherProject, PrincipalID: formerAdmin, Role: "reader"})
+	got := normalizeSnapshotPermissions(p)
+	if len(got.TenantMembers) != 2 || got.TenantMembers[0].Role != "none" {
+		t.Fatalf("tenant permissions: %+v", got.TenantMembers)
+	}
+	if len(got.ProjectMembers) != 2 || got.ProjectMembers[0].PrincipalID != ordinary || got.ProjectMembers[0].Role != "writer" || got.ProjectMembers[1].ProjectID != otherProject {
+		t.Fatalf("project permissions: %+v", got.ProjectMembers)
 	}
 }

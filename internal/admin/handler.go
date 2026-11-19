@@ -355,6 +355,7 @@ func (h *Handler) handleOverview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleQuickstart provisions a member with independent global and project grants.
 func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -381,6 +382,10 @@ func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 	req.TenantRole = strings.TrimSpace(req.TenantRole)
 	if req.TenantRole == "" {
 		req.TenantRole = "global_writer"
+	}
+	if req.TenantRole != "none" && req.TenantRole != "member" && req.TenantRole != "global_writer" {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid global permission"))
+		return
 	}
 	if req.TenantName == "" || req.PrincipalSubject == "" || req.PrincipalDisplayName == "" {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "tenant_name, principal_subject, and principal_display_name are required"))
@@ -486,8 +491,8 @@ func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 		projectID = &pid
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO project_members (project_id, principal_id, role)
-			VALUES ($1, $2, 'maintainer')
-			ON CONFLICT (project_id, principal_id) DO UPDATE SET role = 'maintainer'
+			VALUES ($1, $2, 'writer')
+			ON CONFLICT (project_id, principal_id) DO UPDATE SET role = 'writer'
 		`, pid, principalID); err != nil {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "insert project_member", err))
 			return
@@ -858,9 +863,9 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.TenantRole == "" {
-			req.TenantRole = "member"
+			req.TenantRole = "none"
 		}
-		if req.TenantRole != "member" && req.TenantRole != "global_writer" && req.TenantRole != "admin" {
+		if req.TenantRole != "member" && req.TenantRole != "global_writer" && req.TenantRole != "none" {
 			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant role"))
 			return
 		}
@@ -895,7 +900,7 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// Binding an existing identity never changes its profile or another tenant's role.
-			err = tx.QueryRow(ctx, `SELECT id FROM principals WHERE id = $1 AND status = 'active' FOR UPDATE`, pid).Scan(&pid)
+			err = tx.QueryRow(ctx, `SELECT id FROM principals WHERE id = $1 AND status = 'active' AND identity_provider <> 'system_webui' FOR UPDATE`, pid).Scan(&pid)
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "请选择有效的已有成员"))
 				return
@@ -1302,6 +1307,7 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleProjectMembers grants, changes, or revokes access to one project.
 func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1327,6 +1333,11 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Role != "none" && req.Role != "reader" && req.Role != "writer" {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project permission"))
+		return
+	}
+
 	// Verify that principal belongs to the same tenant as the target project
 	var belongsToTenant bool
 	err = h.pool.QueryRow(r.Context(), `
@@ -1334,6 +1345,7 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 			SELECT 1
 			FROM projects p
 			JOIN tenant_members tm ON tm.tenant_id = p.tenant_id
+			JOIN principals pr ON pr.id = tm.principal_id AND pr.identity_provider <> 'system_webui'
 			WHERE p.id = $1 AND tm.principal_id = $2
 		)
 	`, pid, prinID).Scan(&belongsToTenant)
@@ -1343,6 +1355,15 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	if !belongsToTenant {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "principal must be a member of the project's tenant first"))
+		return
+	}
+
+	if req.Role == "none" {
+		if _, err := h.pool.Exec(r.Context(), `DELETE FROM project_members WHERE project_id = $1 AND principal_id = $2`, pid, prinID); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "revoke project permission", err))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"project_id": pid, "principal_id": prinID, "role": "none"})
 		return
 	}
 
@@ -1495,7 +1516,8 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 		var isMember bool
 		err = h.pool.QueryRow(ctx, `
 			SELECT EXISTS (
-				SELECT 1 FROM tenant_members WHERE tenant_id = $1 AND principal_id = $2
+				SELECT 1 FROM tenant_members tm JOIN principals pr ON pr.id = tm.principal_id
+				WHERE tm.tenant_id = $1 AND tm.principal_id = $2 AND pr.identity_provider <> 'system_webui'
 			)
 		`, tid, pid).Scan(&isMember)
 		if err != nil {
@@ -2191,34 +2213,19 @@ func (h *Handler) handlePurge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"purged": purged})
 }
 
+// ensureAdminActorForTenant creates a console-only audit identity without any member grants.
 func (h *Handler) ensureAdminActorForTenant(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, error) {
-	var actorID uuid.UUID
-	err := h.pool.QueryRow(ctx, `
-		SELECT principal_id FROM tenant_members
-		WHERE tenant_id = $1 AND role = 'admin'
-		LIMIT 1
-	`, tenantID).Scan(&actorID)
-	if err == nil {
-		return actorID, nil
-	}
-
-	err = h.pool.QueryRow(ctx, `
-		INSERT INTO principals (id, identity_provider, subject, display_name, status)
-		VALUES ($1, 'system_webui', 'admin', 'Web UI System Admin', 'active')
-		ON CONFLICT (identity_provider, subject) DO UPDATE SET status = 'active'
-		RETURNING id
-	`, uuid.New()).Scan(&actorID)
+	tx, err := h.pool.Begin(ctx)
 	if err != nil {
-		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "ensure system admin principal", err)
+		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "begin console actor transaction", err)
 	}
-
-	_, err = h.pool.Exec(ctx, `
-		INSERT INTO tenant_members (tenant_id, principal_id, role)
-		VALUES ($1, $2, 'admin')
-		ON CONFLICT (tenant_id, principal_id) DO UPDATE SET role = 'admin'
-	`, tenantID, actorID)
+	defer func() { _ = tx.Rollback(ctx) }()
+	actorID, err := ensureAdminActorForTenantTx(ctx, tx, tenantID)
 	if err != nil {
-		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "ensure system admin tenant membership", err)
+		return uuid.Nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, apperror.Wrap(apperror.CodeInternalError, "commit console actor transaction", err)
 	}
 	return actorID, nil
 }

@@ -202,18 +202,19 @@ func (e *testEnv) addProjectMember(t *testing.T, projectID, principalID uuid.UUI
 	}
 }
 
+// TestV1AcceptanceSuite verifies memory operations across isolated scopes and console management.
 func TestV1AcceptanceSuite(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.cleanup()
 
 	// Setup Tenant A and Tenant B
 	tenantA, userA, tokenA, ctxA := env.createTenantAndPrincipal(t, "Tenant-A", "alice", "global_writer")
-	tenantB, userB, _, ctxB := env.createTenantAndPrincipal(t, "Tenant-B", "bob", "admin")
+	tenantB, userB, _, ctxB := env.createTenantAndPrincipal(t, "Tenant-B", "bob", "global_writer")
 
 	// Register Project A1 (with SSH remote and alias) and Project A2 in Tenant A
 	rootMarkerA1 := uuid.New()
 	projA1 := env.registerProject(t, tenantA, "project-a1", &rootMarkerA1, "git@github.com:eagle/project-a.git", "")
-	env.addProjectMember(t, projA1, userA, "maintainer")
+	env.addProjectMember(t, projA1, userA, "writer")
 
 	// Add an alias remote to Project A1
 	_, err := env.database.Pool.Exec(env.ctx, `
@@ -228,20 +229,24 @@ func TestV1AcceptanceSuite(t *testing.T) {
 	// - services/api (by remote + workspace_path)
 	// - services/payment (by subproject marker)
 	projMonoAPI := env.registerProject(t, tenantA, "mono-api", nil, "https://github.com/eagle/project-a.git", "services/api")
-	env.addProjectMember(t, projMonoAPI, userA, "maintainer")
+	env.addProjectMember(t, projMonoAPI, userA, "writer")
 
 	subMarkerPayment := uuid.New()
 	projMonoPayment := env.registerProject(t, tenantA, "mono-payment", &subMarkerPayment, "", "")
-	env.addProjectMember(t, projMonoPayment, userA, "maintainer")
+	env.addProjectMember(t, projMonoPayment, userA, "writer")
 
 	// Register Project A2 in Tenant A
 	projA2 := env.registerProject(t, tenantA, "project-a2", nil, "git@github.com:eagle/project-a2.git", "")
-	env.addProjectMember(t, projA2, userA, "maintainer")
+	env.addProjectMember(t, projA2, userA, "writer")
 
 	// Register Project B1 in Tenant B
 	markerB1 := uuid.New()
 	projB1 := env.registerProject(t, tenantB, "project-b1", &markerB1, "git@github.com:tenantb/secret-repo.git", "")
-	_ = userB
+	env.addProjectMember(t, projB1, userB, "writer")
+	adminActor := uuid.New()
+	if _, err := env.database.Pool.Exec(env.ctx, `INSERT INTO principals(id,identity_provider,subject,display_name) VALUES($1,'system_webui','admin','Console')`, adminActor); err != nil {
+		t.Fatal(err)
+	}
 
 	// =========================================================================
 	// Acceptance 6 & 7: Remote Normalization, Aliases, and Monorepo Precedence
@@ -579,7 +584,7 @@ func TestV1AcceptanceSuite(t *testing.T) {
 		// Management Restore (expected_version = 3 -> version = 4)
 		restored, err := env.svc.Restore(env.ctx, memory.RestoreRequest{
 			TenantID:        tenantA,
-			ActorID:         userA,
+			ActorID:         adminActor,
 			MemoryID:        memA1ID,
 			ExpectedVersion: 3,
 			RequestID:       "req-restore",
@@ -593,19 +598,19 @@ func TestV1AcceptanceSuite(t *testing.T) {
 
 		// Management console pin, soft delete, and restore keep versions, revisions, and state consistent.
 		wasPinned := restored.IsPinned
-		pinned, err := env.svc.AdminSetPinned(env.ctx, memory.AdminPinRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 4, IsPinned: !wasPinned})
+		pinned, err := env.svc.AdminSetPinned(env.ctx, memory.AdminPinRequest{TenantID: tenantA, ActorID: adminActor, MemoryID: memA1ID, ExpectedVersion: 4, IsPinned: !wasPinned})
 		if err != nil || pinned.IsPinned == wasPinned || pinned.Version != 5 {
 			t.Fatalf("AdminSetPinned: %+v err=%v", pinned, err)
 		}
-		_, err = env.svc.AdminSetPinned(env.ctx, memory.AdminPinRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 4, IsPinned: wasPinned})
+		_, err = env.svc.AdminSetPinned(env.ctx, memory.AdminPinRequest{TenantID: tenantA, ActorID: adminActor, MemoryID: memA1ID, ExpectedVersion: 4, IsPinned: wasPinned})
 		assertAppErrorCode(t, err, apperror.CodeVersionConflict)
-		deleted, err := env.svc.AdminDelete(env.ctx, memory.AdminDeleteRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 5})
+		deleted, err := env.svc.AdminDelete(env.ctx, memory.AdminDeleteRequest{TenantID: tenantA, ActorID: adminActor, MemoryID: memA1ID, ExpectedVersion: 5})
 		if err != nil || deleted.DeletedAt == nil || deleted.Version != 6 || deleted.IsPinned == wasPinned {
 			t.Fatalf("AdminDelete: %+v err=%v", deleted, err)
 		}
-		_, err = env.svc.AdminDelete(env.ctx, memory.AdminDeleteRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 6})
+		_, err = env.svc.AdminDelete(env.ctx, memory.AdminDeleteRequest{TenantID: tenantA, ActorID: adminActor, MemoryID: memA1ID, ExpectedVersion: 6})
 		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
-		if restored, err = env.svc.Restore(env.ctx, memory.RestoreRequest{TenantID: tenantA, ActorID: userA, MemoryID: memA1ID, ExpectedVersion: 6}); err != nil || restored.Version != 7 {
+		if restored, err = env.svc.Restore(env.ctx, memory.RestoreRequest{TenantID: tenantA, ActorID: adminActor, MemoryID: memA1ID, ExpectedVersion: 6}); err != nil || restored.Version != 7 {
 			t.Fatalf("Restore after AdminDelete: %+v err=%v", restored, err)
 		}
 		var revisionOps []string
