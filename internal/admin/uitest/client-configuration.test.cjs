@@ -6,21 +6,35 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../ui/index.html'), 'utf8');
 
-// Run production credential selection, reveal, input, and guide renderers without creating fixtures on a server.
-function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id }), language = 'zh-CN' } = {}) {
-  const elements = new Map(), requests = [];
-  const accountMenu = {};
-  const document = { activeElement: null, documentElement: { dataset: {} }, querySelectorAll: () => [], querySelector: () => accountMenu };
+// Run production member-key actions, secret retrieval, creation, and configuration with observable DOM state.
+function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id }), create, refresh, language = 'zh-CN' } = {}) {
+  const elements = new Map(), requests = [], errors = [], notices = [];
+  const document = { activeElement: null, documentElement: { dataset: {} }, querySelectorAll: () => [], querySelector: () => ({}) };
   const node = () => {
-    const classes = new Set();
+    const classes = new Set(), children = new Map();
+    let previousHTML, buttons = [];
     return {
       value: '', dataset: {}, textContent: '', innerHTML: '', isConnected: true,
-      classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
+      classList: {
+        add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name),
+        toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); },
+      },
       focus() { document.activeElement = this; },
-      querySelector() { return this.child ||= node(); },
-      querySelectorAll() { return []; },
-      setCustomValidity() {},
-      addEventListener(type, callback) { this[type] = callback; },
+      setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; },
+      querySelector(selector) {
+        const id = selector.match(/^\.btn-apply-token\[data-id="([^"]+)"\]$/)?.[1];
+        if (id) return this.querySelector('tbody').querySelectorAll('.btn-apply-token').find(button => button.dataset.id === id) || null;
+        if (!children.has(selector)) children.set(selector, node());
+        return children.get(selector);
+      },
+      querySelectorAll(selector) {
+        if (previousHTML !== this.innerHTML) {
+          previousHTML = this.innerHTML;
+          buttons = [...this.innerHTML.matchAll(/<button[^>]+class="([^"]+)"[^>]+data-id="([^"]+)"/g)].map(match => Object.assign(node(), { className: match[1], dataset: { id: match[2] } }));
+        }
+        return buttons.filter(button => button.className.split(' ').includes(selector.slice(1)));
+      },
+      setCustomValidity() {}, addEventListener(type, callback) { this[type] = callback; },
     };
   };
   document.body = node();
@@ -28,15 +42,28 @@ function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id })
     if (!elements.has(id)) elements.set(id, node());
     return elements.get(id);
   };
-  const state = { tokens, revealedTokens: {}, clientConfigTokenID: '', clientConfigRequest: 0 };
+  $('client-config-modal').classList.add('hidden');
+  const principal = { id: 'member', display_name: 'Owner', identity_provider: 'api_token', tenant_roles: [{ tenant_id: 'tenant', role: 'none' }] };
+  const state = { tokens, principals: [principal], memberTenant: 'tenant', selectedPrincipal: principal.id, locationRequest: 0, revealedTokens: {}, clientConfigTokenID: '', clientConfigRequest: 0 };
+  let page = 'tab-tenants';
   const context = vm.createContext({
     $, state, document, window: { location: { origin: 'https://memory.example.com' } },
     navigator: { language }, location: { search: '' }, URLSearchParams, URL,
-    closeMemoryDetail() {}, renderView() {},
+    activeTab: () => page, closeMemoryDetail() {}, renderView() {}, formatDate: value => value, relativeTime: () => 'now',
+    showToast: message => notices.push(message), clearFormErrors() {}, showFormError: (_, error) => errors.push(error),
     api: async (url, options) => {
       const body = options.body ? JSON.parse(options.body) : {};
       requests.push({ url, method: options.method, body });
-      return url === '/api/admin/logout' ? {} : reveal(body.id);
+      if (url === '/api/admin/logout') return {};
+      if (url === '/api/admin/tokens') return create ? create(body) : { id: 'new-key', token: 'created-secret' };
+      assert.equal(url, '/api/admin/tokens/reveal');
+      return reveal(body.id);
+    },
+    refreshAllData: async () => {
+      if (refresh) await refresh(state);
+      else state.tokens.push(token('new-key'));
+      context.renderTokensTable();
+      context.validateClientConfiguration();
     },
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/i18n.js'), 'utf8'), context);
@@ -46,192 +73,232 @@ function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id })
     assert.ok(from >= 0 && to > from, `Missing app block ${start}`);
     vm.runInContext(source.slice(from, to), context);
   };
-  load('  async function resolveTokenSecret(', '  // renderTokensTable');
+  load('  // isSystemPrincipal', '  // actorName');
+  load('  function tenantMembership(', '  // renderTenantContext');
+  load('  async function resolveTokenSecret(', '  // memoryFilters');
   load('  function getMemoryInstructionSnippet(', '  // activeTab');
   load('  function shellQuote(', '  // updatePrincipalMode');
-  load('  function escapeHtml(', '  // onSubmit');
-  load('  $("guide-existing-token").addEventListener(', '  $("btn-qs-again").addEventListener(');
-  load('  $("btn-logout").addEventListener(', '  onSubmit("quickstart-form"');
-  return { $, state, requests, document, context };
+  load('  function escapeHtml(', '  // Keep wide');
+  load('  if ($("guide-token-input")) {\n    $("guide-token-input").addEventListener(', '  onSubmit("login-form"');
+  load('  $("btn-logout").addEventListener(', '  onSubmit("create-tenant-form"');
+  load('  onSubmit("member-token-form"', '  onSubmit("create-project-form"');
+  context.renderTokensTable();
+  return {
+    $, state, requests, document, context, errors, notices,
+    setPage(value) { page = value; state.locationRequest++; },
+    row(id) { return $('member-tokens-table').querySelector(`.btn-apply-token[data-id="${id}"]`); },
+    issue: () => $('member-token-form').submit({ preventDefault() {} }),
+  };
 }
 
-const token = (id, overrides = {}) => ({ id, tenant_name: 'Team', principal_name: 'Owner', name: 'quickstart-owner', token_prefix: 'aim_' + id, can_reveal: true, ...overrides });
+const token = (id, overrides = {}) => ({ id, tenant_id: 'tenant', principal_id: 'member', tenant_name: 'Team', principal_name: 'Owner', name: 'Laptop', token_prefix: 'aim_' + id, can_reveal: true, created_at: 'today', ...overrides });
 const defer = () => {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 };
-const select = (h, id) => { h.$('guide-existing-token').value = id; return h.$('guide-existing-token').change(); };
 
-// All three client templates must show the selected input or a placeholder, never a prior credential.
+// Every client template must use the fixed member-key input or a placeholder, never the previous key.
 function assertGuides(h, expected) {
   for (const id of ['guide-codex-mcp', 'guide-claude-mcp', 'guide-claude-cli', 'guide-gemini-cli-mcp', 'guide-gemini-agy-mcp']) assert.ok(h.$(id).textContent.includes(expected), `${id} does not contain expected credential`);
 }
 
-test('overview configuration entry is independent of creation and works with no credentials', () => {
-  assert.match(html, /type="button"[^>]+id="btn-view-client-config">查看客户端配置/);
-  assert.match(html, /type="submit">创建密钥并配置/);
-  const h = harness();
-  h.$('btn-view-client-config').focus();
-  h.$('btn-view-client-config').click();
-  assert.deepEqual(h.requests, []);
-  assertGuides(h, '<YOUR_API_TOKEN>');
-  assert.equal(h.$('client-config-modal').classList.contains('hidden'), false);
-  h.context.closeClientGuides();
-  assert.equal(h.document.activeElement, h.$('btn-view-client-config'));
-  h.$('btn-view-client-config').click();
-  assert.deepEqual(h.requests, []);
+async function openRow(h, id) {
+  const button = h.row(id);
+  assert.ok(button, `Missing member configuration action ${id}`);
+  await button.click();
+}
+
+test('configuration has no global selector and member rows expose every active key including unrecoverable ones', () => {
+  assert.doesNotMatch(html, /guide-existing-token|btn-view-client-config/);
+  const h = harness({ tokens: [token('A'), token('old', { can_reveal: false }), token('revoked', { revoked_at: 'yesterday' }), token('other', { principal_id: 'other-member' })] });
+  assert.ok(h.row('A'));
+  assert.ok(h.row('old'));
+  const english = harness({ tokens: [token('A')], language: 'en' });
+  assert.match(english.$('member-tokens-table').querySelector('tbody').innerHTML, />Copy<|>Copy<\/button>/);
+  assert.equal(h.row('revoked'), null);
+  assert.equal(h.row('other'), null);
 });
 
-test('same-name clients are distinguished by prefix and selection only reveals an existing key', async () => {
-  const h = harness({ tokens: [token('A'), token('B'), token('revoked', { revoked_at: 'yesterday' })] });
-  h.context.openClientGuides();
-  assert.match(h.$('guide-existing-token').innerHTML, /Team \/ Owner \/ quickstart-owner · aim_A/);
-  assert.match(h.$('guide-existing-token').innerHTML, /aim_B/);
-  assert.doesNotMatch(h.$('guide-existing-token').innerHTML, /revoked|secret-/);
-  await select(h, 'B');
-  assert.deepEqual(h.requests, [{ url: '/api/admin/tokens/reveal', method: 'POST', body: { id: 'B' } }]);
-  assertGuides(h, 'secret-B');
-  h.context.closeClientGuides();
-  h.context.openClientGuides();
-  assertGuides(h, 'secret-B');
-  assert.equal(h.requests.length, 1);
-});
-
-test('a member token action opens its own credential instead of the previous selection', async () => {
+test('member key row opens its exact secret and closing returns focus without creating data', async () => {
   const h = harness({ tokens: [token('A'), token('B')] });
-  await h.context.openClientGuides(h.state.tokens[0]);
-  await h.context.openClientGuides(h.state.tokens[1]);
-  assert.equal(h.$('guide-existing-token').value, 'B');
+  const opener = h.row('B');
+  await openRow(h, 'B');
+  assert.deepEqual(h.requests, [{ url: '/api/admin/tokens/reveal', method: 'POST', body: { id: 'B' } }]);
+  assert.match(h.$('client-config-context').textContent, /Team \/ Owner \/ Laptop · aim_B/);
   assertGuides(h, 'secret-B');
-  assert.ok(h.requests.every(request => request.url === '/api/admin/tokens/reveal'));
+  h.context.closeClientGuides();
+  assert.equal(h.document.activeElement, opener);
+  await openRow(h, 'B');
+  assert.equal(h.requests.length, 1);
+  assertGuides(h, 'secret-B');
 });
 
-test('out-of-order reveals cannot replace the later selection', async () => {
+test('configuration rejects another tenant, member, revoked key, missing token, or non-member page', async () => {
+  const candidates = [token('other-member', { principal_id: 'other' }), token('other-tenant', { tenant_id: 'other' }), token('revoked', { revoked_at: 'now' })];
+  for (const candidate of [...candidates, undefined]) {
+    const h = harness({ tokens: candidates });
+    await h.context.openClientGuides(candidate);
+    assert.equal(h.requests.length, 0);
+    assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
+  }
+  const h = harness({ tokens: [token('A')] });
+  h.setPage('tab-overview');
+  await h.context.openClientGuides(h.state.tokens[0]);
+  assert.equal(h.requests.length, 0);
+  h.setPage('tab-tenants');
+  h.$('member-detail-card').classList.add('hidden');
+  await h.context.openClientGuides(h.state.tokens[0]);
+  assert.equal(h.requests.length, 0);
+});
+
+test('same-member keys cannot overwrite each other when reveals complete out of order', async () => {
   const a = defer(), b = defer();
   const h = harness({ tokens: [token('A'), token('B')], reveal: id => id === 'A' ? a.promise : b.promise });
-  h.context.openClientGuides();
-  const first = select(h, 'A'), second = select(h, 'B');
+  const first = openRow(h, 'A'), second = openRow(h, 'B');
   assertGuides(h, '<YOUR_API_TOKEN>');
-  b.resolve({ token: 'new-B' });
+  b.resolve({ token: 'current-B' });
   await second;
   a.resolve({ token: 'old-A' });
   await first;
-  assert.equal(h.$('guide-existing-token').value, 'B');
-  assertGuides(h, 'new-B');
-  assert.doesNotMatch(h.$('guide-codex-mcp').textContent, /old-A/);
+  assert.equal(h.state.clientConfigTokenID, 'B');
+  assertGuides(h, 'current-B');
 });
 
-test('failure clears the previous key and explains manual recovery without issuing credentials', async () => {
-  const h = harness({ tokens: [token('A'), token('B')], reveal: async id => {
-    if (id === 'B') throw new Error('unavailable');
-    return { token: 'secret-A' };
-  }, language: 'en' });
-  h.context.openClientGuides();
-  await select(h, 'A');
-  await select(h, 'B');
-  assert.equal(h.$('guide-token-input').value, '');
+test('unrecoverable active keys support manual paste within their fixed member context', async () => {
+  const h = harness({ tokens: [token('old', { can_reveal: false })], language: 'en' });
+  await openRow(h, 'old');
+  assert.equal(h.requests.length, 0);
   assertGuides(h, '<YOUR_API_TOKEN>');
   assert.match(h.$('guide-token-hint').textContent, /Paste it to view configuration/);
-  assert.ok(h.requests.every(request => request.url === '/api/admin/tokens/reveal'));
+  h.$('guide-token-input').value = 'manual-secret';
+  h.$('guide-token-input').input();
+  assert.equal(h.state.clientConfigTokenID, 'old');
+  assertGuides(h, 'manual-secret');
 });
 
-test('unrecoverable keys allow manual input and manual edits supersede pending selection', async () => {
+test('manual input supersedes a pending reveal but remains subject to member invalidation', async () => {
   const pending = defer();
-  const h = harness({ tokens: [token('old', { can_reveal: false }), token('pending')], reveal: () => pending.promise });
-  h.context.openClientGuides();
-  await select(h, 'old');
-  assert.deepEqual(h.requests, []);
-  assert.match(h.$('guide-token-hint').textContent, /粘贴原密钥/);
-  const selecting = select(h, 'pending');
+  const h = harness({ tokens: [token('A')], reveal: () => pending.promise });
+  const opening = openRow(h, 'A');
   h.$('guide-token-input').value = 'manual-secret';
   h.$('guide-token-input').input();
   pending.resolve({ token: 'stale-secret' });
-  await selecting;
-  assert.equal(h.$('guide-existing-token').value, '');
-  assert.equal(h.$('guide-token-hint').textContent, '');
+  await opening;
   assertGuides(h, 'manual-secret');
-  h.context.closeClientGuides();
-  h.context.openClientGuides();
-  assertGuides(h, 'manual-secret');
+  h.state.selectedPrincipal = 'other';
+  h.context.validateClientConfiguration();
+  assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
+  assert.equal(h.$('guide-token-input').value, '');
 });
 
-test('refreshing a revoked or missing candidate clears selection and ignores any pending reveal', async () => {
+test('refreshing a revoked or missing key clears configuration and ignores pending reveal results', async () => {
   for (const disappeared of [false, true]) {
     const pending = defer();
     const h = harness({ tokens: [token('A')], reveal: () => pending.promise });
-    h.context.openClientGuides();
-    const selecting = select(h, 'A');
+    const opening = openRow(h, 'A');
+    h.$('mcp-check-result').textContent = 'Connected';
     if (disappeared) h.state.tokens = [];
     else h.state.tokens[0].revoked_at = 'now';
-    h.context.renderClientTokenPicker();
+    h.context.validateClientConfiguration();
     pending.resolve({ token: 'invalid-A' });
-    await selecting;
-    assert.equal(h.$('guide-existing-token').value, '');
+    await opening;
+    assert.equal(h.state.clientConfigTokenID, '');
     assert.equal(h.$('guide-token-input').value, '');
-    assert.match(h.$('guide-token-hint').textContent, /已失效或已吊销/);
+    assert.equal(h.$('mcp-check-result').textContent, '');
+    assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
     assertGuides(h, '<YOUR_API_TOKEN>');
   }
 });
 
-test('client names in selector labels are escaped and never contain secret values', () => {
-  const h = harness({ tokens: [token('A', { name: '<img src=x onerror="alert(1)">' })] });
-  h.context.openClientGuides();
-  assert.match(h.$('guide-existing-token').innerHTML, /&lt;img/);
-  assert.doesNotMatch(h.$('guide-existing-token').innerHTML, /<img|secret-A/);
-});
-
-
-test('a superseded failure cannot clear the later successful credential', async () => {
-  const pending = defer();
-  const h = harness({ tokens: [token('A'), token('B')], reveal: id => id === 'A' ? pending.promise : { token: 'current-B' } });
-  h.context.openClientGuides();
-  const first = select(h, 'A');
-  await select(h, 'B');
-  pending.reject(new Error('late failure'));
-  await first;
-  assertGuides(h, 'current-B');
-  assert.equal(h.$('guide-token-hint').textContent, '');
-});
-
-test('refreshing a credential after its secret was loaded clears every guide when it is revoked', async () => {
-  const h = harness({ tokens: [token('A')] });
-  h.context.openClientGuides();
-  await select(h, 'A');
-  assertGuides(h, 'secret-A');
-  h.$('mcp-check-result').textContent = 'Connected';
-  h.state.tokens[0].revoked_at = 'now';
-  h.context.renderClientTokenPicker();
-  assert.equal(h.$('mcp-check-result').textContent, '');
-  assert.equal(h.$('guide-existing-token').value, '');
-  assert.equal(h.$('guide-token-input').value, '');
+test('failed retrieval clears a previous key without creating data', async () => {
+  const h = harness({ tokens: [token('A'), token('B')], reveal: async id => {
+    if (id === 'B') throw new Error('unavailable');
+    return { token: 'secret-A' };
+  } });
+  await openRow(h, 'A');
+  await openRow(h, 'B');
   assertGuides(h, '<YOUR_API_TOKEN>');
+  assert.ok(h.requests.every(request => request.url === '/api/admin/tokens/reveal'));
 });
 
-test('closing configuration ignores a pending reveal without reopening or updating its fields', async () => {
-  const pending = defer();
-  const h = harness({ tokens: [token('A')], reveal: () => pending.promise });
-  h.context.openClientGuides();
-  const selecting = select(h, 'A');
+test('close and logout cancel late secret responses without restoring hidden fields or logged-out cache', async () => {
+  for (const logout of [false, true]) {
+    const pending = defer();
+    const h = harness({ tokens: [token('A')], reveal: () => pending.promise });
+    const opening = openRow(h, 'A');
+    if (logout) await h.$('btn-logout').click();
+    else h.context.closeClientGuides();
+    pending.resolve({ token: 'late-A' });
+    await opening;
+    assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
+    assert.equal(h.$('guide-token-input').value, '');
+    if (logout) assert.equal(h.state.revealedTokens.A, undefined);
+  }
+});
+
+test('issuing a member key refreshes its row then opens configuration with the same secret and return focus', async () => {
+  const h = harness();
+  h.$('member-token-name').value = 'Laptop';
+  await h.issue();
+  assert.deepEqual(h.errors, []);
+  assert.deepEqual(h.requests, [{ url: '/api/admin/tokens', method: 'POST', body: { tenant_id: 'tenant', principal_id: 'member', name: 'Laptop' } }]);
+  assert.equal(h.$('client-config-modal').classList.contains('hidden'), false);
+  assertGuides(h, 'created-secret');
   h.context.closeClientGuides();
-  pending.resolve({ token: 'late-A' });
-  await selecting;
-  assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
-  assert.equal(h.$('guide-token-input').value, '');
-  assertGuides(h, '<YOUR_API_TOKEN>');
+  assert.equal(h.document.activeElement, h.row('new-key'));
 });
 
-test('logout cancels a pending reveal and prevents it from restoring cached secret material', async () => {
+test('an in-flight issuance cannot open configuration after changing member, tenant, page, or logging out', async () => {
+  for (const change of ['member', 'tenant', 'page', 'hidden', 'logout']) {
+    const pending = defer();
+    const h = harness({ create: () => pending.promise });
+    const issuing = h.issue();
+    if (change === 'member') { h.state.selectedPrincipal = 'other'; h.state.locationRequest++; }
+    if (change === 'tenant') { h.state.memberTenant = 'other'; h.state.locationRequest++; }
+    if (change === 'page') h.setPage('tab-overview');
+    if (change === 'hidden') h.$('app-view').classList.add('hidden');
+    if (change === 'logout') await h.$('btn-logout').click();
+    pending.resolve({ id: 'new-key', token: 'late-created-secret' });
+    await issuing;
+    assert.deepEqual(h.errors, []);
+    assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
+    assert.equal(h.state.revealedTokens['new-key'], undefined);
+  }
+});
+
+test('changing context while issuance refreshes prevents an otherwise valid automatic open', async () => {
   const pending = defer();
-  const h = harness({ tokens: [token('A')], reveal: () => pending.promise });
-  h.context.openClientGuides();
-  const selecting = select(h, 'A');
-  await h.$('btn-logout').click();
-  pending.resolve({ token: 'late-A' });
-  await selecting;
+  const h = harness({ refresh: async state => { await pending.promise; state.tokens.push(token('new-key')); } });
+  const issuing = h.issue();
+  await Promise.resolve();
+  h.setPage('tab-projects');
+  pending.resolve();
+  await issuing;
   assert.equal(h.$('client-config-modal').classList.contains('hidden'), true);
-  assert.equal(h.$('guide-token-input').value, '');
-  assert.equal(h.state.clientConfigTokenID, '');
-  assert.equal(h.state.revealedTokens.A, undefined);
-  assertGuides(h, '<YOUR_API_TOKEN>');
+});
+
+
+test('an unfocused member key click restores focus after manual configuration of an unrecoverable key', async () => {
+  const h = harness({ tokens: [token('old', { can_reveal: false })] });
+  const opener = h.row('old');
+  assert.equal(h.document.activeElement, null);
+  await opener.click();
+  h.$('guide-token-input').value = 'original-key';
+  h.$('guide-token-input').input();
+  h.context.closeClientGuides();
+  assert.equal(h.document.activeElement, opener);
+});
+
+test('closing configuration finds the replacement key action when a refresh removed the original opener', async () => {
+  const h = harness({ tokens: [token('A')] });
+  const original = h.row('A');
+  await original.click();
+  original.isConnected = false;
+  h.state.tokens[0].name = 'Updated client';
+  h.context.renderTokensTable();
+  const replacement = h.row('A');
+  assert.notEqual(replacement, original);
+  h.context.closeClientGuides();
+  assert.equal(h.document.activeElement, replacement);
 });

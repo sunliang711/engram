@@ -9,7 +9,7 @@ See [DESIGN.md](./DESIGN.md) for the complete technical design specification.
 - **Embedded Admin Web UI (`/`)**: Complete initialization and management console compiled into the single `engram-server` binary (no separate CLI required):
   - First-boot temporary admin password printed to console output; forced password change on initial login.
   - Password reset flow triggered via `RESET_ADMIN=true` (or `reset_admin=true`) environment variable.
-  - 1-click Quick Bootstrap wizard for Tenant, Principal, Project, Git Remote, `.engram-project` Marker, and API Token with ready-to-copy MCP configuration.
+  - Tenant and member management with client keys and ready-to-copy MCP configuration in each member's detail view. The overview shows statistics and recent memories, with a create-tenant guide for first-time use.
   - Visual management of Tenants, Principals, Projects, Monorepo `workspace_path` mappings, API Tokens, soft-deleted Memory restoration, revision history inspection, and Markdown export.
 - **Two-Tier Memory Hierarchy**: Tenant Global Memory (`scope = "global"`) and Project Memory (`scope = "project"`).
 - **Streamable HTTP MCP Transport (`/mcp`)**: Exposes 9 MCP tools (`project_register`, `memory_discover`, `memory_query`, `memory_read`, `memory_create`, `memory_update`, `memory_delete`, `memory_changes`, `memory_promote`).
@@ -58,7 +58,7 @@ ENGRAM_CONTEXT_SIGN_KEY="$(openssl rand -hex 32)" docker compose up -d
 
 Engram exposes a **Streamable HTTP** MCP endpoint at `/mcp` (not `stdio`). First issue an API Token (`aim_...`) in the Admin Web UI (`http://localhost:8080`).
 
-To view configuration again, use **Overview → View client configuration** and select an existing client, or paste a saved key. This does not create tenants, members, or keys. **Create key and configure** is only for issuing a new key; restarting the server does not require repeating quickstart.
+To view configuration again, use **Tenant management → Tenant → Member → Client keys → Configure client** on the desired key. The dialog stays within that member's context; it does not create tenants, members, or keys. Issuing a new key in the member detail view opens its configuration automatically. Restarting the server does not require creating a new key.
 
 ### Codex (`~/.codex/config.toml`)
 
@@ -123,11 +123,11 @@ Use the same name when retrying an idempotency key; changing it returns `IDEMPOT
 
 ### Project creation
 
-Project creation is a separate tenant-member permission, `can_create_project`, disabled by default. Enable **Allow agents to create projects autonomously** in the member settings (or quickstart). Existing API tokens inherit the live member grant; no token reissue is required. Migration `006_project_creation_permission.sql` adds the permission without changing existing grants. System snapshots preserve it; older snapshots default to disabled.
+Project creation is a separate tenant-member permission, `can_create_project`, disabled by default. Enable **Allow agents to create projects autonomously** in the member settings. Existing API tokens inherit the live member grant; no token reissue is required. Migration `006_project_creation_permission.sql` adds the permission without changing existing grants. System snapshots preserve it; older snapshots default to disabled.
 
 When `memory_discover` returns `PROJECT_NOT_REGISTERED`, its error details include `can_create_project`. Authorized agents can call `project_register` with `name`, Git `remotes`, optional relative `workspace_path` / existing `project_marker`, and an `idempotency_key`. A remote or marker is required. A nonempty registration `workspace_path` requires remotes because it persists a repository mapping. For marker-only registration, omit it and report the marker's current directory as `marker_path` during discovery; marker identity follows its UUID, not a stored directory. Registration atomically grants the creator `writer` access to the new project; call `memory_discover` again before writing project memories. Existing identities (including disabled projects and overlapping repository paths) return `PROJECT_EXISTS` without granting access. Lock contention returns retryable `LOCK_TIMEOUT` (HTTP 503); retry with the same idempotency key after the lock is released. Registration retries recheck current creation and project permissions. The client configuration dialog's Step 2 includes these instructions in Chinese and English.
 
-In quickstart, checking the project creation option enables permission; leaving it unchecked preserves an existing member's permission and defaults new members to disabled. Revoke permission in the member settings.
+The legacy `/api/admin/quickstart` endpoint remains available for compatibility, but the overview has no quickstart form or global client configuration picker. Manage creation permissions in the member settings.
 
 Existing JSON fields `tenant_role` and `project_role` remain compatible. `can_maintain_project` is retained as `false`; members cannot restore or purge memories. Default searches and change feeds include only authorized scopes.
 

@@ -753,10 +753,6 @@ details[open] > summary { margin-bottom: 14px; }
 .summary-hint { margin-left: 12px; font-size: 12.5px; font-weight: 400; color: var(--text-muted); }
 .advanced-options { border-top: 1px solid var(--border); padding: 14px 0; color: var(--text-muted); font-size: 13px; }
 .advanced-options .form-row { margin-top: 12px; }
-.success-panel { border: 1px solid rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08); border-radius: 12px; margin-top: 18px; padding: 18px; }
-.success-panel h3 { color: var(--text-success); font-size: 16px; }
-.success-panel p { font-size: 13.5px; color: var(--text-secondary); margin: 8px 0 14px; }
-.success-panel details { margin-top: 12px; font-size: 13px; color: var(--text-muted); }
 .recent-list { display: grid; gap: 4px; }
 .recent-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; text-align: left; background: transparent; border: 1px solid transparent; box-shadow: none; border-radius: 10px; padding: 13px 14px; color: var(--text); }
 .recent-item:hover { background: var(--bg-hover); border-color: var(--border); transform: none; }
@@ -958,7 +954,6 @@ pre[id$="-rules"], #guide-claude-cli, #mig-import-result-box { white-space: pre-
 }
 
 /* Empty installations prioritize the setup action over zero-valued dashboard statistics. */
-.needs-setup #stats-grid, .needs-setup .secondary-stats, .needs-setup #recent-memories-card { display: none; }
 
 /* Preferences stay available in authentication views and the main console. */
 .preferences-controls { display: flex; align-items: center; gap: 8px; }
@@ -1033,8 +1028,6 @@ td:first-child > .text-button:hover { color: var(--text-accent); }
 .client-config-dialog > .desc { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
 .client-config-dialog .setup-panel > summary { display: none; }
 .client-config-dialog .guide-credentials { width: 100%; }
-.quickstart-heading { align-items: flex-start; flex-wrap: wrap; }
-.guide-credentials > label:not(:first-child) { margin-top: 12px; }
 .client-config-dialog .guide-step { padding: 20px; }
 .client-tabs { gap: 4px; padding: 4px; border-radius: 10px; background: var(--bg-panel); border: 1px solid var(--border); width: fit-content; }
 .client-tab-btn { border-color: transparent; background: transparent; box-shadow: none; }

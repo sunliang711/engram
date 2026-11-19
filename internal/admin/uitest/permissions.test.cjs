@@ -47,7 +47,6 @@ function harness() {
   load('  function renderMemberDetail()', '  // renderManagementViews');
   load('  function renderProjectRole()', '  // openProject');
   load('  onSubmit("member-role-form"', '  onSubmit("member-token-form"');
-  load('  onSubmit("quickstart-form"', '  onSubmit("create-tenant-form"');
   load('  onSubmit("create-principal-form"', '  onSubmit("member-role-form"');
   return { $, state, principal, project, context, requests, submissions };
 }
@@ -169,22 +168,6 @@ test('creating or binding a member explicitly configures project creation permis
       await h.submissions['create-principal-form']({ preventDefault() {} });
       assert.equal(h.requests[0].body.mode, mode);
       assert.equal(h.requests[0].body.can_create_project, allowed);
-    }
-  }
-});
-
-test('quickstart only sends an affirmative creation grant and preserves existing permissions when unchecked', async () => {
-  for (const existing of [false, true]) {
-    for (const checked of [false, true]) {
-      const h = harness();
-      h.principal.tenant_roles[0].can_create_project = existing;
-      h.$('qs-create-project').checked = checked;
-      await h.submissions['quickstart-form']({ preventDefault() {} });
-      const body = h.requests[0].body;
-      assert.equal(h.requests[0].url, '/api/admin/quickstart');
-      assert.equal(Object.hasOwn(body, 'can_create_project'), checked);
-      if (checked) assert.equal(body.can_create_project, true);
-      assert.equal(h.principal.tenant_roles[0].can_create_project, existing);
     }
   }
 });

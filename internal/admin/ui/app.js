@@ -175,7 +175,6 @@
       state.principals = principals.items || [];
       state.projects = projects.items || [];
       state.tokens = tokens.items || [];
-      renderClientTokenPicker();
       state.facets = { categories: facets.categories || [], tags: facets.tags || [] };
       state.deletedCount = overview.deleted_memories_count || 0;
 
@@ -187,10 +186,7 @@
       $("stat-tokens").textContent = overview.active_tokens_count || 0;
       $("stat-events").textContent = overview.events_count || 0;
 
-      const initialized = state.tenants.length > 0;
-      $("tab-overview").classList.toggle("needs-setup", !initialized);
-      $("overview-title").textContent = initialized ? t("让知识在项目与客户端之间流动") : t("连接你的第一个 AI 客户端");
-      $("overview-description").textContent = initialized ? t("浏览最近沉淀的知识，管理项目和客户端接入。") : t("创建空间、关联项目，再复制客户端配置，即可开始共享记忆。");
+      renderOverviewSetup();
       renderSelectors();
       renderManagementViews();
       if (!state.locationReady) {
@@ -376,6 +372,7 @@
     if (!tenant) { state.memberTenant = ""; state.selectedPrincipal = ""; }
     if (!selectedMember()) state.selectedPrincipal = "";
     const member = selectedMember();
+    validateClientConfiguration();
     $("tenant-list-view").classList.toggle("hidden", !!tenant);
     $("tenant-detail-view").classList.toggle("hidden", !tenant || !!member);
     $("tenant-breadcrumb").classList.toggle("hidden", !tenant);
@@ -391,6 +388,14 @@
     renderProjectsTable();
     renderProjectDetail();
     renderTokensTable();
+  }
+
+  // renderOverviewSetup guides first-time users into the tenant management flow.
+  function renderOverviewSetup() {
+    const initialized = state.tenants.length > 0;
+    $("overview-setup").classList.toggle("hidden", initialized);
+    $("overview-title").textContent = initialized ? t("让知识在项目与客户端之间流动") : t("创建你的第一个租户");
+    $("overview-description").textContent = initialized ? t("浏览最近沉淀的知识，管理项目和客户端接入。") : t("先创建租户，再添加成员并在成员详情中配置客户端。");
   }
 
   // renderTenantsTable makes the tenant list the starting point for member and key management.
@@ -530,13 +535,12 @@
         const tokenCell = revealed
           ? `<code>${escapeHtml(revealed)}</code>`
           : `<code>${escapeHtml(tk.token_prefix)}…</code>${
-              tk.can_reveal ? "" : t(' <small class="muted" title="服务端签名密钥变更后无法再解密这个密钥，它仍可正常鉴权；需要明文时请重新签发。">（无法查看明文）</small>')
+              tk.can_reveal ? "" : t(' <small class="muted" title="无法还原此密钥明文；可在配置客户端时手动粘贴原密钥。">（无法查看明文）</small>')
             }`;
         const revealBtns = tk.can_reveal
           ? t`
             <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? t("隐藏") : t("查看")}</button>
             <button type="button" class="secondary small btn-copy-token" data-id="${tk.id}">复制</button>
-            <button type="button" class="secondary small btn-apply-token" data-id="${tk.id}">配置客户端</button>
           `
           : "";
         const lastUsed = tk.last_used_at
@@ -552,6 +556,7 @@
         <td>
           <div class="row-actions">
             ${active ? revealBtns : ""}
+            ${active ? `<button type="button" class="secondary small btn-apply-token" data-id="${escapeHtml(tk.id)}">${t("配置客户端")}</button>` : ""}
             ${active ? t`<button type="button" class="danger-outline small btn-revoke-token" data-id="${tk.id}">吊销</button>` : ""}
           </div>
         </td>
@@ -592,6 +597,7 @@
         try {
           const token = state.tokens.find((item) => item.id === btn.dataset.id && !item.revoked_at);
           if (!token) throw new Error(t("该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。"));
+          btn.focus();
           await openClientGuides(token);
         } catch (err) {
           showToast(err.message, true);
@@ -992,79 +998,75 @@
     if ($("guide-gemini-rules")) $("guide-gemini-rules").textContent = instructions;
   }
 
-  // clientTokenContext names a selected credential without exposing its secret.
+  // currentMemberToken rejects credentials outside the visible tenant and member detail.
+  function currentMemberToken(tokenID) {
+    if (activeTab() !== "tab-tenants" || !selectedMember() || $("app-view").classList.contains("hidden") || $("member-detail-card").classList.contains("hidden")) return null;
+    return state.tokens.find((token) => token.id === tokenID && !token.revoked_at && token.tenant_id === state.memberTenant && token.principal_id === state.selectedPrincipal) || null;
+  }
+
+  // clientTokenContext names the fixed member credential without exposing its secret.
   function clientTokenContext(token) {
-    return token ? `${token.tenant_name} / ${token.principal_name} / ${token.name} · ${token.token_prefix ? token.token_prefix + "…" : token.id.slice(0, 8)}` : t("选择已有客户端或粘贴密钥，也可先使用占位符查看配置。");
+    return `${token.tenant_name} / ${token.principal_name} / ${token.name} · ${token.token_prefix ? token.token_prefix + "…" : token.id.slice(0, 8)}`;
   }
 
-  // renderClientTokenPicker keeps the selection aligned with active credentials after each refresh.
-  function renderClientTokenPicker() {
-    const tokens = state.tokens.filter((token) => !token.revoked_at);
-    const selected = state.clientConfigTokenID;
-    if (selected && !tokens.some((token) => token.id === selected)) {
-      state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
-      state.clientConfigTokenID = "";
-      $("guide-token-input").value = "";
-      $("mcp-check-result").textContent = "";
-      $("guide-token-hint").textContent = t("该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。");
-      $("client-config-context").textContent = clientTokenContext();
-      renderClientGuides();
-    }
-    $("guide-existing-token").innerHTML = `<option value="">${t("使用当前密钥或手动粘贴")}</option>` + tokens.map((token) => `<option value="${escapeHtml(token.id)}">${escapeHtml(clientTokenContext(token))}</option>`).join("");
-    $("guide-existing-token").value = state.clientConfigTokenID || "";
-    if (state.clientConfigTokenID) $("client-config-context").textContent = clientTokenContext(tokens.find((token) => token.id === state.clientConfigTokenID));
+  // validateClientConfiguration closes an invalidated or out-of-context credential configuration.
+  function validateClientConfiguration() {
+    if (!state.clientConfigTokenID || currentMemberToken(state.clientConfigTokenID)) return;
+    const wasOpen = !$("client-config-modal").classList.contains("hidden");
+    state.clientConfigTokenID = "";
+    $("guide-token-input").value = "";
+    $("guide-token-hint").textContent = "";
+    $("mcp-check-result").textContent = "";
+    $("client-config-context").textContent = "";
+    closeClientGuides(false);
+    renderClientGuides();
+    if (wasOpen) showToast(t("当前成员或密钥已变化，请从成员详情重新打开配置。"), true);
   }
 
-  // selectClientToken reveals an existing secret without creating data and ignores superseded responses.
-  async function selectClientToken(tokenID) {
+  // loadClientTokenSecret reads only the fixed member credential and ignores superseded responses.
+  async function loadClientTokenSecret(tokenID) {
     const request = state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
-    const token = state.tokens.find((item) => item.id === tokenID && !item.revoked_at);
-    state.clientConfigTokenID = token ? token.id : "";
-    $("guide-existing-token").value = state.clientConfigTokenID;
+    const token = currentMemberToken(tokenID);
     $("guide-token-input").value = "";
     $("mcp-check-result").textContent = "";
-    $("client-config-context").textContent = clientTokenContext(token);
-    $("guide-token-hint").textContent = token ? t("正在获取已有密钥…") : tokenID ? t("该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。") : "";
+    $("guide-token-hint").textContent = t("正在获取已有密钥…");
     renderClientGuides();
-    if (!token) return;
+    if (!token) { validateClientConfiguration(); return; }
     try {
       if (!token.can_reveal && !state.revealedTokens[token.id]) throw new Error("token plaintext unavailable");
       const secret = await resolveTokenSecret(token.id);
       if (request !== state.clientConfigRequest) return;
-      if (!state.tokens.some((item) => item.id === token.id && !item.revoked_at)) { renderClientTokenPicker(); return; }
+      if (!currentMemberToken(token.id)) { validateClientConfiguration(); return; }
       $("guide-token-input").value = secret;
       $("guide-token-hint").textContent = "";
       renderClientGuides();
     } catch (_) {
       if (request !== state.clientConfigRequest) return;
+      if (!currentMemberToken(token.id)) { validateClientConfiguration(); return; }
       $("guide-token-input").value = "";
       $("guide-token-hint").textContent = t("无法还原此密钥明文。请粘贴原密钥查看配置；此操作不会签发新密钥。");
       renderClientGuides();
     }
   }
 
-  // openClientGuides offers existing credentials, manual input, or placeholders without creating data.
-  function openClientGuides(token, rawToken) {
-    state.clientConfigOpener = document.activeElement;
-    if (rawToken !== undefined) {
-      state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
-      state.clientConfigTokenID = "";
-      $("guide-token-input").value = rawToken;
-      $("guide-token-hint").textContent = "";
-      $("client-config-context").textContent = t("使用快速接入生成的密钥配置客户端。");
-    } else if (!state.clientConfigTokenID) {
-      $("client-config-context").textContent = clientTokenContext();
+  // openClientGuides opens configuration only for a key belonging to the current member detail.
+  function openClientGuides(token) {
+    const current = token && currentMemberToken(token.id);
+    if (!current) {
+      validateClientConfiguration();
+      showToast(t("请从当前租户的成员密钥列表打开客户端配置。"), true);
+      return;
     }
-    renderClientTokenPicker();
+    state.clientConfigOpener = document.activeElement;
+    state.clientConfigTokenID = current.id;
+    $("client-config-context").textContent = clientTokenContext(current);
     $("mcp-check-result").textContent = "";
-    renderClientGuides();
     $("client-guides-card").open = true;
     $("client-config-modal").classList.remove("hidden");
     $("client-config-modal").querySelector(".modal-card").scrollTop = 0;
     document.body.classList.add("client-config-open");
     $("btn-close-client-config").focus();
-    if (token) return selectClientToken(token.id);
-    if (state.clientConfigTokenID && !$("guide-token-input").value.trim()) return selectClientToken(state.clientConfigTokenID);
+    return loadClientTokenSecret(current.id);
   }
 
   // closeClientGuides cancels pending reveals and restores focus to its invoking control.
@@ -1074,7 +1076,11 @@
     const wasOpen = !modal.classList.contains("hidden");
     modal.classList.add("hidden");
     document.body.classList.remove("client-config-open");
-    if (wasOpen && restoreFocus && state.clientConfigOpener && state.clientConfigOpener.isConnected) state.clientConfigOpener.focus({ preventScroll: true });
+    if (wasOpen && restoreFocus) {
+      // A background refresh may replace the original row while configuration is open.
+      const opener = state.clientConfigOpener && state.clientConfigOpener.isConnected ? state.clientConfigOpener : currentMemberToken(state.clientConfigTokenID) && $("member-tokens-table").querySelector(`.btn-apply-token[data-id="${state.clientConfigTokenID}"]`);
+      if (opener) opener.focus({ preventScroll: true });
+    }
   }
 
   // activeTab returns the current navigation destination for URL persistence.
@@ -1469,31 +1475,14 @@
     });
   });
 
-  $("guide-existing-token").addEventListener("change", () => selectClientToken($("guide-existing-token").value));
-  $("btn-view-client-config").addEventListener("click", () => openClientGuides());
   if ($("guide-token-input")) {
     $("guide-token-input").addEventListener("input", () => {
-      // Manual input takes ownership from any in-flight credential reveal.
+      // Manual input stays tied to the member key and supersedes any pending reveal.
       state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
-      state.clientConfigTokenID = "";
-      $("guide-existing-token").value = "";
+      validateClientConfiguration();
       $("guide-token-hint").textContent = "";
-      $("client-config-context").textContent = clientTokenContext();
       $("mcp-check-result").textContent = "";
       renderClientGuides();
-    });
-  }
-
-  $("btn-qs-again").addEventListener("click", () => {
-    $("qs-result").classList.add("hidden");
-    $("quickstart-form").classList.remove("hidden");
-    $("qs-client").value = "";
-    $("qs-client").focus();
-  });
-
-  if ($("btn-go-client-guides")) {
-    $("btn-go-client-guides").addEventListener("click", () => {
-      openClientGuides(undefined, state.quickstartToken || "");
     });
   }
 
@@ -1553,7 +1542,6 @@
     state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
     await api("/api/admin/logout", { method: "POST" });
     state.latestToken = "";
-    state.quickstartToken = "";
     state.clientConfigTokenID = "";
     state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
     $("guide-token-hint").textContent = "";
@@ -1563,55 +1551,10 @@
     }
     renderClientGuides();
     closeMemoryDetail(false, false);
-    $("qs-result").classList.add("hidden");
-    $("quickstart-form").classList.remove("hidden");
-    $("qs-marker").textContent = "";
-    $("qs-marker-row").classList.add("hidden");
     closeClientGuides(false);
     $("client-guides-card").open = false;
     document.querySelector(".account-menu").open = false;
     renderView({ authenticated: false });
-  });
-
-  onSubmit("quickstart-form", async (e) => {
-    e.preventDefault();
-    const res = await api("/api/admin/quickstart", {
-      method: "POST",
-      body: JSON.stringify({
-        tenant_name: $("qs-tenant").value,
-        principal_subject: $("qs-subject").value,
-        principal_display_name: $("qs-display").value,
-        tenant_role: $("qs-tenant-role").value,
-        can_create_project: $("qs-create-project").checked ? true : undefined,
-        project_name: $("qs-project").value,
-        remote_url: $("qs-remote").value,
-        workspace_path: $("qs-workspace").value,
-        client_name: $("qs-client").value,
-      }),
-    });
-    state.latestToken = res.token || "";
-    state.quickstartToken = state.latestToken;
-    if (res.token_id && res.token) {
-      state.revealedTokens[res.token_id] = res.token;
-    }
-    if ($("guide-token-input")) {
-      $("guide-token-input").value = state.latestToken;
-    }
-    // Hide the completed form so a second click cannot silently issue another credential.
-    $("quickstart-form").classList.add("hidden");
-    $("qs-result").classList.remove("hidden");
-    const notes = [t`已为客户端「${res.token_name}」生成密钥。`];
-    if (res.project_reused) notes.push(t`项目「${$("qs-project").value.trim()}」已存在，已直接复用。`);
-    if (res.remote_elsewhere) notes.push(t("该仓库地址已关联到其他项目，未重复关联。"));
-    notes.push(t("客户端密钥已保存。可重新打开配置或继续接入其他客户端。"));
-    $("qs-result-summary").textContent = notes.join("");
-    $("qs-marker").innerHTML = res.project_marker ? identifier(res.project_marker) : "";
-    $("qs-marker-row").classList.toggle("hidden", !res.project_marker);
-    showToast(t("接入信息已就绪，正在打开客户端配置。"));
-    // Return focus to the visible result action when the configuration dialog closes.
-    $("btn-go-client-guides").focus();
-    openClientGuides(undefined, state.quickstartToken);
-    await refreshAllData();
   });
 
   onSubmit("create-tenant-form", async (e) => {
@@ -1762,6 +1705,10 @@
   $("pm-principal").addEventListener("change", renderProjectRole);
   $("btn-close-client-config").addEventListener("click", () => closeClientGuides());
   $("client-config-modal").addEventListener("click", (event) => { if (event.target === $("client-config-modal")) closeClientGuides(); });
+  $("btn-overview-create-tenant").addEventListener("click", () => {
+    openTenant("");
+    $("btn-new-tenant").click();
+  });
   $("btn-new-tenant").addEventListener("click", () => { $("create-tenant-card").classList.remove("hidden"); $("tenant-name").focus(); });
   $("btn-cancel-tenant").addEventListener("click", () => { $("create-tenant-card").classList.add("hidden"); $("btn-new-tenant").focus(); });
   $("btn-add-member").addEventListener("click", () => {
@@ -1867,16 +1814,26 @@
   onSubmit("member-token-form", async (e) => {
     e.preventDefault();
     const principal = selectedMember();
-    if (!principal) throw new Error(t("请先选择租户和有效成员。"));
-    const context = state.memberTenant + ":" + principal.id;
+    if (!principal || activeTab() !== "tab-tenants") throw new Error(t("请先选择租户和有效成员。"));
+    const tenantID = state.memberTenant;
+    const principalID = principal.id;
+    const locationRequest = state.locationRequest;
+    const cache = state.revealedTokens;
+    const sameContext = () => activeTab() === "tab-tenants" && state.memberTenant === tenantID && state.selectedPrincipal === principalID && state.locationRequest === locationRequest && state.revealedTokens === cache && !$("app-view").classList.contains("hidden") && !$("member-detail-card").classList.contains("hidden");
     const res = await api("/api/admin/tokens", {
       method: "POST",
-      body: JSON.stringify({ tenant_id: state.memberTenant, principal_id: principal.id, name: $("member-token-name").value }),
+      body: JSON.stringify({ tenant_id: tenantID, principal_id: principalID, name: $("member-token-name").value }),
     });
-    if (res.id && res.token) state.revealedTokens[res.id] = res.token;
-    if (context === state.memberTenant + ":" + state.selectedPrincipal) $("member-token-name").value = "";
-    showToast(t("客户端密钥已生成，可在列表中复制或填入配置。"));
+    if (state.revealedTokens !== cache) return;
+    if (res.id && res.token && sameContext()) cache[res.id] = res.token;
+    if (sameContext()) $("member-token-name").value = "";
+    showToast(t("客户端密钥已生成，可在该成员的密钥列表中配置。"));
     await refreshAllData();
+    // Refresh first so closing the dialog returns focus to the newly created key's own action.
+    if (!sameContext()) return;
+    const token = currentMemberToken(res.id);
+    const button = $("member-tokens-table").querySelector(`.btn-apply-token[data-id="${res.id}"]`);
+    if (token && button) { button.focus(); await openClientGuides(token); }
   });
 
   onSubmit("create-project-form", async (e) => {
