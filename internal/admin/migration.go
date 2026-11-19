@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"engram/internal/apperror"
+	"engram/internal/project"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -101,10 +102,11 @@ type snapshotPrincipal struct {
 }
 
 type snapshotTenantMember struct {
-	TenantID    uuid.UUID `json:"tenant_id"`
-	PrincipalID uuid.UUID `json:"principal_id"`
-	Role        string    `json:"role"`
-	CreatedAt   time.Time `json:"created_at"`
+	TenantID         uuid.UUID `json:"tenant_id"`
+	PrincipalID      uuid.UUID `json:"principal_id"`
+	Role             string    `json:"role"`
+	CanCreateProject bool      `json:"can_create_project"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type snapshotProject struct {
@@ -555,6 +557,7 @@ func (h *Handler) targetHasBusinessData(ctx context.Context) (bool, error) {
 	return existingRows > 0, nil
 }
 
+// exportSnapshotPayload captures tenant data and independent member grants in a consistent snapshot.
 func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bool) (SnapshotPayload, error) {
 	var p SnapshotPayload
 	tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{
@@ -597,13 +600,13 @@ func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bo
 	rows.Close()
 
 	// 3. tenant_members
-	rows, err = tx.Query(ctx, `SELECT tenant_id, principal_id, role, created_at FROM tenant_members ORDER BY created_at ASC, tenant_id ASC, principal_id ASC`)
+	rows, err = tx.Query(ctx, `SELECT tenant_id, principal_id, role, can_create_project, created_at FROM tenant_members ORDER BY created_at ASC, tenant_id ASC, principal_id ASC`)
 	if err != nil {
 		return p, apperror.Wrap(apperror.CodeInternalError, "export tenant_members", err)
 	}
 	for rows.Next() {
 		var row snapshotTenantMember
-		if err := rows.Scan(&row.TenantID, &row.PrincipalID, &row.Role, &row.CreatedAt); err != nil {
+		if err := rows.Scan(&row.TenantID, &row.PrincipalID, &row.Role, &row.CanCreateProject, &row.CreatedAt); err != nil {
 			rows.Close()
 			return p, apperror.Wrap(apperror.CodeInternalError, "scan tenant_member", err)
 		}
@@ -809,9 +812,9 @@ func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, 
 
 	for _, tm := range p.TenantMembers {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO tenant_members (tenant_id, principal_id, role, created_at)
-			VALUES ($1, $2, $3, $4)
-		`, tm.TenantID, tm.PrincipalID, tm.Role, tm.CreatedAt); err != nil {
+			INSERT INTO tenant_members (tenant_id, principal_id, role, can_create_project, created_at)
+			VALUES ($1, $2, $3, $4, $5)
+		`, tm.TenantID, tm.PrincipalID, tm.Role, tm.CanCreateProject, tm.CreatedAt); err != nil {
 			return counts, apperror.Wrap(apperror.CodeInvalidArgument, "restore tenant_member", err)
 		}
 	}
@@ -1131,6 +1134,22 @@ func (h *Handler) importKnowledgeBundlePayload(ctx context.Context, p KnowledgeB
 	counts.TenantsMatched = len(matchedTenants)
 	counts.TenantsCreated = len(createdTenants)
 	counts.Tenants = counts.TenantsMatched + counts.TenantsCreated
+
+	// Lock target tenants in stable order before audit identities or project mappings are written.
+	registrationTenants := make([]uuid.UUID, 0, len(tenantIDMap))
+	seenTenants := make(map[uuid.UUID]bool, len(tenantIDMap))
+	for _, targetTID := range tenantIDMap {
+		if !seenTenants[targetTID] {
+			seenTenants[targetTID] = true
+			registrationTenants = append(registrationTenants, targetTID)
+		}
+	}
+	sort.Slice(registrationTenants, func(i, j int) bool { return registrationTenants[i].String() < registrationTenants[j].String() })
+	for _, targetTID := range registrationTenants {
+		if err := project.LockRegistration(ctx, tx, targetTID); err != nil {
+			return counts, err
+		}
+	}
 
 	actorByTenant := make(map[uuid.UUID]uuid.UUID)
 	for _, targetTID := range tenantIDMap {

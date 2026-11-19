@@ -74,6 +74,7 @@ type verifiedAccess struct {
 	perms       PermissionsInfo
 }
 
+// verifyAccess resolves live member grants for a signed project context.
 func (s *Service) verifyAccess(ctx context.Context, projectContextToken string) (*verifiedAccess, error) {
 	p, err := auth.FromContext(ctx)
 	if err != nil {
@@ -98,6 +99,7 @@ func (s *Service) verifyAccess(ctx context.Context, projectContextToken string) 
 	}
 
 	perms := PermissionsInfo{
+		CanCreateProject:   p.CanCreateProject,
 		TenantRole:         p.TenantRole,
 		ProjectRole:        projRole,
 		CanReadGlobal:      auth.CanReadGlobal(p.TenantRole),
@@ -157,6 +159,9 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 				resolvedProj = nil
 				mode = auth.ModeGlobalOnly
 			} else {
+				if appErr != nil && appErr.Code == apperror.CodeProjectNotRegistered {
+					return nil, appErr.WithDetails(map[string]any{"can_create_project": p.CanCreateProject})
+				}
 				return nil, err
 			}
 		} else {
@@ -222,6 +227,7 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 		Mode:           mode,
 		Project:        resolvedProj,
 		Permissions: PermissionsInfo{
+			CanCreateProject:   p.CanCreateProject,
 			TenantRole:         p.TenantRole,
 			ProjectRole:        projRole,
 			CanReadGlobal:      auth.CanReadGlobal(p.TenantRole),
@@ -2346,6 +2352,9 @@ func decodeQueryCursor(s string) (queryCursor, error) {
 
 // authorizeCachedWrite prevents old idempotent responses from bypassing revoked scope permissions.
 func (s *Service) authorizeCachedWrite(ctx context.Context, tx pgx.Tx, access *verifiedAccess, tool string, raw []byte) error {
+	if tool == "project_register" {
+		return authorizeCachedRegistration(ctx, tx, access.principal, raw)
+	}
 	var cached struct {
 		MemoryID uuid.UUID `json:"memory_id"`
 		Memory   struct {

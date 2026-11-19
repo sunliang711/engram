@@ -272,6 +272,43 @@ func TestAdminUIRegression(t *testing.T) {
 			}
 		}
 	})
+	t.Run("project creation permission stays independent and tenant scoped", func(t *testing.T) {
+		for _, tc := range []struct {
+			permission *bool
+			want       bool
+		}{
+			{nil, false},
+			{boolPointer(true), true},
+			{nil, true},
+			{boolPointer(false), false},
+		} {
+			body := map[string]any{"mode": "update_role", "tenant_id": otherTenant.String(), "principal_id": principal.String(), "tenant_role": "none"}
+			if tc.permission != nil {
+				body["can_create_project"] = *tc.permission
+			}
+			payload, _ := json.Marshal(body)
+			rec := httptest.NewRecorder()
+			handler.handlePrincipals(rec, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload)))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("update permission: %d %s", rec.Code, rec.Body.String())
+			}
+			var role string
+			var allowed bool
+			if err := database.Pool.QueryRow(ctx, `SELECT role, can_create_project FROM tenant_members WHERE tenant_id=$1 AND principal_id=$2`, otherTenant, principal).Scan(&role, &allowed); err != nil {
+				t.Fatal(err)
+			}
+			if role != "none" || allowed != tc.want {
+				t.Fatalf("role=%s can_create_project=%v, want none/%v", role, allowed, tc.want)
+			}
+		}
+		var otherAllowed bool
+		if err := database.Pool.QueryRow(ctx, `SELECT can_create_project FROM tenant_members WHERE tenant_id=$1 AND principal_id=$2`, tenant, principal).Scan(&otherAllowed); err != nil {
+			t.Fatal(err)
+		}
+		if otherAllowed {
+			t.Fatal("permission update escaped tenant boundary")
+		}
+	})
 	t.Run("tenant rename and delete", func(t *testing.T) {
 		nameA := "ui-rename-a-" + uuid.NewString()
 		nameB := "ui-rename-b-" + uuid.NewString()
@@ -415,4 +452,9 @@ func TestUIRoutePathsAndMux(t *testing.T) {
 	if rec404.Code != http.StatusNotFound {
 		t.Fatalf("GET /nonexistent-route = %d, want 404", rec404.Code)
 	}
+}
+
+// boolPointer supplies explicit true and false values for optional permission updates.
+func boolPointer(value bool) *bool {
+	return &value
 }

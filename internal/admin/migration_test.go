@@ -455,3 +455,28 @@ func TestNormalizeSnapshotPermissions(t *testing.T) {
 		t.Fatalf("project permissions: %+v", got.ProjectMembers)
 	}
 }
+
+// TestSnapshotProjectCreationPermission preserves grants and keeps older snapshots disabled by default.
+func TestSnapshotProjectCreationPermission(t *testing.T) {
+	payload := sampleSnapshotPayload()
+	payload.TenantMembers[0].Role = "none"
+	payload.TenantMembers[0].CanCreateProject = true
+	archive, _, err := EncodeSnapshotArchive(payload, "", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, restored, err := DecodeSnapshotArchive(archive, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.TenantMembers) != 1 || !restored.TenantMembers[0].CanCreateProject {
+		t.Fatalf("project creation permission lost: %+v", restored.TenantMembers)
+	}
+	var legacy snapshotTenantMember
+	if err := json.Unmarshal([]byte(`{"role":"global_writer"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.CanCreateProject {
+		t.Fatal("legacy snapshot unexpectedly enables project creation")
+	}
+}

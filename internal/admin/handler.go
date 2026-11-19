@@ -366,6 +366,7 @@ func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 		PrincipalSubject     string `json:"principal_subject"`
 		PrincipalDisplayName string `json:"principal_display_name"`
 		TenantRole           string `json:"tenant_role"`
+		CanCreateProject     *bool  `json:"can_create_project"`
 		ProjectName          string `json:"project_name"`
 		RemoteURL            string `json:"remote_url"`
 		WorkspacePath        string `json:"workspace_path"`
@@ -437,6 +438,12 @@ func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Lock before principal or membership writes to keep the MCP lock order consistent.
+	if err := project.LockRegistration(ctx, tx, tenantID); err != nil {
+		writeJSONError(w, err)
+		return
+	}
+
 	// 2. Upsert principal
 	var principalID uuid.UUID
 	err = tx.QueryRow(ctx, `
@@ -451,11 +458,12 @@ func (h *Handler) handleQuickstart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Upsert tenant_member
+	// Omitted creation permission preserves existing grants for older clients.
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO tenant_members (tenant_id, principal_id, role)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (tenant_id, principal_id) DO UPDATE SET role = EXCLUDED.role
-	`, tenantID, principalID, req.TenantRole); err != nil {
+		INSERT INTO tenant_members (tenant_id, principal_id, role, can_create_project)
+		VALUES ($1, $2, $3, COALESCE($4, false))
+		ON CONFLICT (tenant_id, principal_id) DO UPDATE SET role = EXCLUDED.role, can_create_project = COALESCE($4, tenant_members.can_create_project)
+	`, tenantID, principalID, req.TenantRole, req.CanCreateProject); err != nil {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "assign tenant role", err))
 		return
 	}
@@ -807,7 +815,7 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 		rows.Close()
 
 		tmRows, err := h.pool.Query(ctx, `
-			SELECT tm.principal_id, tm.tenant_id, t.name, tm.role
+			SELECT tm.principal_id, tm.tenant_id, t.name, tm.role, tm.can_create_project
 			FROM tenant_members tm
 			JOIN tenants t ON t.id = tm.tenant_id
 		`)
@@ -816,12 +824,14 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			for tmRows.Next() {
 				var pid, tid uuid.UUID
 				var tName, role string
-				if err := tmRows.Scan(&pid, &tid, &tName, &role); err == nil {
+				var canCreateProject bool
+				if err := tmRows.Scan(&pid, &tid, &tName, &role, &canCreateProject); err == nil {
 					if p, ok := byID[pid]; ok {
 						p.TenantRoles = append(p.TenantRoles, map[string]any{
-							"tenant_id":   tid,
-							"tenant_name": tName,
-							"role":        role,
+							"tenant_id":          tid,
+							"tenant_name":        tName,
+							"role":               role,
+							"can_create_project": canCreateProject,
 						})
 					}
 				}
@@ -838,6 +848,7 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			Subject          string `json:"subject"`
 			DisplayName      string `json:"display_name"`
 			TenantRole       string `json:"tenant_role"`
+			CanCreateProject *bool  `json:"can_create_project"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
@@ -913,14 +924,15 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 
 		var affected int64
 		if req.Mode == "update_role" {
-			tag, updateErr := tx.Exec(ctx, `UPDATE tenant_members SET role = $3 WHERE tenant_id = $1 AND principal_id = $2`, tid, pid, req.TenantRole)
+			// Updating global access alone must not revoke the independent creation grant.
+			tag, updateErr := tx.Exec(ctx, `UPDATE tenant_members SET role = $3, can_create_project = COALESCE($4, can_create_project) WHERE tenant_id = $1 AND principal_id = $2`, tid, pid, req.TenantRole, req.CanCreateProject)
 			err, affected = updateErr, tag.RowsAffected()
 		} else {
 			tag, bindErr := tx.Exec(ctx, `
-			INSERT INTO tenant_members (tenant_id, principal_id, role)
-			VALUES ($1, $2, $3)
+			INSERT INTO tenant_members (tenant_id, principal_id, role, can_create_project)
+			VALUES ($1, $2, $3, COALESCE($4, false))
 			ON CONFLICT (tenant_id, principal_id) DO NOTHING
-		`, tid, pid, req.TenantRole)
+		`, tid, pid, req.TenantRole, req.CanCreateProject)
 			err, affected = bindErr, tag.RowsAffected()
 		}
 		if err != nil {
@@ -1121,6 +1133,7 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleProjects lists projects and serializes administrator registration with MCP.
 func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch r.Method {
@@ -1259,6 +1272,11 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
+		if err := project.LockRegistration(ctx, tx, tid); err != nil {
+			writeJSONError(w, err)
+			return
+		}
+
 		if existing, err := findActiveProjectByName(ctx, tx, tid, strings.TrimSpace(req.Name)); err != nil {
 			writeJSONError(w, err)
 			return
@@ -1379,6 +1397,7 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project_id": pid, "principal_id": prinID, "role": req.Role})
 }
 
+// handleProjectRemotes adds repository mappings under the same tenant registration lock as MCP.
 func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -1417,8 +1436,20 @@ func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin repository registration tx", err))
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := project.LockRegistration(ctx, tx, tid); err != nil {
+		writeJSONError(w, err)
+		return
+	}
+
 	repoID := uuid.New()
-	tag, err := h.pool.Exec(r.Context(), `
+	tag, err := tx.Exec(ctx, `
 		INSERT INTO project_repositories (id, tenant_id, project_id, canonical_remote, workspace_path, is_primary)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (tenant_id, canonical_remote, workspace_path) DO NOTHING
@@ -1429,6 +1460,10 @@ func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "insert project_repository", err))
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit repository registration", err))
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{

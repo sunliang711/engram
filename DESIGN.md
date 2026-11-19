@@ -186,7 +186,7 @@ WireGuard 只解决网络访问安全，不能替代应用层身份认证和项�
 
 ## 7. MCP Tool 设计
 
-V1 提供 8 个 Tool。
+当前提供 9 个 Tool，包含 8 个记忆工具与独立的项目注册工具。
 
 Tool 名只使用 ASCII 字母、数字和下划线，并控制在 64 个字符以内，避免 MCP 客户端或底层模型 Tool Calling 网关产生兼容性问题。
 
@@ -295,7 +295,28 @@ Tool 名只使用 ASCII 字母、数字和下划线，并控制在 64 个字符�
 
 `content_hash` 用于返回重复候选和辅助人工判断，不建立严格唯一约束；请求重放由 `idempotency_key` 处理。
 
-所有 Tool 的结构化响应都包含当前授权范围的 `latest_cursor`。客户端发现它与自己的 `known_cursor` 不一致时，可以调用 `memory_changes` 刷新；正确性不依赖服务端主动推送。
+所有记忆 Tool 的结构化响应都包含当前授权范围的 `latest_cursor`。客户端发现它与自己的 `known_cursor` 不一致时，可以调用 `memory_changes` 刷新；正确性不依赖服务端主动推送。
+
+### 7.9 `project_register`
+
+成员级 `can_create_project` 是与全局记忆和各项目权限平行的独立开关，默认关闭，按 Token 绑定的当前租户和成员实时校验。开启或撤销后，现有 Token 立即使用最新授权，无需重新签发。
+
+当 `memory_discover` 返回 `PROJECT_NOT_REGISTERED` 时，错误 `details.can_create_project` 表明当前成员能否注册。客户端“配置客户端”的第二步提供中英文自主注册说明。
+
+```json
+{
+  "name": "my-repo",
+  "remotes": [{"name": "origin", "url": "git@github.com:team/my-repo.git"}],
+  "workspace_path": "",
+  "idempotency_key": "register-my-repo-001"
+}
+```
+
+- `name` 必填且最多 200 字符，`idempotency_key` 必填且最多 128 字节。
+- `remotes` 最多 32 个；规范化、去重、排序后参与幂等计算。也可提供已有 `.engram-project` UUID 的 `project_marker`，两种身份至少提供一种；只有 Marker 时 `workspace_path` 应为 Marker 所在的相对目录。未提供 Marker 时服务端生成 UUID，不自动写本地文件。
+- 调用方不能指定租户、成员或授权角色。注册事务创建项目、仓库映射及当前成员的 `writer` 授权，返回 `project`。随后重新调用 `memory_discover` 获取上下文并读写项目记忆。
+- 使用租户级事务锁串行化注册，并锁定当前有效成员授权。已有名称、Marker、相同或祖先/后代仓库路径（包括停用项目）返回 `PROJECT_EXISTS`，不会自动修改已有项目授权；同仓库互不重叠的子目录允许分别注册。
+- 同一幂等键的不同参数返回 `IDEMPOTENCY_CONFLICT`；重放还检查创建权限、新项目有效状态及当前 `writer` 授权。
 
 ## 8. 核心数据模型
 
@@ -350,6 +371,7 @@ CREATE TABLE tenant_members (
     tenant_id UUID NOT NULL REFERENCES tenants(id),
     principal_id UUID NOT NULL REFERENCES principals(id),
     role TEXT NOT NULL,
+    can_create_project BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, principal_id),
     CHECK (role IN ('none', 'member', 'global_writer'))
@@ -370,6 +392,8 @@ CREATE TABLE api_tokens (
 ```
 
 `last_used_at` 记录 Token 最近一次鉴权成功的时间，同一 Token 每分钟最多写入一次；写入失败不影响本次请求。Admin Web UI 在客户端列表中展示该时间，用于确认客户端配置已生效。
+
+迁移 `006_project_creation_permission.sql` 为已有成员添加默认关闭的创建权限；系统快照保存该字段，旧快照导入时默认关闭。
 
 Tenant Member 的全局记忆权限为 `none`（无权限）、`member`（只读）或 `global_writer`（读写，含软删除及提升）。全局权限不授予任何项目权限；每个项目必须在 `project_members` 中显式授权 `reader`（只读）或 `writer`（读写，含软删除），无权限时不保存项目成员记录。成员没有 `admin` 或 `maintainer` 角色；恢复和彻底清理由后台 admin 负责。
 

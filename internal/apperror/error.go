@@ -12,6 +12,7 @@ type Code string
 const (
 	CodeUnauthenticated       Code = "UNAUTHENTICATED"
 	CodeUnauthorized          Code = "UNAUTHORIZED"
+	CodeProjectExists         Code = "PROJECT_EXISTS"
 	CodeProjectNotRegistered  Code = "PROJECT_NOT_REGISTERED"
 	CodeProjectAmbiguous      Code = "PROJECT_AMBIGUOUS"
 	CodeProjectContextInvalid Code = "PROJECT_CONTEXT_INVALID"
@@ -106,7 +107,7 @@ func (e *Error) HTTPStatus() int {
 		return http.StatusForbidden
 	case CodeProjectNotRegistered, CodeMemoryNotFound:
 		return http.StatusNotFound
-	case CodeVersionConflict, CodeDuplicateMemory, CodeIdempotencyConflict, CodeIdempotencyInProgress, CodeProjectAmbiguous:
+	case CodeProjectExists, CodeVersionConflict, CodeDuplicateMemory, CodeIdempotencyConflict, CodeIdempotencyInProgress, CodeProjectAmbiguous:
 		return http.StatusConflict
 	case CodeInvalidArgument, CodeProjectContextInvalid:
 		return http.StatusBadRequest

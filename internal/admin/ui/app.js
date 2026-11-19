@@ -305,7 +305,7 @@
   function renderPrincipalsTable() {
     const tbody = $("principals-table").querySelector("tbody");
     const principals = visiblePrincipals().filter((principal) => tenantMembership(principal));
-    if (!principals.length) { tbody.innerHTML = t('<tr><td colspan="6" class="empty-state">当前租户还没有成员，请点击“添加成员”。</td></tr>'); return; }
+    if (!principals.length) { tbody.innerHTML = t('<tr><td colspan="7" class="empty-state">当前租户还没有成员，请点击“添加成员”。</td></tr>'); return; }
     tbody.innerHTML = principals
       .map((p) => {
         const membership = tenantMembership(p);
@@ -316,6 +316,7 @@
       <tr class="${p.id === state.selectedPrincipal ? "member-selected" : ""}">
         <td><strong>${escapeHtml(p.display_name)}</strong></td>
         <td><span class="badge">${escapeHtml(TENANT_ROLES[membership.role] || membership.role)}</span></td>
+        <td>${membership.can_create_project ? t("允许") : t("不允许")}</td>
         <td>${escapeHtml(projectAccess)}</td>
         <td>${tokens.length}</td>
         <td><span class="badge ${p.status === "active" ? "success" : "danger"}">${statusLabel(p.status)}</span></td>
@@ -344,8 +345,11 @@
     if (!sameContext || $("member-role").dataset.saved !== membership.role) $("member-role").value = membership.role;
     $("member-role").dataset.context = context;
     $("member-role").dataset.saved = membership.role;
+    if (!sameContext || $("member-create-project").dataset.saved !== String(!!membership.can_create_project)) $("member-create-project").checked = !!membership.can_create_project;
+    $("member-create-project").dataset.saved = String(!!membership.can_create_project);
     const active = tenant.status === "active" && principal.status === "active";
     $("member-role").disabled = !active;
+    $("member-create-project").disabled = !active;
     $("member-role-form").querySelector('button[type="submit"]').disabled = !active;
     $("member-token-name").disabled = !active;
     $("member-token-form").querySelector('button[type="submit"]').disabled = !active;
@@ -875,6 +879,7 @@
     );
   }
 
+  // getMemoryInstructionSnippet guides discovery, autonomous registration, and scoped memory use.
   function getMemoryInstructionSnippet() {
     return [
       t("## Engram 共享记忆使用规范"),
@@ -884,6 +889,7 @@
       t("1. **会话开始先识别项目**："),
       t("   - 获取当前仓库的 `git remote -v`（以及根目录或子目录 `.engram-project` 文件中的 UUID，如有），调用 `memory_discover` 获取 `project_context` 与范围索引。"),
       t("   - 注意：`workspace_path` 仅用于 Monorepo 子目录（相对于 Git 根目录），**不要传入本地绝对路径**；若当前不在 Git 仓库中且仅需全局记忆，传入 `allow_global_only: true`。"),
+      t("   - 当 `memory_discover` 返回 `PROJECT_NOT_REGISTERED` 时，若当前成员有创建项目权限，可根据当前仓库信息调用 `project_register`（提供项目名称、仓库地址、相对 `workspace_path` 及唯一 `idempotency_key`）自主注册，无需再次询问用户；已有 `.engram-project` UUID 时同时传入 `project_marker`。注册成功后重新调用 `memory_discover`，再读写项目记忆。无创建权限时提示用户联系管理员；已有项目无访问权限时不得通过注册为自己增加权限。"),
       t("   - 同一会话内复用返回的 `project_context`，无需重复调用 `memory_discover`。"),
       t("2. **先查索引，再按需检索与读取**："),
       t("   - 先浏览 `memory_discover` 返回的 `pinned`、`category_stats` 和 `recent`，若已命中目标可直接调用 `memory_read`。"),
@@ -1493,6 +1499,7 @@
         principal_subject: $("qs-subject").value,
         principal_display_name: $("qs-display").value,
         tenant_role: $("qs-tenant-role").value,
+        can_create_project: $("qs-create-project").checked,
         project_name: $("qs-project").value,
         remote_url: $("qs-remote").value,
         workspace_path: $("qs-workspace").value,
@@ -1687,6 +1694,7 @@
   $("btn-add-member").addEventListener("click", () => {
     $("tenant-forms-panel").classList.remove("hidden");
     clearFormErrors($("create-principal-form"));
+    $("prin-create-project").checked = false;
     updatePrincipalMode();
     $("prin-mode").focus();
   });
@@ -1734,6 +1742,7 @@
         subject: $("prin-subject").value,
         display_name: $("prin-name").value,
         tenant_role: $("prin-role").value,
+        can_create_project: $("prin-create-project").checked,
       }),
     });
     $("prin-subject").value = "";
@@ -1753,9 +1762,9 @@
     if (!principal) throw new Error(t("请先选择租户和有效成员。"));
     await api("/api/admin/principals", {
       method: "POST",
-      body: JSON.stringify({ mode: "update_role", tenant_id: state.memberTenant, principal_id: principal.id, tenant_role: $("member-role").value }),
+      body: JSON.stringify({ mode: "update_role", tenant_id: state.memberTenant, principal_id: principal.id, tenant_role: $("member-role").value, can_create_project: $("member-create-project").checked }),
     });
-    showToast(t("全局记忆权限已更新"));
+    showToast(t("成员权限已更新"));
     await refreshAllData();
   });
 

@@ -25,6 +25,8 @@ type Principal struct {
 	PrincipalID uuid.UUID `json:"principal_id"`
 	TenantRole  string    `json:"tenant_role"`
 	DisplayName string    `json:"display_name"`
+
+	CanCreateProject bool `json:"can_create_project"`
 }
 
 // WithPrincipal attaches Principal to ctx.
@@ -188,7 +190,7 @@ func (a *Authenticator) authenticateByProviderSubject(ctx context.Context, tenan
 func (a *Authenticator) VerifyPrincipalMembership(ctx context.Context, tenantID, principalID uuid.UUID) (Principal, error) {
 	var p Principal
 	err := a.pool.QueryRow(ctx, `
-		SELECT t.id, pr.id, tm.role, pr.display_name
+		SELECT t.id, pr.id, tm.role, pr.display_name, tm.can_create_project
 		FROM tenant_members tm
 		JOIN tenants t ON t.id = tm.tenant_id
 		JOIN principals pr ON pr.id = tm.principal_id
@@ -197,7 +199,7 @@ func (a *Authenticator) VerifyPrincipalMembership(ctx context.Context, tenantID,
 		  AND t.status = 'active'
 		  AND pr.status = 'active'
 		  AND pr.identity_provider <> 'system_webui'
-	`, tenantID, principalID).Scan(&p.TenantID, &p.PrincipalID, &p.TenantRole, &p.DisplayName)
+	`, tenantID, principalID).Scan(&p.TenantID, &p.PrincipalID, &p.TenantRole, &p.DisplayName, &p.CanCreateProject)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Principal{}, apperror.New(apperror.CodeUnauthenticated, "principal is not an active member of tenant")

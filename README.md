@@ -12,7 +12,7 @@ See [DESIGN.md](./DESIGN.md) for the complete technical design specification.
   - 1-click Quick Bootstrap wizard for Tenant, Principal, Project, Git Remote, `.engram-project` Marker, and API Token with ready-to-copy MCP configuration.
   - Visual management of Tenants, Principals, Projects, Monorepo `workspace_path` mappings, API Tokens, soft-deleted Memory restoration, revision history inspection, and Markdown export.
 - **Two-Tier Memory Hierarchy**: Tenant Global Memory (`scope = "global"`) and Project Memory (`scope = "project"`).
-- **Streamable HTTP MCP Transport (`/mcp`)**: Exposes 8 standard MCP tools (`memory_discover`, `memory_query`, `memory_read`, `memory_create`, `memory_update`, `memory_delete`, `memory_changes`, `memory_promote`).
+- **Streamable HTTP MCP Transport (`/mcp`)**: Exposes 9 MCP tools (`project_register`, `memory_discover`, `memory_query`, `memory_read`, `memory_create`, `memory_update`, `memory_delete`, `memory_changes`, `memory_promote`).
 - **Transactional Concurrency & Idempotency**: Optimistic locking (`expected_version`), full revision snapshots (`memory_revisions`), tenant-serialized commit-ordered change feed (`memory_events`), and `idempotency_requests`.
 - **Hybrid Search**: English FTS (`tsvector`), `pg_trgm` trigram similarity, and short Chinese keyword (`< 3` chars) `ILIKE` fallback.
 
@@ -110,6 +110,10 @@ The console `admin` account manages members, tokens, grants, restore, and perman
 | --- | --- | --- | --- |
 | Global memories | `none` | `member` | `global_writer` |
 | Each project | No membership (`role: none` revokes it) | `reader` | `writer` |
+
+Project creation is a separate tenant-member permission, `can_create_project`, disabled by default. Enable **Allow agents to create projects autonomously** in the member settings (or quickstart). Existing API tokens inherit the live member grant; no token reissue is required. Migration `006_project_creation_permission.sql` adds the permission without changing existing grants. System snapshots preserve it; older snapshots default to disabled.
+
+When `memory_discover` returns `PROJECT_NOT_REGISTERED`, its error details include `can_create_project`. Authorized agents can call `project_register` with `name`, Git `remotes`, optional relative `workspace_path` / existing `project_marker`, and an `idempotency_key`. A remote or marker is required. Registration atomically grants the creator `writer` access to the new project; call `memory_discover` again before writing project memories. Existing identities (including disabled projects and overlapping repository paths) return `PROJECT_EXISTS` without granting access. Registration retries recheck current creation and project permissions. The client configuration dialog's Step 2 includes these instructions in Chinese and English.
 
 Existing JSON fields `tenant_role` and `project_role` remain compatible. `can_maintain_project` is retained as `false`; members cannot restore or purge memories. Default searches and change feeds include only authorized scopes.
 

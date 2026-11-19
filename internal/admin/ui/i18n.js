@@ -1,5 +1,15 @@
 (function () {
   const english = {
+    "允许 Agent 自主创建项目": "Allow agents to create projects autonomously",
+    "独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。": "Independent of global memory and existing project access. Creators automatically receive read/write access to their new projects.",
+    "创建项目": "Create projects",
+    "允许": "Allowed",
+    "不允许": "Not allowed",
+    "全局记忆与创建项目权限": "Global memory and project creation permissions",
+    "保存成员权限": "Save member permissions",
+    "成员权限已更新": "Member permissions updated",
+    "<tr><td colspan=\"7\" class=\"empty-state\">当前租户还没有成员，请点击“添加成员”。</td></tr>": "<tr><td colspan=\"7\" class=\"empty-state\">No members in this tenant yet. Click “Add member”.</td></tr>",
+    "   - 当 `memory_discover` 返回 `PROJECT_NOT_REGISTERED` 时，若当前成员有创建项目权限，可根据当前仓库信息调用 `project_register`（提供项目名称、仓库地址、相对 `workspace_path` 及唯一 `idempotency_key`）自主注册，无需再次询问用户；已有 `.engram-project` UUID 时同时传入 `project_marker`。注册成功后重新调用 `memory_discover`，再读写项目记忆。无创建权限时提示用户联系管理员；已有项目无访问权限时不得通过注册为自己增加权限。": "   - When `memory_discover` returns `PROJECT_NOT_REGISTERED`, members with project creation permission may autonomously call `project_register` using the current repository information (project name, Git remotes, relative `workspace_path`, and a unique `idempotency_key`) without asking the user again. Include `project_marker` when a `.engram-project` UUID already exists. After registration, call `memory_discover` again before reading or writing project memories. Without creation permission, ask the user to contact an administrator. Never use registration to grant yourself access to an existing project.",
     "登录以管理共享知识、项目与客户端。": "Sign in to manage shared knowledge, projects, and clients.",
     "首次登录或忘记密码？": "First time here or forgot your password?",
     "空间与访问": "Spaces & access",

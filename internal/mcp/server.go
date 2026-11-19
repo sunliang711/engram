@@ -357,6 +357,7 @@ func (s *Server) handleMCPStream(ctx context.Context, w http.ResponseWriter, r *
 	}
 }
 
+// dispatchToolCall validates arguments and dispatches authenticated MCP operations.
 func (s *Server) dispatchToolCall(ctx context.Context, principal auth.Principal, toolName string, rawArgs json.RawMessage, reqID string) toolCallResult {
 	start := time.Now()
 	var (
@@ -365,6 +366,11 @@ func (s *Server) dispatchToolCall(ctx context.Context, principal auth.Principal,
 	)
 
 	switch toolName {
+	case "project_register":
+		var req memory.RegisterProjectRequest
+		if err = memory.DecodeStrictJSON(rawArgs, &req); err == nil {
+			res, err = s.service.RegisterProject(ctx, req)
+		}
 	case "memory_discover":
 		var req memory.DiscoverRequest
 		if err = memory.DecodeStrictJSON(rawArgs, &req); err == nil {
@@ -466,8 +472,10 @@ func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg 
 	})
 }
 
+// toolDefinitions publishes the supported memory and project registration schemas.
 func toolDefinitions() []map[string]any {
 	return []map[string]any{
+		projectRegisterDefinition(),
 		{
 			"name":        "memory_discover",
 			"description": "Resolve current repository/project identity and return project_context, permissions, compact scope indices, and latest_cursor. Pass Git remotes (e.g. git remote -v) and/or project_marker (.engram-project UUID) to identify a project, or set allow_global_only=true when outside a registered project.",

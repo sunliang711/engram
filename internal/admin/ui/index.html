@@ -184,6 +184,10 @@
                   <small class="field-hint">初始项目将授予读写权限；恢复和清理由后台管理员负责。</small>
                 </div>
                 <div class="form-group">
+                  <label class="checkbox-label"><input type="checkbox" id="qs-create-project" /> 允许 Agent 自主创建项目</label>
+                  <small class="field-hint">独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。</small>
+                </div>
+                <div class="form-group">
                   <label for="qs-workspace">Monorepo 子目录（可选）</label>
                   <input type="text" id="qs-workspace" placeholder="如 services/api，根目录留空" />
                 </div>
@@ -243,7 +247,7 @@
           <div class="section-heading"><div><h2>当前租户的成员</h2><p class="desc">选择“管理”，集中查看全局权限、项目授权和客户端密钥。</p></div><button type="button" id="btn-add-member">添加成员</button></div>
           <table id="principals-table">
             <thead>
-              <tr><th>成员名称</th><th>全局记忆权限</th><th>项目访问</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr>
+              <tr><th>成员名称</th><th>全局记忆权限</th><th>创建项目</th><th>项目访问</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -283,6 +287,10 @@
                   <small class="field-hint" id="prin-role-hint"></small>
                 </div>
               </div>
+              <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" id="prin-create-project" /> 允许 Agent 自主创建项目</label>
+                <small class="field-hint">独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。</small>
+              </div>
               <details class="advanced-options" id="prin-provider-group">
                 <summary>高级设置 · 认证方式</summary>
                 <label for="prin-provider">认证方式</label>
@@ -309,10 +317,11 @@
           </div>
           <p class="desc" id="member-detail-status"></p>
           <section class="member-section">
-            <h3>公共（全局）记忆权限</h3>
+            <h3>全局记忆与创建项目权限</h3>
             <form id="member-role-form">
               <div class="form-group"><label for="member-role">全局记忆权限</label><select id="member-role"><option value="none">无权限</option><option value="member">只读</option><option value="global_writer">读写</option></select><small class="field-hint" id="member-role-hint"></small></div>
-              <button type="submit" class="secondary">保存全局权限</button>
+              <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="member-create-project" /> 允许 Agent 自主创建项目</label><small class="field-hint">独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。</small></div>
+              <button type="submit" class="secondary">保存成员权限</button>
             </form>
           </section>
           <section class="member-section">

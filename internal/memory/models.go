@@ -31,6 +31,7 @@ func DecodeStrictJSON(data []byte, dst any) error {
 }
 
 type PermissionsInfo struct {
+	CanCreateProject   bool   `json:"can_create_project"`
 	TenantRole         string `json:"tenant_role"`
 	ProjectRole        string `json:"project_role,omitempty"`
 	CanReadGlobal      bool   `json:"can_read_global"`
