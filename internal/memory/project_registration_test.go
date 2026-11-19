@@ -59,9 +59,15 @@ func TestProjectRegistration(t *testing.T) {
 
 	t.Run("marker-only and normalized aliases", func(t *testing.T) {
 		markerReq := memory.RegisterProjectRequest{Name: "marker-only", ProjectMarker: uuid.NewString(), WorkspacePath: "tools/local", IdempotencyKey: "marker-only"}
+		_, err := env.svc.RegisterProject(ctx, markerReq)
+		assertAppErrorCode(t, err, apperror.CodeInvalidArgument)
+		markerReq.WorkspacePath = ""
 		markerProject, err := env.svc.RegisterProject(ctx, markerReq)
 		if err != nil {
 			t.Fatal(err)
+		}
+		if markerProject.Project.WorkspacePath != "" {
+			t.Fatalf("marker-only registration returned a persistent workspace: %+v", markerProject)
 		}
 		markerDisc, err := env.svc.Discover(ctx, memory.DiscoverRequest{ProjectMarker: markerReq.ProjectMarker, MarkerPath: "tools/local", WorkspacePath: "tools/local"})
 		if err != nil || markerDisc.Project.ID != markerProject.Project.ID {
@@ -154,6 +160,41 @@ func TestProjectRegistration(t *testing.T) {
 	}
 	_, err = env.svc.RegisterProject(ctx, duplicate)
 	assertAppErrorCode(t, err, apperror.CodeProjectExists)
+}
+
+// TestProjectRegistrationLockTimeout verifies retryable contention and rollback before a same-key retry.
+func TestProjectRegistrationLockTimeout(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.cleanup()
+	tenant, user, _, ctx := env.createTenantAndPrincipal(t, "Busy", "creator", "none")
+	if _, err := env.database.Pool.Exec(env.ctx, `UPDATE tenant_members SET can_create_project=true WHERE tenant_id=$1 AND principal_id=$2`, tenant, user); err != nil {
+		t.Fatal(err)
+	}
+	blocker, err := env.database.Pool.Begin(env.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(env.ctx) }()
+	if err := project.LockRegistration(env.ctx, blocker, tenant); err != nil {
+		t.Fatal(err)
+	}
+	req := memory.RegisterProjectRequest{Name: "blocked", ProjectMarker: uuid.NewString(), IdempotencyKey: "retry-after-lock"}
+	_, err = env.svc.RegisterProject(ctx, req)
+	assertAppErrorCode(t, err, apperror.CodeLockTimeout)
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || !appErr.Retryable || appErr.HTTPStatus() != http.StatusServiceUnavailable {
+		t.Fatalf("contention should be retryable HTTP 503: %v", err)
+	}
+	var projects, requests int
+	if err := env.database.Pool.QueryRow(env.ctx, `SELECT (SELECT count(*) FROM projects WHERE tenant_id=$1), (SELECT count(*) FROM idempotency_requests WHERE tenant_id=$1)`, tenant).Scan(&projects, &requests); err != nil || projects != 0 || requests != 0 {
+		t.Fatalf("timed out registration left partial writes: projects=%d requests=%d err=%v", projects, requests, err)
+	}
+	if err := blocker.Commit(env.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.svc.RegisterProject(ctx, req); err != nil {
+		t.Fatalf("same-key retry after contention: %v", err)
+	}
 }
 
 // TestConcurrentProjectRegistration ensures concurrent creators cannot produce duplicate or shadowing mappings.

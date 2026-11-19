@@ -162,4 +162,35 @@ func TestAdminRegistrationLock(t *testing.T) {
 			}
 		})
 	}
+	t.Run("quickstart preserves existing creation permission when omitted", func(t *testing.T) {
+		if _, err := database.Pool.Exec(ctx, `UPDATE tenant_members SET can_create_project=true WHERE tenant_id=$1 AND principal_id=$2`, tenantID, principalID); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			permission *bool
+			want       bool
+		}{
+			{nil, true},
+			{new(bool), false},
+			{nil, false},
+		} {
+			body := map[string]any{"tenant_name": tenantName, "principal_subject": subject, "principal_display_name": "Updated", "tenant_role": "none"}
+			if tc.permission != nil {
+				body["can_create_project"] = *tc.permission
+			}
+			payload, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			handler.handleQuickstart(rec, httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(payload)))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("reuse member status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var allowed bool
+			if err := database.Pool.QueryRow(ctx, `SELECT can_create_project FROM tenant_members WHERE tenant_id=$1 AND principal_id=$2`, tenantID, principalID).Scan(&allowed); err != nil || allowed != tc.want {
+				t.Fatalf("reused member permission=%v want=%v err=%v", allowed, tc.want, err)
+			}
+		}
+	})
 }

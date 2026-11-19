@@ -131,3 +131,17 @@ test('project marker and remote placeholders translate the actual app keys', () 
   assert.equal(ui.t('未生成'), 'Not generated');
   assert.equal(ui.t('未关联仓库，通过标记文件识别'), 'No remote linked; identified by marker file');
 });
+
+test('quickstart preservation hint and marker-only registration instructions translate actual app text', () => {
+  const { ui } = browser({ language: 'en' });
+  const html = fs.readFileSync(path.join(__dirname, '../ui/index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
+  const hint = html.match(/<small class="field-hint">(未勾选时[^<]+)<\/small>/)?.[1];
+  assert.ok(hint);
+  assert.match(ui.t(hint), /preserves existing members/);
+  assert.match(ui.t(hint), /New members default to disabled/);
+  const instruction = app.match(/t\("(   - 仅以 Marker 注册[^"\n]+)"\)/)?.[1];
+  assert.ok(instruction);
+  assert.match(ui.t(instruction), /omit `workspace_path`/);
+  assert.match(ui.t(instruction), /`marker_path`/);
+});

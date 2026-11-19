@@ -23,6 +23,7 @@ const (
 	CodeIdempotencyInProgress Code = "IDEMPOTENCY_IN_PROGRESS"
 	CodeInvalidArgument       Code = "INVALID_ARGUMENT"
 	CodeRateLimited           Code = "RATE_LIMITED"
+	CodeLockTimeout           Code = "LOCK_TIMEOUT"
 	CodeInternalError         Code = "INTERNAL_ERROR"
 )
 
@@ -113,6 +114,8 @@ func (e *Error) HTTPStatus() int {
 		return http.StatusBadRequest
 	case CodeRateLimited:
 		return http.StatusTooManyRequests
+	case CodeLockTimeout:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}
@@ -120,7 +123,7 @@ func (e *Error) HTTPStatus() int {
 
 func isRetryableByDefault(code Code) bool {
 	switch code {
-	case CodeVersionConflict, CodeIdempotencyInProgress, CodeRateLimited, CodeInternalError:
+	case CodeVersionConflict, CodeIdempotencyInProgress, CodeRateLimited, CodeLockTimeout, CodeInternalError:
 		return true
 	default:
 		return false

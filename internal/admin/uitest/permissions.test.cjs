@@ -9,8 +9,9 @@ const source = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
 function harness() {
   const elements = new Map();
   const node = () => ({
-    value: '', dataset: {}, disabled: false, innerHTML: '', textContent: '',
-    classList: { toggle() {} },
+    value: '', dataset: {}, checked: false, disabled: false, innerHTML: '', textContent: '',
+    classList: { toggle() {}, add() {}, remove() {} },
+    scrollIntoView() {},
     querySelector() { return this.child ||= node(); },
     querySelectorAll() { return []; },
     addEventListener(type, callback) { this[type] = callback; },
@@ -21,7 +22,7 @@ function harness() {
   };
   const principal = { id: 'member', status: 'active', display_name: 'Member', subject: 'member', identity_provider: 'api_token', tenant_roles: [{ tenant_id: 'tenant', role: 'none' }] };
   const project = { id: 'project', tenant_id: 'tenant', status: 'active', name: 'Project', members: [] };
-  const state = { memberTenant: 'tenant', selectedPrincipal: principal.id, selectedProject: project.id, principals: [principal], projects: [project], tenants: [{ id: 'tenant', name: 'Tenant', status: 'active' }] };
+  const state = { memberTenant: 'tenant', selectedPrincipal: principal.id, selectedProject: project.id, principals: [principal], projects: [project], tenants: [{ id: 'tenant', name: 'Tenant', status: 'active' }], tokens: [], revealedTokens: {} };
   const requests = [];
   const submissions = {};
   const context = vm.createContext({
@@ -29,8 +30,8 @@ function harness() {
     t: (parts, ...values) => typeof parts === 'string' ? parts : parts.reduce((result, part, i) => result + part + (values[i] ?? ''), ''),
     identifier: () => '', formatDate: () => '', statusLabel: value => value,
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
-    clearFormErrors() {}, showToast() {},
-    api: async (url, options) => { requests.push({ url, method: options.method, body: JSON.parse(options.body) }); },
+    clearFormErrors() {}, showToast() {}, openTenant() {}, renderClientGuides() {}, formatMCPConfig: () => '{"mcpServers":{}}',
+    api: async (url, options) => { requests.push({ url, method: options.method, body: JSON.parse(options.body) }); return { principal_id: principal.id, token: 'test-token' }; },
     refreshAllData: async () => {}, onSubmit: (id, callback) => { submissions[id] = callback; },
   });
   const load = (start, end) => {
@@ -42,9 +43,12 @@ function harness() {
   load('  const TENANT_ROLES =', '  // actorName');
   load('  function tenantMembership(', '  // renderTenantContext');
   load('  const PROVIDERS =', '  // renderPrincipalsTable');
+  load('  function renderPrincipalsTable()', '  // renderMemberDetail');
   load('  function renderMemberDetail()', '  // renderManagementViews');
   load('  function renderProjectRole()', '  // openProject');
   load('  onSubmit("member-role-form"', '  onSubmit("member-token-form"');
+  load('  onSubmit("quickstart-form"', '  onSubmit("create-tenant-form"');
+  load('  onSubmit("create-principal-form"', '  onSubmit("member-role-form"');
   return { $, state, principal, project, context, requests, submissions };
 }
 
@@ -93,5 +97,94 @@ test('member grant actions submit none to revoke a project and remove global acc
   assert.equal(attributes['aria-busy'], undefined);
   h.$('member-role').value = 'none';
   await h.submissions['member-role-form']({ preventDefault() {} });
-  assert.deepEqual(h.requests[1].body, { mode: 'update_role', tenant_id: 'tenant', principal_id: 'member', tenant_role: 'none' });
+  assert.deepEqual(h.requests[1].body, { mode: 'update_role', tenant_id: 'tenant', principal_id: 'member', tenant_role: 'none', can_create_project: false });
+});
+
+
+test('member list displays project creation permission independently of global access', () => {
+  for (const role of ['none', 'member', 'global_writer']) {
+    for (const allowed of [false, true]) {
+      const h = harness();
+      Object.assign(h.principal.tenant_roles[0], { role, can_create_project: allowed });
+      h.context.renderPrincipalsTable();
+      const html = h.$('principals-table').querySelector('tbody').innerHTML;
+      assert.match(html, new RegExp(`<td>${allowed ? '允许' : '不允许'}</td>`));
+    }
+  }
+});
+
+test('creation permission picker reflects saved grants and preserves unsaved drafts', () => {
+  for (const allowed of [false, true]) {
+    const h = harness();
+    const membership = h.principal.tenant_roles[0];
+    membership.can_create_project = allowed;
+    h.context.renderMemberDetail();
+    assert.equal(h.$('member-create-project').checked, allowed);
+    assert.equal(h.$('member-create-project').disabled, false);
+    h.$('member-create-project').checked = !allowed;
+    h.context.renderMemberDetail();
+    assert.equal(h.$('member-create-project').checked, !allowed);
+    membership.can_create_project = !allowed;
+    h.context.renderMemberDetail();
+    assert.equal(h.$('member-create-project').checked, !allowed);
+    // Switching identities must replace the previous member's unsaved checkbox value.
+    h.$('member-create-project').checked = allowed;
+    h.principal.id = 'other-member';
+    h.state.selectedPrincipal = h.principal.id;
+    h.context.renderMemberDetail();
+    assert.equal(h.$('member-create-project').checked, !allowed);
+  }
+});
+
+test('inactive tenants and members disable project creation changes', () => {
+  for (const inactive of ['tenant', 'member']) {
+    const h = harness();
+    h.principal.tenant_roles[0].can_create_project = true;
+    if (inactive === 'tenant') h.state.tenants[0].status = 'disabled';
+    else h.principal.status = 'disabled';
+    h.context.renderMemberDetail();
+    assert.equal(h.$('member-create-project').checked, true);
+    assert.equal(h.$('member-create-project').disabled, true);
+    assert.equal(h.$('member-role-form').querySelector('button[type="submit"]').disabled, true);
+  }
+});
+
+test('member permission saves submit explicit creation grants and revocations', async () => {
+  for (const allowed of [false, true]) {
+    const h = harness();
+    h.$('member-role').value = 'member';
+    h.$('member-create-project').checked = allowed;
+    await h.submissions['member-role-form']({ preventDefault() {} });
+    assert.deepEqual(h.requests[0].body, { mode: 'update_role', tenant_id: 'tenant', principal_id: 'member', tenant_role: 'member', can_create_project: allowed });
+  }
+});
+
+test('creating or binding a member explicitly configures project creation permission', async () => {
+  for (const mode of ['create', 'bind']) {
+    for (const allowed of [false, true]) {
+      const h = harness();
+      h.$('prin-mode').value = mode;
+      h.$('prin-existing').value = h.principal.id;
+      h.$('prin-create-project').checked = allowed;
+      await h.submissions['create-principal-form']({ preventDefault() {} });
+      assert.equal(h.requests[0].body.mode, mode);
+      assert.equal(h.requests[0].body.can_create_project, allowed);
+    }
+  }
+});
+
+test('quickstart only sends an affirmative creation grant and preserves existing permissions when unchecked', async () => {
+  for (const existing of [false, true]) {
+    for (const checked of [false, true]) {
+      const h = harness();
+      h.principal.tenant_roles[0].can_create_project = existing;
+      h.$('qs-create-project').checked = checked;
+      await h.submissions['quickstart-form']({ preventDefault() {} });
+      const body = h.requests[0].body;
+      assert.equal(h.requests[0].url, '/api/admin/quickstart');
+      assert.equal(Object.hasOwn(body, 'can_create_project'), checked);
+      if (checked) assert.equal(body.can_create_project, true);
+      assert.equal(h.principal.tenant_roles[0].can_create_project, existing);
+    }
+  }
 });

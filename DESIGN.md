@@ -145,7 +145,7 @@ github.com/eagle/project-a
 
 ### 5.3 项目注册
 
-项目注册属于管理操作，不允许普通 Agent 根据任意 Remote 自动创建项目。所有初始化和管理动作（创建 Tenant、创建 Principal、分配角色、注册项目与 Remote 别名、配置 Monorepo `workspace_path`、生成 `.engram-project` Marker 以及签发 API Token）统一在 `engram-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
+项目注册需要独立的成员级 `can_create_project` 授权，获授权的 Agent 可通过 `project_register` 自主注册未注册仓库。其余初始化和管理动作（创建 Tenant、创建 Principal、分配角色、管理已有项目与 Remote 别名、签发 API Token）在 `engram-server` 内嵌的 **Admin Web UI** 中完成，无需额外部署 `memoryctl` 命令行工具。
 
 Tenant 名称全局唯一，创建同名 Tenant 会被拒绝。同一 Tenant 内的有效项目名称唯一：注册同名项目会被拒绝；同一仓库地址与子目录组合在一个 Tenant 内只能关联一个项目，重复添加同样会被拒绝；快速接入向导填写已有项目名称时直接复用该项目，并在其上补充成员权限与 Remote 映射，不会生成同名项目。
 
@@ -313,10 +313,12 @@ Tool 名只使用 ASCII 字母、数字和下划线，并控制在 64 个字符�
 ```
 
 - `name` 必填且最多 200 字符，`idempotency_key` 必填且最多 128 字节。
-- `remotes` 最多 32 个；规范化、去重、排序后参与幂等计算。也可提供已有 `.engram-project` UUID 的 `project_marker`，两种身份至少提供一种；只有 Marker 时 `workspace_path` 应为 Marker 所在的相对目录。未提供 Marker 时服务端生成 UUID，不自动写本地文件。
+- `remotes` 最多 32 个；规范化、去重、排序后参与幂等计算。也可提供已有 `.engram-project` UUID 的 `project_marker`，两种身份至少提供一种。非空 `workspace_path` 必须同时提供 remotes，目录只持久化到仓库映射；只有 Marker 时必须省略注册目录，发现时通过 `marker_path` 报告标记文件当前相对目录。Marker 按 UUID 识别，不绑定持久化目录。未提供 Marker 时服务端生成 UUID，不自动写本地文件。
 - 调用方不能指定租户、成员或授权角色。注册事务创建项目、仓库映射及当前成员的 `writer` 授权，返回 `project`。随后重新调用 `memory_discover` 获取上下文并读写项目记忆。
 - 使用租户级事务锁串行化注册，并锁定当前有效成员授权。已有名称、Marker、相同或祖先/后代仓库路径（包括停用项目）返回 `PROJECT_EXISTS`，不会自动修改已有项目授权；同仓库互不重叠的子目录允许分别注册。
 - 同一幂等键的不同参数返回 `IDEMPOTENCY_CONFLICT`；重放还检查创建权限、新项目有效状态及当前 `writer` 授权。
+- 等待租户注册锁超过 `lock_timeout` 时，PostgreSQL `55P03` 映射为可重试的 `LOCK_TIMEOUT`（HTTP 503），事务整体回滚；锁释放后可使用原幂等键重试。
+- Quickstart 勾选创建项目权限时提交开启，未勾选则省略该字段，保留已有成员授权，新成员默认关闭；撤销通过成员设置完成。管理 API 显式传入 `false` 仍可撤销权限。
 
 ## 8. 核心数据模型
 
@@ -804,6 +806,7 @@ IDEMPOTENCY_CONFLICT
 IDEMPOTENCY_IN_PROGRESS
 INVALID_ARGUMENT
 RATE_LIMITED
+LOCK_TIMEOUT
 INTERNAL_ERROR
 ```
 

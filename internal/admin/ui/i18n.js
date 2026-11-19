@@ -1,5 +1,7 @@
 (function () {
   const english = {
+    "未勾选时保留已有成员的创建项目权限，新成员默认关闭；如需关闭，请前往成员权限设置。": "Leaving this unchecked preserves existing members’ project creation permission. New members default to disabled. To revoke permission, use member permission settings.",
+    "   - 仅以 Marker 注册（不提供仓库地址）时，省略 `workspace_path`；后续发现时通过 `marker_path` 报告 `.engram-project` 所在目录（相对于 Git 根目录）。": "   - When registering using only a marker (without Git remotes), omit `workspace_path`. During subsequent discovery, report the directory containing `.engram-project` using `marker_path`, relative to the Git root.",
     "允许 Agent 自主创建项目": "Allow agents to create projects autonomously",
     "独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。": "Independent of global memory and existing project access. Creators automatically receive read/write access to their new projects.",
     "创建项目": "Create projects",

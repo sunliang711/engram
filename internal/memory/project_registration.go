@@ -78,6 +78,10 @@ func (s *Service) RegisterProject(ctx context.Context, req RegisterProjectReques
 	if len(remotes) == 0 && marker == nil {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "provide remotes or an existing .engram-project UUID")
 	}
+	// Only repository mappings persist a workspace path; marker locations are supplied during discovery.
+	if len(remotes) == 0 && ws != "" {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "workspace_path requires remotes; for marker-only registration omit it and report marker_path during memory_discover")
+	}
 	reqHash := computeRequestHash("project_register", map[string]any{
 		"name": req.Name, "remotes": remotes, "workspace_path": ws, "project_marker": marker,
 	})
