@@ -1,5 +1,14 @@
 (function () {
   const english = {
+    "登录以管理共享知识、项目与客户端。": "Sign in to manage shared knowledge, projects, and clients.",
+    "首次登录或忘记密码？": "First time here or forgot your password?",
+    "空间与访问": "Spaces & access",
+    "项目工作空间": "Project workspaces",
+    "你的共享知识": "Your shared knowledge",
+    "筛选条件": "Filters",
+    "数据管理": "Data management",
+    "在服务之间迁移知识与配置，或为当前工作空间保留一份备份。": "Move knowledge and configuration between servers, or keep a backup of your workspace.",
+    "先选择文件并解析，确认迁移内容后再导入。": "Choose a file and inspect its contents before importing.",
     "无权限": "No access",
     "读写": "Read/write",
     "全局记忆权限": "Global memory permissions",

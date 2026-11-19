@@ -629,6 +629,7 @@
 
   // loadMemories ignores stale responses; quiet reloads keep the current rows until new ones arrive.
   async function loadMemories(options = {}) {
+    updateMemoryFilterToggle();
     const request = ++state.memoryRequest;
     if (!options.keepDetail) closeMemoryDetail(false, false);
     const tbody = $("memories-table").querySelector("tbody");
@@ -989,6 +990,7 @@
     renderClientGuides();
     $("client-guides-card").open = true;
     $("client-config-modal").classList.remove("hidden");
+    $("client-config-modal").querySelector(".modal-card").scrollTop = 0;
     document.body.classList.add("client-config-open");
     $("btn-close-client-config").focus();
   }
@@ -1004,6 +1006,16 @@
 
   // activeTab returns the current navigation destination for URL persistence.
   function activeTab() { return document.querySelector(".tab-btn.active").dataset.tab; }
+
+  // updateMemoryFilterToggle keeps collapsed filters visible through their active count.
+  function updateMemoryFilterToggle() {
+    const count = ["tenant", "scope", "project", "category", "tag", "deleted"].filter((key) => {
+      const value = $("mem-filter-" + key).value;
+      return value && !(key === "deleted" && value === "active");
+    }).length;
+    $("memory-filter-count").textContent = count;
+    $("memory-filter-count").classList.toggle("hidden", count === 0);
+  }
 
   // switchMainTab maintains navigation state without carrying an unrelated detail panel.
   function switchMainTab(tabId, updateURL = true) {
@@ -1336,7 +1348,7 @@
     wrapper.className = "table-scroll";
     wrapper.tabIndex = 0;
     wrapper.setAttribute("role", "region");
-    wrapper.setAttribute("aria-label", (table.closest(".card, .glossary-section")?.querySelector("h2, h3")?.textContent || t("数据表格")) + t("，可横向滚动"));
+    wrapper.setAttribute("aria-label", (table.closest(".member-section, .card, .glossary-section")?.querySelector("h2, h3")?.textContent || table.closest(".tab-pane")?.querySelector("h1")?.textContent || t("数据表格")) + t("，可横向滚动"));
     table.before(wrapper);
     wrapper.appendChild(table);
   });
@@ -1349,7 +1361,18 @@
       refreshIfStale(3000);
     });
   });
-  $("btn-refresh").addEventListener("click", () => refreshAllData({ quiet: true }));
+  $("btn-refresh").addEventListener("click", async () => {
+    const button = $("btn-refresh");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    try { await refreshAllData({ quiet: true }); }
+    finally { button.disabled = false; button.removeAttribute("aria-busy"); }
+  });
+  // Account actions close when another part of the page is clicked.
+  document.addEventListener("click", (event) => {
+    const menu = document.querySelector(".account-menu");
+    if (!menu.contains(event.target)) menu.open = false;
+  });
   // Agents write through MCP in the background, so a returning tab picks up their changes.
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshIfStale(30000); });
   window.addEventListener("focus", () => refreshIfStale(30000));
@@ -1836,6 +1859,11 @@
     await loadMemories();
   });
 
+  $("btn-toggle-memory-filters").addEventListener("click", () => {
+    const button = $("btn-toggle-memory-filters");
+    button.setAttribute("aria-expanded", button.getAttribute("aria-expanded") === "true" ? "false" : "true");
+  });
+
   $("btn-close-detail").addEventListener("click", () => closeMemoryDetail());
   // Whole rows open the detail drawer; buttons inside a row keep their own action.
   $("memories-table").querySelector("tbody").addEventListener("click", (event) => {
@@ -1924,6 +1952,7 @@
     if (!modal) return;
     if (open) {
       modal.classList.remove("hidden");
+      modal.querySelector(".modal-card").scrollTop = 0;
       document.querySelector(".account-menu").open = false;
       $("btn-close-glossary").focus();
     } else {
@@ -1953,6 +1982,10 @@
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (clientConfigOpen) closeClientGuides();
       else if (detailOpen) closeMemoryDetail();
+      else if (document.querySelector(".account-menu").open) {
+        document.querySelector(".account-menu").open = false;
+        document.querySelector(".account-menu summary").focus();
+      }
     }
     if (e.key === "Tab" && (confirmOpen || renameOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen)) {
       const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");

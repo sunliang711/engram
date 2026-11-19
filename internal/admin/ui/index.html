@@ -25,7 +25,7 @@
         <img src="/ui/favicon.svg" alt="" class="brand-logo auth-logo" width="38" height="38" />
         <h1>Engram</h1>
       </div>
-      <p class="subtitle">管理员登录（首次启动或设置 <code>RESET_ADMIN</code> 时请使用服务启动日志打印的临时密码）</p>
+      <p class="subtitle">登录以管理共享知识、项目与客户端。</p>
       <form id="login-form">
         <div class="form-group">
           <label for="login-username">管理员账号</label>
@@ -37,6 +37,7 @@
         </div>
         <button type="submit" style="width:100%; margin-top:8px;">登 录</button>
       </form>
+      <details class="auth-help"><summary>首次登录或忘记密码？</summary><p>管理员登录（首次启动或设置 <code>RESET_ADMIN</code> 时请使用服务启动日志打印的临时密码）</p></details>
     </div>
   </div>
 
@@ -88,7 +89,7 @@
           <button type="button" class="secondary small pref-toggle" data-ui-theme aria-label="切换主题"></button>
         </div>
         <span id="last-refresh" class="refresh-status" role="status" aria-live="polite"></span>
-        <button type="button" class="secondary small" id="btn-refresh" title="重新加载所有数据">刷新</button>
+        <button type="button" class="secondary small" id="btn-refresh" title="重新加载所有数据" aria-label="刷新"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M16.5 8A6.5 6.5 0 1 0 17 12M16.5 3v5h-5"/></svg><span>刷新</span></button>
         <details class="account-menu">
           <summary><span id="current-admin-user">admin</span> · 账号</summary>
           <div class="account-actions">
@@ -212,8 +213,8 @@
           <button type="button" class="text-button" id="btn-tenant-list">租户列表</button><span aria-hidden="true">/</span><button type="button" class="text-button" id="btn-tenant-detail"></button><span id="member-breadcrumb-separator" class="hidden" aria-hidden="true">/</span><span id="member-breadcrumb-name" aria-current="page"></span>
         </nav>
         <div id="tenant-list-view">
+          <div class="page-heading"><div><p class="eyebrow">空间与访问</p><h1 tabindex="-1" id="tenant-list-title">租户列表</h1><p class="desc">选择租户，管理成员、访问权限和客户端密钥。</p></div><button type="button" id="btn-new-tenant">新建租户</button></div>
           <div class="card">
-            <div class="section-heading"><div><h2 tabindex="-1" id="tenant-list-title">租户列表</h2><p class="desc">选择租户，管理成员、访问权限和客户端密钥。</p></div><button type="button" id="btn-new-tenant">新建租户</button></div>
             <table id="tenants-table"><thead><tr><th>租户名称</th><th>成员数</th><th>有效项目</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
           </div>
         <div class="card hidden" id="create-tenant-card">
@@ -333,8 +334,8 @@
       <section id="tab-projects" class="tab-pane hidden">
         <nav class="breadcrumbs hidden" id="project-breadcrumb" aria-label="项目管理导航"><button type="button" class="text-button" id="btn-project-list">项目列表</button><span aria-hidden="true">/</span><span id="project-breadcrumb-name" aria-current="page"></span></nav>
         <div id="project-list-view">
+          <div class="page-heading"><div><p class="eyebrow">项目工作空间</p><h1 id="project-list-title" tabindex="-1">项目列表</h1><p class="desc">选择项目，管理仓库地址和成员权限。</p></div><button type="button" id="btn-new-project">注册项目</button></div>
           <div class="card">
-            <div class="section-heading"><div><h2 id="project-list-title" tabindex="-1">项目列表</h2><p class="desc">选择项目，管理仓库地址和成员权限。</p></div><button type="button" id="btn-new-project">注册项目</button></div>
             <table id="projects-table"><thead><tr><th>项目名称</th><th>所属租户</th><th>仓库数</th><th>项目成员</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
           </div>
           <div class="card hidden" id="project-forms-panel">
@@ -421,7 +422,7 @@
       <!-- Client configuration is shared by member credentials and quickstart. -->
       <div id="client-config-modal" class="modal-backdrop hidden">
         <section class="modal-card client-config-dialog" role="dialog" aria-modal="true" aria-labelledby="client-config-title">
-          <div class="section-heading"><h2 id="client-config-title">配置客户端</h2><button type="button" class="secondary small" id="btn-close-client-config">关闭</button></div>
+          <div class="modal-header"><h2 id="client-config-title">配置客户端</h2><button type="button" class="secondary small" id="btn-close-client-config">关闭</button></div>
           <p class="desc" id="client-config-context"></p>
         <details class="setup-panel" id="client-guides-card" open>
           <summary><span>客户端接入配置</span><span class="summary-hint">选择客户端 · 复制配置 · 验证连接</span></summary>
@@ -541,25 +542,25 @@
 
       <!-- TAB 5: Memories, Revisions, Restore & Export -->
       <section id="tab-memories" class="tab-pane hidden">
-        <div class="card">
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+          <div class="page-heading">
             <div>
-              <h2>知识库</h2>
-              <p class="desc" style="margin-bottom:0;">浏览所有租户和项目的知识，查看修订历史，从回收站恢复条目，或导出为 Markdown 压缩包。</p>
+              <p class="eyebrow">你的共享知识</p><h1>知识库</h1>
+              <p class="desc">浏览所有租户和项目的知识，查看修订历史，从回收站恢复条目，或导出为 Markdown 压缩包。</p>
             </div>
             <div class="button-row">
               <button type="button" id="btn-download-export-zip" class="secondary" title="下载 Markdown 压缩包（.zip）">导出 Markdown</button>
               <button type="button" id="btn-open-purge" class="danger-outline">批量清空…</button>
             </div>
           </div>
-
+        <div class="card">
           <form id="filter-memories-form" class="filter-bar">
             <div class="filter-search">
               <label for="mem-filter-q" class="sr-only">关键词搜索</label>
               <input type="search" id="mem-filter-q" placeholder="搜索标题或正文，回车查询" />
               <button type="submit">搜索</button>
             </div>
-            <div class="filter-row">
+            <button type="button" class="secondary filter-toggle" id="btn-toggle-memory-filters" aria-expanded="false" aria-controls="memory-filter-fields"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 5h14M5 10h10M8 15h4"/></svg><span>筛选条件</span><span id="memory-filter-count" class="badge hidden"></span><span class="filter-chevron" aria-hidden="true">⌄</span></button>
+            <div class="filter-row" id="memory-filter-fields">
               <label>租户<select id="mem-filter-tenant"><option value="">全部</option></select></label>
               <label>范围<select id="mem-filter-scope"><option value="">全部</option><option value="global">全局记忆</option><option value="project">项目记忆</option></select></label>
               <label>项目<select id="mem-filter-project"><option value="">全部</option></select></label>
@@ -612,6 +613,7 @@
 
       <!-- TAB 6: System Migration Export & Import -->
       <section id="tab-migration" class="tab-pane hidden">
+        <div class="page-heading"><div><p class="eyebrow">数据管理</p><h1>系统迁移</h1><p class="desc">在服务之间迁移知识与配置，或为当前工作空间保留一份备份。</p></div></div>
         <div class="grid-2">
           <div class="card">
             <h2>导出迁移包</h2>
@@ -678,6 +680,7 @@
               <div class="form-group">
                 <label for="mig-import-file">选择迁移包（.zip）</label>
                 <input type="file" id="mig-import-file" accept=".zip,application/zip" required />
+                <small class="field-hint">先选择文件并解析，确认迁移内容后再导入。</small>
               </div>
               <div class="form-group">
                 <label for="mig-import-passphrase">解密口令（导出时设置过口令才需要填写）</label>
