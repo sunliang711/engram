@@ -58,6 +58,9 @@ type exportRow struct {
 	contentHash string
 	updatedAt   time.Time
 	deletedAt   *time.Time
+
+	createdAgent string
+	updatedAgent string
 }
 
 // ExportAll writes all non-deleted memories deterministically under OutputDir and removes stale files.
@@ -165,6 +168,9 @@ type ArchivedMemory struct {
 	Title     string     `json:"title"`
 	Path      string     `json:"path"`
 	Deleted   bool       `json:"deleted,omitempty"`
+
+	CreatedAgent string `json:"created_agent"`
+	UpdatedAgent string `json:"updated_agent"`
 }
 
 // ExportFilteredArchive writes the non-deleted memories matching f as Markdown files plus a
@@ -180,7 +186,7 @@ func (e *Exporter) ExportFilteredArchive(ctx context.Context, w io.Writer, f Arc
 		if err != nil {
 			return nil, err
 		}
-		archived = append(archived, ArchivedMemory{ID: item.id, Version: item.version, Scope: item.scope, ProjectID: item.projectID, Title: item.title, Path: filepath.ToSlash(relPath), Deleted: item.deletedAt != nil})
+		archived = append(archived, ArchivedMemory{ID: item.id, Version: item.version, Scope: item.scope, ProjectID: item.projectID, Title: item.title, Path: filepath.ToSlash(relPath), Deleted: item.deletedAt != nil, CreatedAgent: item.createdAgent, UpdatedAgent: item.updatedAgent})
 	}
 	if manifest == nil {
 		manifest = map[string]any{}
@@ -236,6 +242,7 @@ func writeArchive(w io.Writer, items []exportRow, manifest map[string]any) error
 	return nil
 }
 
+// queryExportRows reads memory content and Agent attribution for deterministic exports.
 func (e *Exporter) queryExportRows(ctx context.Context, f ArchiveFilter) ([]exportRow, error) {
 	var where []string
 	switch f.Deleted {
@@ -265,7 +272,7 @@ func (e *Exporter) queryExportRows(ctx context.Context, f ArchiveFilter) ([]expo
 	}
 	rows, err := e.pool.Query(ctx, `
 		SELECT id, tenant_id, scope, project_id, category, title, content_md,
-		       tags, is_pinned, status, version, content_hash, updated_at, deleted_at
+		       tags, is_pinned, status, version, content_hash, updated_at, deleted_at, created_agent, updated_agent
 		FROM memories
 		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY tenant_id ASC, scope ASC, project_id ASC NULLS FIRST, id ASC
@@ -280,7 +287,7 @@ func (e *Exporter) queryExportRows(ctx context.Context, f ArchiveFilter) ([]expo
 		var r exportRow
 		if err := rows.Scan(
 			&r.id, &r.tenantID, &r.scope, &r.projectID, &r.category, &r.title, &r.contentMD,
-			&r.tags, &r.isPinned, &r.status, &r.version, &r.contentHash, &r.updatedAt, &r.deletedAt,
+			&r.tags, &r.isPinned, &r.status, &r.version, &r.contentHash, &r.updatedAt, &r.deletedAt, &r.createdAgent, &r.updatedAgent,
 		); err != nil {
 			return nil, fmt.Errorf("scan memory for export: %w", err)
 		}
@@ -366,6 +373,8 @@ func RenderMarkdown(r exportRow) []byte {
 	fmt.Fprintf(&b, "is_pinned: %t\n", r.isPinned)
 	fmt.Fprintf(&b, "status: %s\n", r.status)
 	fmt.Fprintf(&b, "content_hash: %s\n", r.contentHash)
+	fmt.Fprintf(&b, "created_agent: %q\n", r.createdAgent)
+	fmt.Fprintf(&b, "updated_agent: %q\n", r.updatedAgent)
 	fmt.Fprintf(&b, "updated_at: %s\n", r.updatedAt.UTC().Format(time.RFC3339))
 	if r.deletedAt != nil {
 		fmt.Fprintf(&b, "deleted_at: %s\n", r.deletedAt.UTC().Format(time.RFC3339))

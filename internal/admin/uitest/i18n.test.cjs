@@ -145,3 +145,18 @@ test('quickstart preservation hint and marker-only registration instructions tra
   assert.match(ui.t(instruction), /omit `workspace_path`/);
   assert.match(ui.t(instruction), /`marker_path`/);
 });
+
+test('agent attribution labels and write instructions translate without changing agent names', () => {
+  const { ui } = browser({ language: 'en' });
+  assert.equal(ui.t('未知 Agent'), 'Unknown agent');
+  assert.equal(ui.t`创建 Agent：${'Codex'}`, 'Created by agent: Codex');
+  assert.equal(ui.t`最后修改 Agent：${'review-agent'}`, 'Last modified by agent: review-agent');
+  const app = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
+  const instruction = app.match(/t\("(   - 调用 `memory_create`[^"\n]+)"\)/)?.[1];
+  assert.ok(instruction);
+  const translated = ui.t(instruction);
+  for (const tool of ['memory_create', 'memory_update', 'memory_delete', 'memory_promote']) assert.ok(translated.includes('`' + tool + '`'));
+  assert.match(translated, /top-level `agent_name`/);
+  assert.match(translated, /self-reported information/);
+  assert.match(translated, /same `idempotency_key`/);
+});

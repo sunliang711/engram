@@ -660,6 +660,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, reqID string) (
 	if err := s.rateLimiter.Allow(access.principal.PrincipalID); err != nil {
 		return nil, err
 	}
+	agentName, err := normalizeAgentName(req.AgentName)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(req.IdempotencyKey) == "" || len(req.IdempotencyKey) > 128 {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "idempotency_key is required and must be <= 128 chars")
 	}
@@ -690,7 +694,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, reqID string) (
 		targetProjectID = access.claims.ProjectID
 	}
 
-	reqHash := computeRequestHash("memory_create", map[string]any{
+	reqHash := computeAgentRequestHash("memory_create", agentName, map[string]any{
 		"scope":       req.Scope,
 		"project_id":  targetProjectID,
 		"category":    req.Category,
@@ -729,22 +733,25 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, reqID string) (
 			UpdatedBy:   access.principal.PrincipalID,
 			CreatedAt:   now,
 			UpdatedAt:   now,
+
+			CreatedAgent: agentName,
+			UpdatedAgent: agentName,
 		}
 
 		_, err = tx.Exec(ctx, `
 			INSERT INTO memories (
 				id, tenant_id, scope, project_id, category, title, content_md,
 				tags, source_refs, is_pinned, status, version, content_hash,
-				created_by, updated_by, created_at, updated_at
+				created_by, updated_by, created_at, updated_at, created_agent, updated_agent
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7,
 				$8, $9, $10, $11, $12, $13,
-				$14, $15, $16, $17
+				$14, $15, $16, $17, $18, $19
 			)
 		`,
 			detail.ID, detail.TenantID, detail.Scope, detail.ProjectID, detail.Category, detail.Title, detail.Content,
 			detail.Tags, refsJSON, detail.IsPinned, detail.Status, detail.Version, detail.ContentHash,
-			detail.CreatedBy, detail.UpdatedBy, detail.CreatedAt, detail.UpdatedAt,
+			detail.CreatedBy, detail.UpdatedBy, detail.CreatedAt, detail.UpdatedAt, detail.CreatedAgent, detail.UpdatedAgent,
 		)
 		if err != nil {
 			return apperror.Wrap(apperror.CodeInternalError, "insert memory", err)
@@ -789,6 +796,10 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest, reqID string) (
 		return nil, err
 	}
 	if err := s.rateLimiter.Allow(access.principal.PrincipalID); err != nil {
+		return nil, err
+	}
+	agentName, err := normalizeAgentName(req.AgentName)
+	if err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(req.IdempotencyKey) == "" || len(req.IdempotencyKey) > 128 {
@@ -845,7 +856,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest, reqID string) (
 		}
 	}
 
-	reqHash := computeRequestHash("memory_update", map[string]any{
+	reqHash := computeAgentRequestHash("memory_update", agentName, map[string]any{
 		"memory_id":        memID,
 		"expected_version": req.ExpectedVersion,
 		"patch":            req.Patch,
@@ -882,6 +893,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest, reqID string) (
 		if req.Patch.Status != nil {
 			updated.Status = *req.Patch.Status
 		}
+		updated.UpdatedAgent = agentName
 		updated.UpdatedBy = access.principal.PrincipalID
 		updated.UpdatedAt = time.Now().UTC()
 
@@ -904,7 +916,8 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest, reqID string) (
 				content_hash = $8,
 				version = version + 1,
 				updated_by = $9,
-				updated_at = $10
+				updated_at = $10,
+				updated_agent = $14
 			WHERE id = $11
 			  AND tenant_id = $12
 			  AND version = $13
@@ -914,7 +927,7 @@ func (s *Service) Update(ctx context.Context, req UpdateRequest, reqID string) (
 			updated.Category, updated.Title, updated.Content, updated.Tags,
 			refsJSON, updated.IsPinned, updated.Status, updated.ContentHash,
 			updated.UpdatedBy, updated.UpdatedAt,
-			memID, access.principal.TenantID, req.ExpectedVersion,
+			memID, access.principal.TenantID, req.ExpectedVersion, updated.UpdatedAgent,
 		).Scan(&newVersion)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -965,6 +978,10 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest, reqID string) (
 	if err := s.rateLimiter.Allow(access.principal.PrincipalID); err != nil {
 		return nil, err
 	}
+	agentName, err := normalizeAgentName(req.AgentName)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(req.IdempotencyKey) == "" || len(req.IdempotencyKey) > 128 {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "idempotency_key is required and must be <= 128 chars")
 	}
@@ -976,7 +993,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest, reqID string) (
 		return nil, apperror.New(apperror.CodeInvalidArgument, "expected_version must be > 0")
 	}
 
-	reqHash := computeRequestHash("memory_delete", map[string]any{
+	reqHash := computeAgentRequestHash("memory_delete", agentName, map[string]any{
 		"memory_id":        memID,
 		"expected_version": req.ExpectedVersion,
 	})
@@ -995,13 +1012,14 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest, reqID string) (
 			SET deleted_at = $1,
 				version = version + 1,
 				updated_by = $2,
-				updated_at = $1
+				updated_at = $1,
+				updated_agent = $6
 			WHERE id = $3
 			  AND tenant_id = $4
 			  AND version = $5
 			  AND deleted_at IS NULL
 			RETURNING version
-		`, now, access.principal.PrincipalID, memID, access.principal.TenantID, req.ExpectedVersion).Scan(&newVersion)
+		`, now, access.principal.PrincipalID, memID, access.principal.TenantID, req.ExpectedVersion, agentName).Scan(&newVersion)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return s.conflictOrNotFoundError(ctx, tx, access, memID)
@@ -1011,6 +1029,7 @@ func (s *Service) Delete(ctx context.Context, req DeleteRequest, reqID string) (
 
 		deletedSnap := *current
 		deletedSnap.Version = newVersion
+		deletedSnap.UpdatedAgent = agentName
 		deletedSnap.UpdatedBy = access.principal.PrincipalID
 		deletedSnap.UpdatedAt = now
 		deletedSnap.DeletedAt = &now
@@ -1157,6 +1176,10 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 	if err := s.rateLimiter.Allow(access.principal.PrincipalID); err != nil {
 		return nil, err
 	}
+	agentName, err := normalizeAgentName(req.AgentName)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(req.IdempotencyKey) == "" || len(req.IdempotencyKey) > 128 {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "idempotency_key is required and must be <= 128 chars")
 	}
@@ -1187,7 +1210,7 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 		}
 	}
 
-	reqHash := computeRequestHash("memory_promote", map[string]any{
+	reqHash := computeAgentRequestHash("memory_promote", agentName, map[string]any{
 		"memory_id":        srcID,
 		"expected_version": req.ExpectedVersion,
 		"category":         req.Category,
@@ -1261,6 +1284,8 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 			Version:        1,
 			SourceMemoryID: &srcIDCopy,
 			ContentHash:    srcMem.ContentHash,
+			CreatedAgent:   agentName,
+			UpdatedAgent:   agentName,
 			CreatedBy:      access.principal.PrincipalID,
 			UpdatedBy:      access.principal.PrincipalID,
 			CreatedAt:      now,
@@ -1271,16 +1296,16 @@ func (s *Service) Promote(ctx context.Context, req PromoteRequest, reqID string)
 			INSERT INTO memories (
 				id, tenant_id, scope, project_id, category, title, content_md,
 				tags, source_refs, is_pinned, status, version, source_memory_id,
-				content_hash, created_by, updated_by, created_at, updated_at
+				content_hash, created_by, updated_by, created_at, updated_at, created_agent, updated_agent
 			) VALUES (
 				$1, $2, 'global', NULL, $3, $4, $5,
 				$6, $7, $8, 'active', 1, $9,
-				$10, $11, $12, $13, $14
+				$10, $11, $12, $13, $14, $15, $16
 			)
 		`,
 			promoted.ID, promoted.TenantID, promoted.Category, promoted.Title, promoted.Content,
 			promoted.Tags, refsJSON, promoted.IsPinned, promoted.SourceMemoryID,
-			promoted.ContentHash, promoted.CreatedBy, promoted.UpdatedBy, promoted.CreatedAt, promoted.UpdatedAt,
+			promoted.ContentHash, promoted.CreatedBy, promoted.UpdatedBy, promoted.CreatedAt, promoted.UpdatedAt, promoted.CreatedAgent, promoted.UpdatedAgent,
 		)
 		if err != nil {
 			return apperror.Wrap(apperror.CodeInternalError, "insert promoted global memory", err)
@@ -1479,13 +1504,14 @@ func (s *Service) AdminPurge(ctx context.Context, req AdminPurgeRequest) (int, e
 			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE memories
-				SET deleted_at = $1, version = version + 1, updated_by = $2, updated_at = $1
+				SET deleted_at = $1, version = version + 1, updated_by = $2, updated_at = $1, updated_agent = ''
 				WHERE id = $3 AND tenant_id = $4 AND version = $5 AND deleted_at IS NULL
 			`, now, p.PrincipalID, target.ID, req.TenantID, target.Version); err != nil {
 				return 0, apperror.Wrap(apperror.CodeInternalError, "purge memory", err)
 			}
 			deleted := *current
 			deleted.Version = target.Version + 1
+			deleted.UpdatedAgent = ""
 			deleted.UpdatedBy = p.PrincipalID
 			deleted.UpdatedAt = now
 			deleted.DeletedAt = &now
@@ -1590,6 +1616,7 @@ func (s *Service) adminWrite(ctx context.Context, spec adminWriteSpec) (*MemoryD
 		SET `+spec.setSQL+`,
 			version = version + 1,
 			updated_by = $1,
+			updated_agent = '',
 			updated_at = $2
 		WHERE id = $3
 		  AND tenant_id = $4
@@ -1607,6 +1634,7 @@ func (s *Service) adminWrite(ctx context.Context, spec adminWriteSpec) (*MemoryD
 	changed := *current
 	spec.apply(&changed, now)
 	changed.Version = newVersion
+	changed.UpdatedAgent = ""
 	changed.UpdatedBy = p.PrincipalID
 	changed.UpdatedAt = now
 
@@ -1691,6 +1719,7 @@ type rowQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// loadMemoryByID reads content and both member and self-reported agent attribution.
 func (s *Service) loadMemoryByID(ctx context.Context, q rowQuerier, tenantID, memID uuid.UUID) (*MemoryDetail, error) {
 	var (
 		m        MemoryDetail
@@ -1699,13 +1728,13 @@ func (s *Service) loadMemoryByID(ctx context.Context, q rowQuerier, tenantID, me
 	err := q.QueryRow(ctx, `
 		SELECT id, tenant_id, scope, project_id, category, title, content_md,
 		       tags, source_refs, is_pinned, status, version, source_memory_id,
-		       content_hash, created_by, updated_by, created_at, updated_at, deleted_at
+		       content_hash, created_by, updated_by, created_at, updated_at, deleted_at, created_agent, updated_agent
 		FROM memories
 		WHERE id = $1 AND tenant_id = $2
 	`, memID, tenantID).Scan(
 		&m.ID, &m.TenantID, &m.Scope, &m.ProjectID, &m.Category, &m.Title, &m.Content,
 		&m.Tags, &refsJSON, &m.IsPinned, &m.Status, &m.Version, &m.SourceMemoryID,
-		&m.ContentHash, &m.CreatedBy, &m.UpdatedBy, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt,
+		&m.ContentHash, &m.CreatedBy, &m.UpdatedBy, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt, &m.CreatedAgent, &m.UpdatedAgent,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -1764,7 +1764,7 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT m.id, m.tenant_id, m.scope, m.project_id, coalesce(p.name, ''),
 		       m.category, m.title, m.content_md, m.tags, m.is_pinned, m.status,
-		       m.version, m.updated_at, m.deleted_at
+		       m.version, m.updated_at, m.deleted_at, m.created_agent, m.updated_agent
 		FROM memories m
 		LEFT JOIN projects p ON p.id = m.project_id
 		`+whereClause+`
@@ -1790,7 +1790,8 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 			updatedAt             time.Time
 			deletedAt             *time.Time
 		)
-		if err := rows.Scan(&id, &tid, &sc, &projID, &pName, &cat, &title, &content, &tags, &isPinned, &status, &version, &updatedAt, &deletedAt); err != nil {
+		var createdAgent, updatedAgent string
+		if err := rows.Scan(&id, &tid, &sc, &projID, &pName, &cat, &title, &content, &tags, &isPinned, &status, &version, &updatedAt, &deletedAt, &createdAgent, &updatedAgent); err != nil {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "scan memory", err))
 			return
 		}
@@ -1809,6 +1810,9 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 			"version":      version,
 			"updated_at":   updatedAt,
 			"deleted_at":   deletedAt,
+
+			"created_agent": createdAgent,
+			"updated_agent": updatedAgent,
 		})
 	}
 	if err := rows.Err(); err != nil {

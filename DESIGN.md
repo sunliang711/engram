@@ -220,6 +220,14 @@ Tool 名只使用 ASCII 字母、数字和下划线，并控制在 64 个字符�
 
 `memory_query` 的 `query` 为空时表示分页列举索引。响应默认只返回元数据和内容摘要。
 
+### 写入时的 Agent 名称
+
+`memory_create`、`memory_update`、`memory_delete` 和 `memory_promote` 接受可选的顶层 `agent_name`，例如 `"agent_name": "Codex"` 或 `"agent_name": "review-agent"`。名称去除首尾空白，最多 128 个 Unicode 字符，不允许内部控制字符；该字段是自报信息，不能作为身份或权限凭据。调用方仍不能指定 `created_by`、`updated_by`。
+
+创建及提升生成的新记忆同时保存 `created_agent` 和 `updated_agent`，修改和删除只更新后者。每个版本快照中的 `updated_agent` 表示该次操作的 Agent，`created_agent` 保留最初创建者。省略或空名称保存为空，界面显示“未知 Agent”；后台恢复、置顶及删除等操作清空最后修改 Agent，避免继承上一次操作的归属。历史版本不回填或推断名称。
+
+非空 Agent 名称纳入幂等请求哈希，更换名称后复用原键会冲突；空名称保持旧版哈希格式，兼容升级前未署名请求的重试。客户端“配置客户端”第二步的中英文说明要求 Agent 写入时携带该参数，并在重试时保持一致。
+
 ### 7.3 `memory_read`
 
 ```json
@@ -463,6 +471,8 @@ CREATE TABLE memories (
     version BIGINT NOT NULL DEFAULT 1,
     source_memory_id UUID REFERENCES memories(id),
     content_hash TEXT NOT NULL,
+    created_agent TEXT NOT NULL DEFAULT '',
+    updated_agent TEXT NOT NULL DEFAULT '',
     created_by UUID NOT NULL REFERENCES principals(id),
     updated_by UUID NOT NULL REFERENCES principals(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -483,6 +493,8 @@ CREATE TABLE memories (
 `source_refs` 中每一项使用受控结构保存来源类型、稳定标识和可选展示信息。服务端禁止客户端把本地凭证或带凭证的 URL 写入来源引用。
 
 ### 8.5 `memory_revisions`
+
+迁移 `007_memory_agent_names.sql` 为已有记忆添加空 Agent 归属，不改变成员审计字段。版本快照随记忆内容保存 `created_agent` / `updated_agent`，无需单独增加版本列。系统快照、知识包、Markdown 和 ZIP 导出保留两字段，旧包缺字段时按未知处理。
 
 Revision 保存完整快照，而不只是正文：
 

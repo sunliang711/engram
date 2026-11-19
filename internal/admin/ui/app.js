@@ -754,6 +754,9 @@
   // revisionContent reads snapshot text from both the current and the legacy snapshot field names.
   function revisionContent(snapshot) { return snapshot.content ?? snapshot.content_md ?? ""; }
 
+  // agentName labels missing self-reported attribution without inferring it from member identity.
+  function agentName(value) { return typeof value === "string" && value.trim() ? value : t("未知 Agent"); }
+
   // viewMemoryDetail opens immediately and guards against out-of-order history requests.
   async function viewMemoryDetail(memId, updateURL = true) {
     const request = ++state.detailRequest;
@@ -786,6 +789,8 @@
         mem.is_pinned ? t('<span class="badge warning">置顶</span>') : "",
         deleted ? t('<span class="badge danger">已删除</span>') : "",
         t`<span class="meta-text">v${mem.version} · ${escapeHtml(formatDate(mem.updated_at))} 更新</span>`,
+        `<span class="meta-text">${t`创建 Agent：${escapeHtml(agentName(mem.created_agent))}`}</span>`,
+        `<span class="meta-text">${t`最后修改 Agent：${escapeHtml(agentName(mem.updated_agent))}`}</span>`,
         identifier(mem.id),
       ];
       $("detail-meta").innerHTML = chips.filter(Boolean).join("");
@@ -807,7 +812,7 @@
         const operation = { create: t("创建"), update: t("更新"), delete: t("删除"), restore: t("恢复"), promote: t("提升至全局") }[revision.operation] || revision.operation;
         const meta = previous ? Object.keys(REVISION_FIELDS).filter((key) => JSON.stringify(snap[key] ?? null) !== JSON.stringify(old[key] ?? null)).map((key) => t`${REVISION_FIELDS[key]}：${revisionValue(key, old[key])} → ${revisionValue(key, snap[key])}`).join("\n") : "";
         const diff = previous || revision.operation === "create" ? window.EngramMarkdown.diff(revisionContent(old), revisionContent(snap)) : "";
-        return t`<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actorName(revision.actor_id))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
+        return t`<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actorName(revision.actor_id))} · ${escapeHtml(agentName(snap.updated_agent))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
       }).join("") || t('<p class="empty-state">暂无版本历史</p>');
       if (updateURL) syncLocation(true);
     } catch (err) {
@@ -896,6 +901,7 @@
       t("   - 先浏览 `memory_discover` 返回的 `pinned`、`category_stats` 和 `recent`，若已命中目标可直接调用 `memory_read`。"),
       t("   - 需要按关键词、分类或标签检索时调用 `memory_query`，定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。"),
       t("3. **任务过程中及时沉淀与更新**："),
+      t("   - 调用 `memory_create`、`memory_update`、`memory_delete` 或 `memory_promote` 写入时，在顶层参数 `agent_name` 中填写当前 Agent 名称，例如 `Codex`、`Claude Code` 或自定义 `review-agent`。这是自报信息，权限仍由 Token 决定；使用同一 `idempotency_key` 重试时保持 `agent_name` 一致。"),
       t("   - 遇到有长期价值的架构约定、环境配置、排障结论或跨项目规范时，调用 `memory_create` / `memory_update` 沉淀或更新记忆（更新需传 `expected_version` 与唯一 `idempotency_key`），**严禁写入密码、Token、私钥等敏感凭据**。"),
     ].join("\n");
   }

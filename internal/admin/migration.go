@@ -171,6 +171,8 @@ type snapshotMemory struct {
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	DeletedAt      *time.Time      `json:"deleted_at,omitempty"`
+	CreatedAgent   string          `json:"created_agent"`
+	UpdatedAgent   string          `json:"updated_agent"`
 }
 
 type snapshotMemoryRevision struct {
@@ -224,6 +226,8 @@ type knowledgeMemory struct {
 	CreatedAt      time.Time       `json:"created_at"`
 	UpdatedAt      time.Time       `json:"updated_at"`
 	DeletedAt      *time.Time      `json:"deleted_at,omitempty"`
+	CreatedAgent   string          `json:"created_agent"`
+	UpdatedAgent   string          `json:"updated_agent"`
 }
 
 type knowledgeMemoryRevision struct {
@@ -683,7 +687,7 @@ func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bo
 	rows, err = tx.Query(ctx, `
 		SELECT id, tenant_id, scope, project_id, category, title, content_md,
 		       tags, source_refs, is_pinned, status, version, source_memory_id,
-		       content_hash, created_by, updated_by, created_at, updated_at, deleted_at
+		       content_hash, created_by, updated_by, created_at, updated_at, deleted_at, created_agent, updated_agent
 		FROM memories
 		ORDER BY created_at ASC, id ASC
 	`)
@@ -695,7 +699,7 @@ func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bo
 		if err := rows.Scan(
 			&row.ID, &row.TenantID, &row.Scope, &row.ProjectID, &row.Category, &row.Title, &row.ContentMD,
 			&row.Tags, &row.SourceRefs, &row.IsPinned, &row.Status, &row.Version, &row.SourceMemoryID,
-			&row.ContentHash, &row.CreatedBy, &row.UpdatedBy, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt,
+			&row.ContentHash, &row.CreatedBy, &row.UpdatedBy, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.CreatedAgent, &row.UpdatedAgent,
 		); err != nil {
 			rows.Close()
 			return p, apperror.Wrap(apperror.CodeInternalError, "scan memory", err)
@@ -747,6 +751,7 @@ func (h *Handler) exportSnapshotPayload(ctx context.Context, includeRawTokens bo
 }
 
 // importSnapshotPayload restores data while applying current member permission boundaries.
+// importSnapshotPayload restores members, memories, and Agent attribution in one replacement transaction.
 func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, confirmReplace bool) (SnapshotCounts, error) {
 	p = normalizeSnapshotPermissions(p)
 	var counts SnapshotCounts
@@ -883,15 +888,15 @@ func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, 
 			INSERT INTO memories (
 				id, tenant_id, scope, project_id, category, title, content_md,
 				tags, source_refs, is_pinned, status, version, source_memory_id,
-				content_hash, created_by, updated_by, created_at, updated_at, deleted_at
+				content_hash, created_by, updated_by, created_at, updated_at, deleted_at, created_agent, updated_agent
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7,
 				$8, $9, $10, $11, $12, NULL,
-				$13, $14, $15, $16, $17, $18
+				$13, $14, $15, $16, $17, $18, $19, $20
 			)
 		`, m.ID, m.TenantID, m.Scope, m.ProjectID, m.Category, m.Title, m.ContentMD,
 			tags, refs, m.IsPinned, m.Status, m.Version,
-			m.ContentHash, m.CreatedBy, m.UpdatedBy, m.CreatedAt, m.UpdatedAt, m.DeletedAt); err != nil {
+			m.ContentHash, m.CreatedBy, m.UpdatedBy, m.CreatedAt, m.UpdatedAt, m.DeletedAt, m.CreatedAgent, m.UpdatedAgent); err != nil {
 			return counts, apperror.Wrap(apperror.CodeInvalidArgument, "restore memory "+m.ID.String(), err)
 		}
 	}
@@ -948,6 +953,7 @@ func (h *Handler) importSnapshotPayload(ctx context.Context, p SnapshotPayload, 
 	return counts, nil
 }
 
+// exportKnowledgeBundlePayload exports portable knowledge while retaining self-reported Agent attribution.
 func (h *Handler) exportKnowledgeBundlePayload(ctx context.Context, opts KnowledgeExportOptions) (KnowledgeBundlePayload, error) {
 	var p KnowledgeBundlePayload
 	tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{
@@ -1044,7 +1050,7 @@ func (h *Handler) exportKnowledgeBundlePayload(ctx context.Context, opts Knowled
 	memQuery := `
 		SELECT id, tenant_id, scope, project_id, category, title, content_md,
 		       tags, source_refs, is_pinned, status, version, source_memory_id,
-		       content_hash, created_at, updated_at, deleted_at
+		       content_hash, created_at, updated_at, deleted_at, created_agent, updated_agent
 		FROM memories
 		WHERE tenant_id = ANY($1)
 	`
@@ -1063,7 +1069,7 @@ func (h *Handler) exportKnowledgeBundlePayload(ctx context.Context, opts Knowled
 		if err := memRows.Scan(
 			&row.ID, &row.TenantID, &row.Scope, &row.ProjectID, &row.Category, &row.Title, &row.ContentMD,
 			&row.Tags, &row.SourceRefs, &row.IsPinned, &row.Status, &row.Version, &row.SourceMemoryID,
-			&row.ContentHash, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt,
+			&row.ContentHash, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.CreatedAgent, &row.UpdatedAgent,
 		); err != nil {
 			memRows.Close()
 			return p, apperror.Wrap(apperror.CodeInternalError, "scan bundle memory", err)
@@ -1238,15 +1244,15 @@ func (h *Handler) importKnowledgeBundlePayload(ctx context.Context, p KnowledgeB
 			INSERT INTO memories (
 				id, tenant_id, scope, project_id, category, title, content_md,
 				tags, source_refs, is_pinned, status, version, source_memory_id,
-				content_hash, created_by, updated_by, created_at, updated_at, deleted_at
+				content_hash, created_by, updated_by, created_at, updated_at, deleted_at, created_agent, updated_agent
 			) VALUES (
 				$1, $2, $3, $4, $5, $6, $7,
 				$8, $9, $10, $11, $12, NULL,
-				$13, $14, $15, $16, $17, $18
+				$13, $14, $15, $16, $17, $18, $19, $20
 			)
 		`, newMemID, targetTID, m.Scope, targetPID, m.Category, m.Title, m.ContentMD,
 			tags, refs, m.IsPinned, m.Status, m.Version,
-			m.ContentHash, actorID, actorID, m.CreatedAt, m.UpdatedAt, m.DeletedAt); err != nil {
+			m.ContentHash, actorID, actorID, m.CreatedAt, m.UpdatedAt, m.DeletedAt, m.CreatedAgent, m.UpdatedAgent); err != nil {
 			return counts, apperror.Wrap(apperror.CodeInvalidArgument, "import memory "+m.ID.String(), err)
 		}
 		memoryIDMap[m.ID] = newMemID

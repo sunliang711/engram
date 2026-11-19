@@ -77,6 +77,8 @@ type MemoryDetail struct {
 	Version        int64                `json:"version"`
 	SourceMemoryID *uuid.UUID           `json:"source_memory_id,omitempty"`
 	ContentHash    string               `json:"content_hash"`
+	CreatedAgent   string               `json:"created_agent"`
+	UpdatedAgent   string               `json:"updated_agent"`
 	CreatedBy      uuid.UUID            `json:"created_by"`
 	UpdatedBy      uuid.UUID            `json:"updated_by"`
 	CreatedAt      time.Time            `json:"created_at"`
@@ -141,6 +143,7 @@ type ReadResponse struct {
 
 // 7.4 memory_create
 type CreateRequest struct {
+	AgentName      string               `json:"agent_name"`
 	ProjectContext string               `json:"project_context"`
 	Scope          string               `json:"scope"`
 	Category       string               `json:"category"`
@@ -170,6 +173,7 @@ type MemoryPatch struct {
 }
 
 type UpdateRequest struct {
+	AgentName       string      `json:"agent_name"`
 	ProjectContext  string      `json:"project_context"`
 	MemoryID        string      `json:"memory_id"`
 	ExpectedVersion int64       `json:"expected_version"`
@@ -179,6 +183,7 @@ type UpdateRequest struct {
 
 // 7.6 memory_delete
 type DeleteRequest struct {
+	AgentName       string `json:"agent_name"`
 	ProjectContext  string `json:"project_context"`
 	MemoryID        string `json:"memory_id"`
 	ExpectedVersion int64  `json:"expected_version"`
@@ -219,6 +224,7 @@ type ChangesResponse struct {
 
 // 7.8 memory_promote
 type PromoteRequest struct {
+	AgentName       string   `json:"agent_name"`
 	ProjectContext  string   `json:"project_context"`
 	MemoryID        string   `json:"memory_id"`
 	ExpectedVersion int64    `json:"expected_version"`

@@ -111,6 +111,16 @@ The console `admin` account manages members, tokens, grants, restore, and perman
 | Global memories | `none` | `member` | `global_writer` |
 | Each project | No membership (`role: none` revokes it) | `reader` | `writer` |
 
+### Agent attribution
+
+Pass the optional top-level `agent_name` when calling `memory_create`, `memory_update`, `memory_delete`, or `memory_promote`, for example `"agent_name": "Codex"`, `"Claude Code"`, or `"review-agent"`. Names are trimmed, limited to 128 Unicode characters, and cannot contain internal control characters. They are self-reported labels; authorization still uses the authenticated member.
+
+Memories retain `created_agent` and `updated_agent` alongside `created_by` / `updated_by`. Each version snapshot records the agent responsible for that version in `updated_agent`. Creation and promotion set both agent fields; later writes preserve the creator. Omitted or blank names are stored as empty strings and shown as **Unknown agent**. A write without a name, including a console operation, clears the latest agent instead of inheriting a previous writer's name. Historical versions keep their own attribution.
+
+Use the same name when retrying an idempotency key; changing it returns `IDEMPOTENCY_CONFLICT`. Existing unnamed requests retain their previous request hashes. Migration `007_memory_agent_names.sql` adds empty attribution to existing memories without changing member identities. System snapshots, knowledge bundles, Markdown exports, and ZIP manifests preserve the agent fields; older archives remain compatible. Refresh the client tool list and copy the updated Step 2 instructions to enable reporting.
+
+### Project creation
+
 Project creation is a separate tenant-member permission, `can_create_project`, disabled by default. Enable **Allow agents to create projects autonomously** in the member settings (or quickstart). Existing API tokens inherit the live member grant; no token reissue is required. Migration `006_project_creation_permission.sql` adds the permission without changing existing grants. System snapshots preserve it; older snapshots default to disabled.
 
 When `memory_discover` returns `PROJECT_NOT_REGISTERED`, its error details include `can_create_project`. Authorized agents can call `project_register` with `name`, Git `remotes`, optional relative `workspace_path` / existing `project_marker`, and an `idempotency_key`. A remote or marker is required. A nonempty registration `workspace_path` requires remotes because it persists a repository mapping. For marker-only registration, omit it and report the marker's current directory as `marker_path` during discovery; marker identity follows its UUID, not a stored directory. Registration atomically grants the creator `writer` access to the new project; call `memory_discover` again before writing project memories. Existing identities (including disabled projects and overlapping repository paths) return `PROJECT_EXISTS` without granting access. Lock contention returns retryable `LOCK_TIMEOUT` (HTTP 503); retry with the same idempotency key after the lock is released. Registration retries recheck current creation and project permissions. The client configuration dialog's Step 2 includes these instructions in Chinese and English.

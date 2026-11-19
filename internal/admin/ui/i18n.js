@@ -1,5 +1,9 @@
 (function () {
   const english = {
+    "未知 Agent": "Unknown agent",
+    "创建 Agent：{0}": "Created by agent: {0}",
+    "最后修改 Agent：{0}": "Last modified by agent: {0}",
+    "   - 调用 `memory_create`、`memory_update`、`memory_delete` 或 `memory_promote` 写入时，在顶层参数 `agent_name` 中填写当前 Agent 名称，例如 `Codex`、`Claude Code` 或自定义 `review-agent`。这是自报信息，权限仍由 Token 决定；使用同一 `idempotency_key` 重试时保持 `agent_name` 一致。": "   - For writes using `memory_create`, `memory_update`, `memory_delete`, or `memory_promote`, set the top-level `agent_name` parameter to the current agent name, such as `Codex`, `Claude Code`, or a custom `review-agent`. This is self-reported information; the token still determines permissions. Keep `agent_name` unchanged when retrying with the same `idempotency_key`.",
     "未勾选时保留已有成员的创建项目权限，新成员默认关闭；如需关闭，请前往成员权限设置。": "Leaving this unchecked preserves existing members’ project creation permission. New members default to disabled. To revoke permission, use member permission settings.",
     "   - 仅以 Marker 注册（不提供仓库地址）时，省略 `workspace_path`；后续发现时通过 `marker_path` 报告 `.engram-project` 所在目录（相对于 Git 根目录）。": "   - When registering using only a marker (without Git remotes), omit `workspace_path`. During subsequent discovery, report the directory containing `.engram-project` using `marker_path`, relative to the Git root.",
     "允许 Agent 自主创建项目": "Allow agents to create projects autonomously",
@@ -507,7 +511,7 @@
     "更新": "Updated",
     "提升至全局": "Promote to global",
     "{0}：{1} → {2}": "{0}: {1} → {2}",
-    "<details class=\"revision-item\"><summary><strong>v{0} · {1}</strong><span>{2} · {3}</span></summary>{4}{5}<details><summary>原始快照</summary><pre class=\"code-box\">{6}</pre></details></details>": "<details class=\"revision-item\"><summary><strong>v{0} · {1}</strong><span>{2} · {3}</span></summary>{4}{5}<details><summary>Raw snapshot</summary><pre class=\"code-box\">{6}</pre></details></details>",
+    "<details class=\"revision-item\"><summary><strong>v{0} · {1}</strong><span>{2} · {3} · {4}</span></summary>{5}{6}<details><summary>原始快照</summary><pre class=\"code-box\">{7}</pre></details></details>": "<details class=\"revision-item\"><summary><strong>v{0} · {1}</strong><span>{2} · {3} · {4}</span></summary>{5}{6}<details><summary>Raw snapshot</summary><pre class=\"code-box\">{7}</pre></details></details>",
     "<p class=\"empty-state\">暂无版本历史</p>": "<p class=\"empty-state\">No revision history</p>",
     "无法打开知识": "Unable to open memory",
     "是": "Yes",

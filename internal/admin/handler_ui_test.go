@@ -180,6 +180,37 @@ func TestAdminUIRegression(t *testing.T) {
 			t.Fatal("sort=recent must ignore pinning")
 		}
 	})
+	t.Run("memory list exposes current agent attribution and keeps legacy values empty", func(t *testing.T) {
+		const agent = `<img src=x onerror="alert(1)">`
+		if _, err := database.Pool.Exec(ctx, `UPDATE memories SET created_agent='Codex', updated_agent=$2 WHERE tenant_id=$1 AND title='fixture 1'`, tenant, agent); err != nil {
+			t.Fatal(err)
+		}
+		for _, tc := range []struct {
+			title, created, updated string
+		}{
+			{"fixture 1", "Codex", agent},
+			{"fixture 2", "", ""},
+		} {
+			var memoryID uuid.UUID
+			if err := database.Pool.QueryRow(ctx, `SELECT id FROM memories WHERE tenant_id=$1 AND title=$2`, tenant, tc.title).Scan(&memoryID); err != nil {
+				t.Fatal(err)
+			}
+			rec := httptest.NewRecorder()
+			handler.handleMemories(rec, httptest.NewRequest(http.MethodGet, "/?memory_id="+memoryID.String(), nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("agent attribution response: %d %s", rec.Code, rec.Body.String())
+			}
+			var result struct {
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Items) != 1 || result.Items[0]["created_agent"] != tc.created || result.Items[0]["updated_agent"] != tc.updated {
+				t.Fatalf("unexpected agent attribution: %+v", result.Items)
+			}
+		}
+	})
 	t.Run("project names stay unique within a tenant", func(t *testing.T) {
 		defer func() {
 			if _, err := database.Pool.Exec(ctx, `DELETE FROM projects WHERE tenant_id = $1`, tenant); err != nil {

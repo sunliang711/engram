@@ -1,6 +1,7 @@
 package exporter
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +68,19 @@ func TestRenderMarkdown_DeterministicFrontmatter(t *testing.T) {
 	}
 	if !strings.HasSuffix(out, "\n---\n\nHello world\n") {
 		t.Fatalf("expected markdown body after frontmatter, got:\n%s", out)
+	}
+}
+
+// TestRenderMarkdownAgentAttribution safely quotes self-reported names and keeps unknown names explicit.
+func TestRenderMarkdownAgentAttribution(t *testing.T) {
+	for _, agent := range []string{"", "Codex", "review-agent: \"审核\"", "line\n---\ninjected: true", "<script>alert(1)</script>"} {
+		out := string(RenderMarkdown(exportRow{createdAgent: agent, updatedAgent: agent}))
+		quoted := fmt.Sprintf("%q", agent)
+		if !strings.Contains(out, "created_agent: "+quoted+"\n") || !strings.Contains(out, "updated_agent: "+quoted+"\n") {
+			t.Fatalf("unsafe or missing Agent attribution for %q: %s", agent, out)
+		}
+		if strings.Count(out, "\n---\n") != 1 {
+			t.Fatalf("Agent name escaped the YAML front matter: %s", out)
+		}
 	}
 }

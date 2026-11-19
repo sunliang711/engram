@@ -550,6 +550,7 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"agent_name": map[string]any{"type": "string", "maxLength": 128, "description": "Optional self-reported agent name, e.g. Codex, Claude Code, or review-agent. Omit for unknown. Keep the same name on idempotent retries; this metadata never grants permissions."},
 					"project_context": map[string]any{"type": "string"},
 					"scope":           map[string]any{"type": "string", "enum": []string{"project", "global"}},
 					"category":        map[string]any{"type": "string"},
@@ -569,6 +570,7 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"agent_name": map[string]any{"type": "string", "maxLength": 128, "description": "Optional self-reported agent name, e.g. Codex, Claude Code, or review-agent. Omit for unknown. Keep the same name on idempotent retries; this metadata never grants permissions."},
 					"project_context":  map[string]any{"type": "string"},
 					"memory_id":        map[string]any{"type": "string"},
 					"expected_version": map[string]any{"type": "integer"},
@@ -584,6 +586,7 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"agent_name": map[string]any{"type": "string", "maxLength": 128, "description": "Optional self-reported agent name, e.g. Codex, Claude Code, or review-agent. Omit for unknown. Keep the same name on idempotent retries; this metadata never grants permissions."},
 					"project_context":  map[string]any{"type": "string"},
 					"memory_id":        map[string]any{"type": "string"},
 					"expected_version": map[string]any{"type": "integer"},
@@ -611,6 +614,7 @@ func toolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"agent_name": map[string]any{"type": "string", "maxLength": 128, "description": "Optional self-reported agent name, e.g. Codex, Claude Code, or review-agent. Omit for unknown. Keep the same name on idempotent retries; this metadata never grants permissions."},
 					"project_context":  map[string]any{"type": "string"},
 					"memory_id":        map[string]any{"type": "string"},
 					"expected_version": map[string]any{"type": "integer"},
