@@ -1033,6 +1033,8 @@ td:first-child > .text-button:hover { color: var(--text-accent); }
 .client-config-dialog > .desc { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
 .client-config-dialog .setup-panel > summary { display: none; }
 .client-config-dialog .guide-credentials { width: 100%; }
+.quickstart-heading { align-items: flex-start; flex-wrap: wrap; }
+.guide-credentials > label:not(:first-child) { margin-top: 12px; }
 .client-config-dialog .guide-step { padding: 20px; }
 .client-tabs { gap: 4px; padding: 4px; border-radius: 10px; background: var(--bg-panel); border: 1px solid var(--border); width: fit-content; }
 .client-tab-btn { border-color: transparent; background: transparent; box-shadow: none; }

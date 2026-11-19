@@ -13,6 +13,8 @@
     facets: { categories: [], tags: [] },
     lastRefresh: 0,
     latestToken: "",
+    clientConfigTokenID: "",
+    clientConfigRequest: 0,
     revealedTokens: {},
     memoryPage: 1,
     memoryPageSize: 20,
@@ -173,6 +175,7 @@
       state.principals = principals.items || [];
       state.projects = projects.items || [];
       state.tokens = tokens.items || [];
+      renderClientTokenPicker();
       state.facets = { categories: facets.categories || [], tags: facets.tags || [] };
       state.deletedCount = overview.deleted_memories_count || 0;
 
@@ -493,16 +496,19 @@
     $(state.selectedProject ? "project-detail-title" : "project-list-title").focus();
   }
 
+  // resolveTokenSecret reads an existing key and prevents late responses from crossing logout.
   async function resolveTokenSecret(tokenId) {
-    if (state.revealedTokens[tokenId]) {
-      return state.revealedTokens[tokenId];
+    const cache = state.revealedTokens;
+    if (cache[tokenId]) {
+      return cache[tokenId];
     }
     const res = await api("/api/admin/tokens/reveal", {
       method: "POST",
       body: JSON.stringify({ id: tokenId }),
     });
+    if (cache !== state.revealedTokens) throw new Error(t("密钥读取已取消，请重新选择客户端。"));
     if (res && res.token) {
-      state.revealedTokens[tokenId] = res.token;
+      cache[tokenId] = res.token;
       return res.token;
     }
     throw new Error(t("未能获取密钥明文。"));
@@ -584,12 +590,9 @@
     tbody.querySelectorAll(".btn-apply-token").forEach((btn) => {
       btn.addEventListener("click", async () => {
         try {
-          const tok = await resolveTokenSecret(btn.dataset.id);
-          state.latestToken = tok;
-          if ($("guide-token-input")) {
-            $("guide-token-input").value = tok;
-          }
-          openClientGuides(state.tokens.find((token) => token.id === btn.dataset.id));
+          const token = state.tokens.find((item) => item.id === btn.dataset.id && !item.revoked_at);
+          if (!token) throw new Error(t("该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。"));
+          await openClientGuides(token);
         } catch (err) {
           showToast(err.message, true);
         }
@@ -989,11 +992,70 @@
     if ($("guide-gemini-rules")) $("guide-gemini-rules").textContent = instructions;
   }
 
-  // openClientGuides keeps credential configuration inside the originating management flow.
-  function openClientGuides(token) {
+  // clientTokenContext names a selected credential without exposing its secret.
+  function clientTokenContext(token) {
+    return token ? `${token.tenant_name} / ${token.principal_name} / ${token.name} · ${token.token_prefix ? token.token_prefix + "…" : token.id.slice(0, 8)}` : t("选择已有客户端或粘贴密钥，也可先使用占位符查看配置。");
+  }
+
+  // renderClientTokenPicker keeps the selection aligned with active credentials after each refresh.
+  function renderClientTokenPicker() {
+    const tokens = state.tokens.filter((token) => !token.revoked_at);
+    const selected = state.clientConfigTokenID;
+    if (selected && !tokens.some((token) => token.id === selected)) {
+      state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+      state.clientConfigTokenID = "";
+      $("guide-token-input").value = "";
+      $("mcp-check-result").textContent = "";
+      $("guide-token-hint").textContent = t("该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。");
+      $("client-config-context").textContent = clientTokenContext();
+      renderClientGuides();
+    }
+    $("guide-existing-token").innerHTML = `<option value="">${t("使用当前密钥或手动粘贴")}</option>` + tokens.map((token) => `<option value="${escapeHtml(token.id)}">${escapeHtml(clientTokenContext(token))}</option>`).join("");
+    $("guide-existing-token").value = state.clientConfigTokenID || "";
+    if (state.clientConfigTokenID) $("client-config-context").textContent = clientTokenContext(tokens.find((token) => token.id === state.clientConfigTokenID));
+  }
+
+  // selectClientToken reveals an existing secret without creating data and ignores superseded responses.
+  async function selectClientToken(tokenID) {
+    const request = state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+    const token = state.tokens.find((item) => item.id === tokenID && !item.revoked_at);
+    state.clientConfigTokenID = token ? token.id : "";
+    $("guide-existing-token").value = state.clientConfigTokenID;
+    $("guide-token-input").value = "";
+    $("mcp-check-result").textContent = "";
+    $("client-config-context").textContent = clientTokenContext(token);
+    $("guide-token-hint").textContent = token ? t("正在获取已有密钥…") : tokenID ? t("该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。") : "";
+    renderClientGuides();
+    if (!token) return;
+    try {
+      if (!token.can_reveal && !state.revealedTokens[token.id]) throw new Error("token plaintext unavailable");
+      const secret = await resolveTokenSecret(token.id);
+      if (request !== state.clientConfigRequest) return;
+      if (!state.tokens.some((item) => item.id === token.id && !item.revoked_at)) { renderClientTokenPicker(); return; }
+      $("guide-token-input").value = secret;
+      $("guide-token-hint").textContent = "";
+      renderClientGuides();
+    } catch (_) {
+      if (request !== state.clientConfigRequest) return;
+      $("guide-token-input").value = "";
+      $("guide-token-hint").textContent = t("无法还原此密钥明文。请粘贴原密钥查看配置；此操作不会签发新密钥。");
+      renderClientGuides();
+    }
+  }
+
+  // openClientGuides offers existing credentials, manual input, or placeholders without creating data.
+  function openClientGuides(token, rawToken) {
     state.clientConfigOpener = document.activeElement;
-    $("client-config-context").textContent = token ? `${token.tenant_name} / ${token.principal_name} / ${token.name}` : t("使用快速接入生成的密钥配置客户端。");
-    $("guide-token-input").value = token ? state.latestToken : state.quickstartToken || "";
+    if (rawToken !== undefined) {
+      state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+      state.clientConfigTokenID = "";
+      $("guide-token-input").value = rawToken;
+      $("guide-token-hint").textContent = "";
+      $("client-config-context").textContent = t("使用快速接入生成的密钥配置客户端。");
+    } else if (!state.clientConfigTokenID) {
+      $("client-config-context").textContent = clientTokenContext();
+    }
+    renderClientTokenPicker();
     $("mcp-check-result").textContent = "";
     renderClientGuides();
     $("client-guides-card").open = true;
@@ -1001,10 +1063,13 @@
     $("client-config-modal").querySelector(".modal-card").scrollTop = 0;
     document.body.classList.add("client-config-open");
     $("btn-close-client-config").focus();
+    if (token) return selectClientToken(token.id);
+    if (state.clientConfigTokenID && !$("guide-token-input").value.trim()) return selectClientToken(state.clientConfigTokenID);
   }
 
-  // closeClientGuides hides credential text and restores focus to its invoking control.
+  // closeClientGuides cancels pending reveals and restores focus to its invoking control.
   function closeClientGuides(restoreFocus = true) {
+    state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
     const modal = $("client-config-modal");
     const wasOpen = !modal.classList.contains("hidden");
     modal.classList.add("hidden");
@@ -1404,8 +1469,19 @@
     });
   });
 
+  $("guide-existing-token").addEventListener("change", () => selectClientToken($("guide-existing-token").value));
+  $("btn-view-client-config").addEventListener("click", () => openClientGuides());
   if ($("guide-token-input")) {
-    $("guide-token-input").addEventListener("input", renderClientGuides);
+    $("guide-token-input").addEventListener("input", () => {
+      // Manual input takes ownership from any in-flight credential reveal.
+      state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+      state.clientConfigTokenID = "";
+      $("guide-existing-token").value = "";
+      $("guide-token-hint").textContent = "";
+      $("client-config-context").textContent = clientTokenContext();
+      $("mcp-check-result").textContent = "";
+      renderClientGuides();
+    });
   }
 
   $("btn-qs-again").addEventListener("click", () => {
@@ -1417,7 +1493,7 @@
 
   if ($("btn-go-client-guides")) {
     $("btn-go-client-guides").addEventListener("click", () => {
-      openClientGuides();
+      openClientGuides(undefined, state.quickstartToken || "");
     });
   }
 
@@ -1474,9 +1550,13 @@
   });
 
   $("btn-logout").addEventListener("click", async () => {
+    state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
     await api("/api/admin/logout", { method: "POST" });
     state.latestToken = "";
     state.quickstartToken = "";
+    state.clientConfigTokenID = "";
+    state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+    $("guide-token-hint").textContent = "";
     state.revealedTokens = {};
     if ($("guide-token-input")) {
       $("guide-token-input").value = "";
@@ -1530,7 +1610,7 @@
     showToast(t("接入信息已就绪，正在打开客户端配置。"));
     // Return focus to the visible result action when the configuration dialog closes.
     $("btn-go-client-guides").focus();
-    openClientGuides();
+    openClientGuides(undefined, state.quickstartToken);
     await refreshAllData();
   });
 

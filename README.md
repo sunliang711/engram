@@ -58,6 +58,8 @@ ENGRAM_CONTEXT_SIGN_KEY="$(openssl rand -hex 32)" docker compose up -d
 
 Engram exposes a **Streamable HTTP** MCP endpoint at `/mcp` (not `stdio`). First issue an API Token (`aim_...`) in the Admin Web UI (`http://localhost:8080`).
 
+To view configuration again, use **Overview → View client configuration** and select an existing client, or paste a saved key. This does not create tenants, members, or keys. **Create key and configure** is only for issuing a new key; restarting the server does not require repeating quickstart.
+
 ### Codex (`~/.codex/config.toml`)
 
 **Option 1: `http_headers` (recommended — works in both Codex Desktop App and CLI)**

@@ -141,8 +141,10 @@
         </details>
 
         <section class="card" id="quickstart-panel" aria-labelledby="quickstart-title">
-          <h2 id="quickstart-title">快速接入</h2>
-          <p class="desc">填写基本信息即可生成客户端密钥。个人使用可保留默认值。</p>
+          <div class="section-heading quickstart-heading">
+            <div><h2 id="quickstart-title">快速接入</h2><p class="desc">新客户端可创建密钥；已有客户端可直接查看配置。</p></div>
+            <button type="button" class="secondary" id="btn-view-client-config">查看客户端配置</button>
+          </div>
           <form id="quickstart-form">
             <div class="form-row">
               <div class="form-group">
@@ -194,7 +196,7 @@
                 </div>
               </div>
             </details>
-            <button type="submit">生成配置</button>
+            <button type="submit">创建密钥并配置</button>
           </form>
           <div id="qs-result" class="hidden success-panel" role="status">
             <h3>接入信息已就绪</h3>
@@ -442,8 +444,12 @@
               <p class="desc" style="margin-bottom:0;">三步完成：添加 MCP 服务、加入记忆使用说明、检查连接。</p>
             </div>
             <div class="guide-credentials">
+              <label for="guide-existing-token">已有客户端（可选）</label>
+              <select id="guide-existing-token"><option value="">使用当前密钥或手动粘贴</option></select>
+              <small class="field-hint">选择已有客户端只读取密钥，不会创建租户、成员或新密钥。</small>
               <label for="guide-token-input" style="margin-bottom:4px;">用于生成配置的客户端密钥（签发后自动填入，也可粘贴）</label>
               <input type="text" id="guide-token-input" placeholder="aim_…，留空则显示占位符" />
+              <small class="field-hint" id="guide-token-hint" role="status" aria-live="polite"></small>
             </div>
           </div>
 

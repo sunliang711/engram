@@ -36,7 +36,7 @@ function harness({ response = {}, gate, language = 'zh-CN' } = {}) {
   $('qs-marker-row').classList.add('hidden');
   $('client-config-modal').classList.add('hidden');
   Object.entries({ 'qs-tenant': 'default', 'qs-subject': 'owner', 'qs-display': 'Owner', 'qs-tenant-role': 'global_writer' }).forEach(([id, value]) => { $(id).value = value; });
-  const state = { revealedTokens: {} };
+  const state = { revealedTokens: {}, tokens: [] };
   const requests = [], errors = [];
   const context = vm.createContext({
     $, state, document, window: {}, navigator: { language }, location: { search: '' }, URLSearchParams,
@@ -57,7 +57,7 @@ function harness({ response = {}, gate, language = 'zh-CN' } = {}) {
   };
   load('  function escapeHtml(', '  // onSubmit');
   load('  function identifier(', '  // statusLabel');
-  load('  function openClientGuides(', '  // activeTab');
+  load('  function clientTokenContext(', '  // activeTab');
   load('  function onSubmit(', '  // Keep wide');
   load('  $("btn-qs-again").addEventListener(', '  onSubmit("login-form"');
   load('  onSubmit("quickstart-form"', '  onSubmit("create-tenant-form"');

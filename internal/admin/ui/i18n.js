@@ -1,5 +1,16 @@
 (function () {
   const english = {
+    "密钥读取已取消，请重新选择客户端。": "Key retrieval was cancelled. Select the client again.",
+    "查看客户端配置": "View client configuration",
+    "创建密钥并配置": "Create key and configure",
+    "新客户端可创建密钥；已有客户端可直接查看配置。": "Create a key for a new client, or view configuration for an existing client.",
+    "已有客户端（可选）": "Existing client (optional)",
+    "使用当前密钥或手动粘贴": "Use the current key or paste one",
+    "选择已有客户端只读取密钥，不会创建租户、成员或新密钥。": "Selecting an existing client only reads its key. It does not create tenants, members, or keys.",
+    "选择已有客户端或粘贴密钥，也可先使用占位符查看配置。": "Select an existing client or paste a key. You can also preview configuration with a placeholder.",
+    "该客户端密钥已失效或已吊销，请选择其他客户端或粘贴有效密钥。": "This client key is no longer available or has been revoked. Select another client or paste a valid key.",
+    "正在获取已有密钥…": "Retrieving the existing key…",
+    "无法还原此密钥明文。请粘贴原密钥查看配置；此操作不会签发新密钥。": "The original key cannot be retrieved. Paste it to view configuration. No new key will be issued.",
     "可选设置 · 项目与权限": "Optional settings · Project and permissions",
     "客户端密钥已保存。可重新打开配置或继续接入其他客户端。": "The client key is saved. Reopen its configuration or add another client.",
     "将此标记保存到项目目录的 .engram-project 文件：": "Save this marker in a .engram-project file in your project directory: ",
