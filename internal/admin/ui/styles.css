@@ -900,7 +900,7 @@ mark { background: rgba(245, 158, 11, 0.25); color: var(--text-warning-strong); 
 .confirm-actions { justify-content: flex-end; margin-top: 22px; }
 .modal-backdrop#confirm-modal { z-index: 1100; }
 /* Long prose blocks (usage rules, CLI commands) wrap so nothing is cut off at the card edge. */
-pre[id$="-rules"], #guide-claude-cli, #qs-result-box, #mig-import-result-box { white-space: pre-wrap; overflow-wrap: anywhere; }
+pre[id$="-rules"], #guide-claude-cli, #mig-import-result-box { white-space: pre-wrap; overflow-wrap: anywhere; }
 .check-result { display: block; margin-top: 10px; font-size: 13px; color: var(--text-muted); }
 .check-result.ok { color: var(--text-success); }
 .check-result.warn { color: var(--text-warning); }

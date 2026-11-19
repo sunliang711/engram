@@ -11,7 +11,7 @@ function harness() {
   const node = () => ({
     value: '', dataset: {}, checked: false, disabled: false, innerHTML: '', textContent: '',
     classList: { toggle() {}, add() {}, remove() {} },
-    scrollIntoView() {},
+    scrollIntoView() {}, focus() {},
     querySelector() { return this.child ||= node(); },
     querySelectorAll() { return []; },
     addEventListener(type, callback) { this[type] = callback; },
@@ -30,7 +30,7 @@ function harness() {
     t: (parts, ...values) => typeof parts === 'string' ? parts : parts.reduce((result, part, i) => result + part + (values[i] ?? ''), ''),
     identifier: () => '', formatDate: () => '', statusLabel: value => value,
     escapeHtml: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
-    clearFormErrors() {}, showToast() {}, openTenant() {}, renderClientGuides() {}, formatMCPConfig: () => '{"mcpServers":{}}',
+    clearFormErrors() {}, showToast() {}, openTenant() {}, openClientGuides() {}, renderClientGuides() {}, formatMCPConfig: () => '{"mcpServers":{}}',
     api: async (url, options) => { requests.push({ url, method: options.method, body: JSON.parse(options.body) }); return { principal_id: principal.id, token: 'test-token' }; },
     refreshAllData: async () => {}, onSubmit: (id, callback) => { submissions[id] = callback; },
   });

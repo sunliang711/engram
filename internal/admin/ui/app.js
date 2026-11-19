@@ -23,7 +23,6 @@
     detailTrigger: null,
     locationReady: false,
     locationRequest: 0,
-    initialized: null,
     toastTimer: null,
     migInspect: null,
     migExportTenantsInitialized: false,
@@ -189,10 +188,6 @@
       $("tab-overview").classList.toggle("needs-setup", !initialized);
       $("overview-title").textContent = initialized ? t("让知识在项目与客户端之间流动") : t("连接你的第一个 AI 客户端");
       $("overview-description").textContent = initialized ? t("浏览最近沉淀的知识，管理项目和客户端接入。") : t("创建空间、关联项目，再复制客户端配置，即可开始共享记忆。");
-      if (state.initialized === null) {
-        $("quickstart-panel").open = !initialized;
-      }
-      state.initialized = initialized;
       renderSelectors();
       renderManagementViews();
       if (!state.locationReady) {
@@ -1490,7 +1485,8 @@
     closeMemoryDetail(false, false);
     $("qs-result").classList.add("hidden");
     $("quickstart-form").classList.remove("hidden");
-    $("qs-result-box").textContent = "";
+    $("qs-marker").textContent = "";
+    $("qs-marker-row").classList.add("hidden");
     closeClientGuides(false);
     $("client-guides-card").open = false;
     document.querySelector(".account-menu").open = false;
@@ -1521,31 +1517,21 @@
     if ($("guide-token-input")) {
       $("guide-token-input").value = state.latestToken;
     }
-    renderClientGuides();
-    // Fold the form away so a second click cannot silently issue another credential.
+    // Hide the completed form so a second click cannot silently issue another credential.
     $("quickstart-form").classList.add("hidden");
     $("qs-result").classList.remove("hidden");
     const notes = [t`已为客户端「${res.token_name}」生成密钥。`];
     if (res.project_reused) notes.push(t`项目「${$("qs-project").value.trim()}」已存在，已直接复用。`);
     if (res.remote_elsewhere) notes.push(t("该仓库地址已关联到其他项目，未重复关联。"));
-    notes.push(t("下一步选择你的 AI 客户端并复制配置。"));
+    notes.push(t("客户端密钥已保存。可重新打开配置或继续接入其他客户端。"));
     $("qs-result-summary").textContent = notes.join("");
-    $("qs-result-box").textContent = JSON.stringify(
-      {
-        tenant_id: res.tenant_id,
-        principal_id: res.principal_id,
-        project_id: res.project_id || null,
-        project_marker: res.project_marker || null,
-        canonical_remote: res.canonical_remote || null,
-        api_token: res.token,
-        mcp_client_config: JSON.parse(formatMCPConfig(res.token)).mcpServers,
-      },
-      null,
-      2
-    );
-    showToast(t("接入信息已就绪，下一步复制客户端配置。"));
+    $("qs-marker").innerHTML = res.project_marker ? identifier(res.project_marker) : "";
+    $("qs-marker-row").classList.toggle("hidden", !res.project_marker);
+    showToast(t("接入信息已就绪，正在打开客户端配置。"));
+    // Return focus to the visible result action when the configuration dialog closes.
+    $("btn-go-client-guides").focus();
+    openClientGuides();
     await refreshAllData();
-    $("qs-result").scrollIntoView({ behavior: "smooth", block: "center" });
   });
 
   onSubmit("create-tenant-form", async (e) => {

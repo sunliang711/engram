@@ -1,5 +1,9 @@
 (function () {
   const english = {
+    "可选设置 · 项目与权限": "Optional settings · Project and permissions",
+    "客户端密钥已保存。可重新打开配置或继续接入其他客户端。": "The client key is saved. Reopen its configuration or add another client.",
+    "将此标记保存到项目目录的 .engram-project 文件：": "Save this marker in a .engram-project file in your project directory: ",
+    "接入信息已就绪，正在打开客户端配置。": "Connection details ready. Opening client configuration.",
     "未知 Agent": "Unknown agent",
     "创建 Agent：{0}": "Created by agent: {0}",
     "最后修改 Agent：{0}": "Last modified by agent: {0}",

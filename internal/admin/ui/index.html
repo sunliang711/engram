@@ -140,8 +140,8 @@
           </div>
         </details>
 
-        <details class="card setup-panel" id="quickstart-panel" open>
-          <summary><span>快速接入</span><span class="summary-hint">创建空间与首个客户端</span></summary>
+        <section class="card" id="quickstart-panel" aria-labelledby="quickstart-title">
+          <h2 id="quickstart-title">快速接入</h2>
           <p class="desc">填写基本信息即可生成客户端密钥。个人使用可保留默认值。</p>
           <form id="quickstart-form">
             <div class="form-row">
@@ -159,24 +159,28 @@
                 <label for="qs-display">显示名称</label>
                 <input type="text" id="qs-display" placeholder="例如：Eagle" value="Owner" required />
               </div>
-            </div>
-            <div class="form-row">
-              <div class="form-group">
-                <label for="qs-project">初始项目（可选）</label>
-                <input type="text" id="qs-project" placeholder="例如：engram" />
-              </div>
-              <div class="form-group">
-                <label for="qs-remote">Git 仓库地址（可选）</label>
-                <input type="text" id="qs-remote" placeholder="git@github.com:team/engram.git" />
-              </div>
               <div class="form-group">
                 <label for="qs-client">客户端名称（可选）</label>
                 <input type="text" id="qs-client" placeholder="例如：macbook-codex" />
                 <small class="field-hint">便于在成员的密钥列表中区分设备，留空则自动命名。</small>
               </div>
             </div>
-            <details class="advanced-options">
-              <summary>高级选项 · 权限与 Monorepo 子目录</summary>
+            <details class="advanced-options" id="qs-options">
+              <summary>可选设置 · 项目与权限</summary>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="qs-project">初始项目（可选）</label>
+                  <input type="text" id="qs-project" placeholder="例如：engram" />
+                </div>
+                <div class="form-group">
+                  <label for="qs-remote">Git 仓库地址（可选）</label>
+                  <input type="text" id="qs-remote" placeholder="git@github.com:team/engram.git" />
+                </div>
+                <div class="form-group">
+                  <label for="qs-workspace">Monorepo 子目录（可选）</label>
+                  <input type="text" id="qs-workspace" placeholder="如 services/api，根目录留空" />
+                </div>
+              </div>
               <div class="form-row">
                 <div class="form-group">
                   <label for="qs-tenant-role">全局记忆权限</label>
@@ -188,24 +192,20 @@
                   <small class="field-hint">独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。</small>
                   <small class="field-hint">未勾选时保留已有成员的创建项目权限，新成员默认关闭；如需关闭，请前往成员权限设置。</small>
                 </div>
-                <div class="form-group">
-                  <label for="qs-workspace">Monorepo 子目录（可选）</label>
-                  <input type="text" id="qs-workspace" placeholder="如 services/api，根目录留空" />
-                </div>
               </div>
             </details>
             <button type="submit">生成配置</button>
           </form>
           <div id="qs-result" class="hidden success-panel" role="status">
             <h3>接入信息已就绪</h3>
-            <p id="qs-result-summary">客户端密钥已保存。下一步选择你的 AI 客户端并复制配置。</p>
+            <p id="qs-result-summary">客户端密钥已保存。可重新打开配置或继续接入其他客户端。</p>
+            <p id="qs-marker-row" class="hidden"><span>将此标记保存到项目目录的 .engram-project 文件：</span><span id="qs-marker"></span></p>
             <div class="button-row">
               <button type="button" id="btn-go-client-guides">配置客户端</button>
               <button type="button" class="secondary" id="btn-qs-again">继续接入</button>
             </div>
-            <details><summary>查看初始化详情</summary><pre class="code-box" id="qs-result-box"></pre></details>
           </div>
-        </details>
+        </section>
         <div class="card" id="recent-memories-card">
           <div class="section-heading"><h2>最近更新的知识</h2><button type="button" class="secondary small" data-open-tab="tab-memories">查看全部</button></div>
           <div id="recent-memories" class="recent-list"></div>
