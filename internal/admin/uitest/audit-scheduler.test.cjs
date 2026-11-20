@@ -29,6 +29,9 @@ test('navigation and panes include Audit Center and Scheduled Tasks tabs', () =>
   assert.doesNotMatch(html, /id="sk-enabled"/);
   assert.match(html, /id="audit-cleanup-modal"/);
   assert.match(html, /id="scheduler-config-modal"/);
+  assert.match(html, /<select id="audit-filter-resource">/);
+  assert.match(html, /<select id="audit-filter-action">/);
+  assert.match(html, /id="audit-detail-summary"/);
 });
 
 test('SPA route parser resolves /audit and /scheduler paths', () => {
@@ -135,6 +138,7 @@ test('audit and scheduler renderers escape dynamic strings and translate in Engl
   assert.doesNotMatch(logsTbody.innerHTML, /<script>|<img /);
   assert.match(logsTbody.innerHTML, /&lt;script&gt;evil\(\)&lt;\/script&gt;/);
   assert.match(logsTbody.innerHTML, /MCP client/);
+  assert.match(logsTbody.innerHTML, /Memories/);
   assert.match(logsTbody.innerHTML, /Details/);
 
   const schedTbody = makeEl();
@@ -239,4 +243,121 @@ test('SafeKeep settings use credentials for status and save without an integrati
   assert.equal(context.state.safekeepSettings, settings);
   assert.equal(elements.get('btn-sk-save').disabled, true);
   assert.equal(context.t('请先在「系统设置」中配置 SafeKeep URL 与 API Key，自动备份由本任务的启用开关控制。'), "Configure the SafeKeep URL and API key in Settings first. This task's enable switch controls automatic backups.");
+});
+
+test('audit logs render human-readable actions, resources, actors, and detail summary', () => {
+  const elements = new Map();
+  const makeEl = () => ({
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
+    querySelector() { return makeEl(); },
+  });
+  const $ = (id) => {
+    if (!elements.has(id)) elements.set(id, makeEl());
+    return elements.get(id);
+  };
+
+  const context = vm.createContext({
+    $,
+    window: { matchMedia: () => ({ matches: false }) },
+    document: { documentElement: { dataset: {} }, querySelectorAll: () => [] },
+    navigator: { language: 'zh-CN' },
+    location: { search: '?lang=zh-CN', href: 'http://localhost/audit?lang=zh-CN' },
+    URL,
+    URLSearchParams,
+    localStorage: { getItem: () => null, setItem() {} },
+    state: {
+      tenants: [{ id: 't1', name: '核心研发团队' }],
+      projects: [{ id: 'p1', name: 'engram' }],
+      principals: [{ id: 'u1', display_name: '张三' }],
+      tokens: [{ id: 'tok1', name: 'Codex 本地密钥', token_prefix: 'eng_1234' }],
+      schedulerTasks: [{ name: 'audit_log_cleanup', display_name: '定时清理过期审计日志' }],
+      auditTaskDefs: [{ task_type: 'security_events', name: '安全事件与异常操作审计' }],
+      auditLogs: [
+        {
+          id: 'log-1',
+          created_at: '2026-11-20T00:00:00Z',
+          source: 'mcp',
+          action: 'mcp.memory_create',
+          actor_type: 'principal',
+          actor_name: '张三',
+          agent_name: 'Codex',
+          tenant_id: 't1',
+          project_id: 'p1',
+          resource_type: 'memory',
+          resource_id: 'mem-1234567890',
+          status: 'success',
+          duration_ms: 14,
+          details: { title: '发布前检查规范', scope: 'project' },
+        },
+        {
+          id: 'log-2',
+          created_at: '2026-11-20T00:01:00Z',
+          source: 'admin_ui',
+          action: 'token.revoke',
+          actor_type: 'admin',
+          actor_name: 'admin',
+          resource_type: 'api_token',
+          resource_id: 'tok1',
+          status: 'success',
+          duration_ms: 5,
+          details: {},
+        },
+        {
+          id: 'log-3',
+          created_at: '2026-11-20T00:02:00Z',
+          source: 'scheduler',
+          action: 'scheduler.task_run',
+          actor_type: 'scheduler',
+          actor_name: 'scheduler',
+          resource_type: 'scheduled_task',
+          resource_id: 'audit_log_cleanup',
+          status: 'success',
+          duration_ms: 32,
+          details: { summary: '清理 12 条过期日志' },
+        },
+      ],
+      auditTotal: 3,
+      auditPage: 1,
+      auditPageSize: 20,
+    },
+    escapeHtml: (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
+    formatDate: (s) => String(s),
+    api: async () => ({}),
+    showToast: () => {},
+    onSubmit: () => {},
+  });
+
+  vm.runInContext(i18nSource, context);
+  context.t = context.window.EngramI18n.t;
+  context.locale = context.window.EngramI18n.locale;
+
+  const start = appSource.indexOf('  // Audit Center & Scheduled Tasks');
+  const end = appSource.indexOf('  document.querySelectorAll(".preset-chips")', start);
+  vm.runInContext(appSource.slice(start, end), context);
+
+  const logsTbody = makeEl();
+  elements.set('audit-logs-table', { querySelector: () => logsTbody });
+  context.renderAuditLogsTable();
+
+  assert.match(logsTbody.innerHTML, /创建记忆/);
+  assert.match(logsTbody.innerHTML, /发布前检查规范/);
+  assert.match(logsTbody.innerHTML, /项目知识/);
+  assert.match(logsTbody.innerHTML, /吊销客户端密钥/);
+  assert.match(logsTbody.innerHTML, /Codex 本地密钥/);
+  assert.match(logsTbody.innerHTML, /eng_1234…/);
+  assert.match(logsTbody.innerHTML, /执行定时任务/);
+  assert.match(logsTbody.innerHTML, /定时清理过期审计日志/);
+  assert.match(logsTbody.innerHTML, /自动调度/);
+  assert.doesNotMatch(logsTbody.innerHTML, /<td><code>mcp\.memory_create<\/code><\/td>/);
+  assert.doesNotMatch(logsTbody.innerHTML, /<td>memory ·/);
+
+  context.openAuditDetail(context.state.auditLogs[0]);
+  const summaryHtml = elements.get('audit-detail-summary').innerHTML;
+  assert.match(summaryHtml, /创建记忆 \(mcp\.memory_create\)/);
+  assert.match(summaryHtml, /核心研发团队/);
+  assert.match(summaryHtml, /engram/);
+  assert.match(summaryHtml, /发布前检查规范/);
 });

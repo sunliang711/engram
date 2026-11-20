@@ -776,7 +776,7 @@
             <form id="filter-audit-form" class="filter-bar">
               <div class="filter-search">
                 <label for="audit-filter-q" class="sr-only">搜索审计日志</label>
-                <input type="search" id="audit-filter-q" placeholder="搜索操作、执行者、Agent、资源 ID 或错误信息" />
+                <input type="search" id="audit-filter-q" placeholder="搜索执行者、Agent、操作或错误信息" />
                 <button type="submit">搜索</button>
               </div>
               <div class="filter-row">
@@ -800,8 +800,11 @@
                 <label>租户
                   <select id="audit-filter-tenant"><option value="">全部</option></select>
                 </label>
+                <label>资源类型
+                  <select id="audit-filter-resource"><option value="">全部</option></select>
+                </label>
                 <label>操作类型
-                  <input type="text" id="audit-filter-action" placeholder="如 memory.create" />
+                  <select id="audit-filter-action"><option value="">全部</option></select>
                 </label>
                 <button type="button" class="secondary small" id="btn-clear-audit-filters">清除筛选</button>
               </div>
@@ -1172,7 +1175,11 @@
         <button type="button" class="secondary small" id="btn-close-audit-detail">关闭</button>
       </div>
       <div id="audit-detail-meta" class="detail-meta"></div>
-      <pre class="code-box" id="audit-detail-json"></pre>
+      <dl id="audit-detail-summary" class="audit-detail-grid"></dl>
+      <details class="audit-raw-details">
+        <summary>原始技术数据（JSON）</summary>
+        <pre class="code-box" id="audit-detail-json"></pre>
+      </details>
     </div>
   </div>
 

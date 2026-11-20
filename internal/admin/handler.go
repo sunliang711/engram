@@ -1861,10 +1861,11 @@ func (h *Handler) handleRevealToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var ciphertext string
+	var ciphertext, tokenName, tokenPrefix string
+	var tenantID uuid.UUID
 	err = h.pool.QueryRow(r.Context(), `
-		SELECT token_ciphertext FROM api_tokens WHERE id = $1
-	`, id).Scan(&ciphertext)
+		SELECT token_ciphertext, name, token_prefix, tenant_id FROM api_tokens WHERE id = $1
+	`, id).Scan(&ciphertext, &tokenName, &tokenPrefix, &tenantID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "token not found"))
@@ -1883,9 +1884,14 @@ func (h *Handler) handleRevealToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tenantID,
 		Action:       "token.reveal",
 		ResourceType: "api_token",
 		ResourceID:   id.String(),
+		Details: map[string]any{
+			"token_name":   tokenName,
+			"token_prefix": tokenPrefix,
+		},
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":    id,
@@ -1910,6 +1916,11 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid token id"))
 		return
 	}
+	var tokenName, tokenPrefix string
+	var tenantID uuid.UUID
+	hasMeta := h.pool.QueryRow(r.Context(), `
+		SELECT name, token_prefix, tenant_id FROM api_tokens WHERE id = $1
+	`, id).Scan(&tokenName, &tokenPrefix, &tenantID) == nil
 	_, err = h.pool.Exec(r.Context(), `
 		UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
 	`, id)
@@ -1917,11 +1928,19 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "revoke token", err))
 		return
 	}
-	h.recordAdminAudit(r, audit.Entry{
+	entry := audit.Entry{
 		Action:       "token.revoke",
 		ResourceType: "api_token",
 		ResourceID:   id.String(),
-	})
+	}
+	if hasMeta {
+		entry.TenantID = &tenantID
+		entry.Details = map[string]any{
+			"token_name":   tokenName,
+			"token_prefix": tokenPrefix,
+		}
+	}
+	h.recordAdminAudit(r, entry)
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "revoked"})
 }
 
@@ -2200,10 +2219,15 @@ func (h *Handler) handleRestoreMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordAdminAudit(r, audit.Entry{
 		TenantID:     &tid,
+		ProjectID:    restored.ProjectID,
 		Action:       "memory.restore",
 		ResourceType: "memory",
 		ResourceID:   memID.String(),
-		Details:      map[string]any{"expected_version": req.ExpectedVersion},
+		Details: map[string]any{
+			"expected_version": req.ExpectedVersion,
+			"title":            restored.Title,
+			"scope":            restored.Scope,
+		},
 	})
 	writeJSON(w, http.StatusOK, restored)
 }
@@ -2261,10 +2285,15 @@ func (h *Handler) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordAdminAudit(r, audit.Entry{
 		TenantID:     &tid,
+		ProjectID:    deleted.ProjectID,
 		Action:       "memory.delete",
 		ResourceType: "memory",
 		ResourceID:   memID.String(),
-		Details:      map[string]any{"expected_version": req.ExpectedVersion},
+		Details: map[string]any{
+			"expected_version": req.ExpectedVersion,
+			"title":            deleted.Title,
+			"scope":            deleted.Scope,
+		},
 	})
 	writeJSON(w, http.StatusOK, deleted)
 }
@@ -2293,10 +2322,16 @@ func (h *Handler) handlePinMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	h.recordAdminAudit(r, audit.Entry{
 		TenantID:     &tid,
+		ProjectID:    updated.ProjectID,
 		Action:       action,
 		ResourceType: "memory",
 		ResourceID:   memID.String(),
-		Details:      map[string]any{"expected_version": req.ExpectedVersion, "is_pinned": req.IsPinned},
+		Details: map[string]any{
+			"expected_version": req.ExpectedVersion,
+			"is_pinned":        req.IsPinned,
+			"title":            updated.Title,
+			"scope":            updated.Scope,
+		},
 	})
 	writeJSON(w, http.StatusOK, updated)
 }

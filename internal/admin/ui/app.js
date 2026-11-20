@@ -406,6 +406,8 @@
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
     if ($("audit-filter-tenant")) fillSelect("audit-filter-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
+    if ($("audit-filter-resource")) fillSelect("audit-filter-resource", Object.entries(AUDIT_RESOURCE_TYPES));
+    if ($("audit-filter-action")) fillSelect("audit-filter-action", Object.entries(AUDIT_ACTIONS));
     if ($("audit-task-tenant")) fillSelect("audit-task-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
     renderMigrationSelectors();
   }
@@ -2915,6 +2917,257 @@
     low: t("低风险"),
     info: t("提示"),
   };
+  const AUDIT_ACTIONS = {
+    "mcp.auth": t("MCP 客户端认证"),
+    "mcp.project_register": t("注册项目"),
+    "mcp.memory_discover": t("识别项目与加载索引"),
+    "mcp.memory_query": t("检索记忆"),
+    "mcp.memory_changes": t("同步记忆变更"),
+    "mcp.memory_read": t("读取记忆"),
+    "mcp.memory_create": t("创建记忆"),
+    "mcp.memory_update": t("更新记忆"),
+    "mcp.memory_delete": t("删除记忆"),
+    "mcp.memory_promote": t("提升为全局记忆"),
+    "admin.login": t("登录控制台"),
+    "admin.logout": t("退出控制台"),
+    "admin.password_change": t("修改管理员密码"),
+    "tenant.create": t("创建租户"),
+    "tenant.update": t("更新租户"),
+    "tenant.delete": t("删除租户"),
+    "principal.create": t("创建成员"),
+    "principal.bind": t("关联已有成员"),
+    "principal.update_role": t("调整成员权限"),
+    "principal.upsert": t("配置成员"),
+    "principal.update": t("更新成员信息"),
+    "principal.remove_from_tenant": t("从租户移除成员"),
+    "principal.delete": t("删除成员"),
+    "project.create": t("创建项目"),
+    "project.member_upsert": t("设置项目成员权限"),
+    "project.member_revoke": t("撤销项目成员权限"),
+    "project.remote_add": t("绑定仓库地址"),
+    "token.issue": t("签发客户端密钥"),
+    "token.reveal": t("查看密钥明文"),
+    "token.revoke": t("吊销客户端密钥"),
+    "memory.restore": t("恢复记忆"),
+    "memory.delete": t("移入回收站"),
+    "memory.pin": t("置顶记忆"),
+    "memory.unpin": t("取消置顶记忆"),
+    "memory.purge": t("彻底清理记忆"),
+    "export.markdown": t("导出 Markdown 到目录"),
+    "export.archive": t("下载 Markdown 压缩包"),
+    "migration.export": t("导出迁移包"),
+    "migration.import": t("导入迁移包"),
+    "integration.safekeep_update": t("更新 SafeKeep 配置"),
+    "integration.safekeep_reveal": t("查看 SafeKeep 凭据明文"),
+    "integration.safekeep_test": t("测试 SafeKeep 连接"),
+    "integration.safekeep_backup": t("上传备份到 SafeKeep"),
+    "audit.export": t("导出审计日志"),
+    "audit.cleanup": t("清理过期审计日志"),
+    "audit.task_run": t("执行审计巡检任务"),
+    "scheduler.task_run": t("执行定时任务"),
+    "scheduler.task_update": t("修改定时任务配置"),
+  };
+  const AUDIT_RESOURCE_TYPES = {
+    memory: t("知识条目"),
+    project: t("项目"),
+    tenant: t("租户"),
+    principal: t("成员"),
+    api_token: t("客户端密钥"),
+    project_member: t("项目成员"),
+    project_repository: t("项目仓库"),
+    admin_session: t("控制台会话"),
+    admin_account: t("管理员账号"),
+    audit_log: t("审计日志"),
+    audit_task: t("审计任务"),
+    scheduled_task: t("定时任务"),
+    export: t("知识导出"),
+    migration: t("迁移包"),
+    integration: t("外部集成"),
+    mcp: t("MCP 接口"),
+    system: t("系统"),
+    idempotency_request: t("幂等记录"),
+  };
+  const AUDIT_TASK_NAMES = {
+    credential_hygiene: t("凭据与访问合规审计"),
+    security_events: t("安全事件与异常操作审计"),
+    data_integrity: t("知识库数据与治理完整性审计"),
+  };
+  const SCHEDULER_TASK_NAMES = {
+    audit_log_cleanup: t("定时清理过期审计日志"),
+    safekeep_migration_backup: t("定时导出迁移包到 SafeKeep"),
+  };
+  const AUDIT_ROLE_LABELS = {
+    none: t("无权限"),
+    reader: t("只读"),
+    writer: t("读写"),
+    global_reader: t("全局只读"),
+    global_writer: t("全局读写"),
+  };
+
+  function auditActionLabel(action) {
+    return (action && AUDIT_ACTIONS[action]) || action || "—";
+  }
+
+  function auditActorLabel(entry) {
+    if (entry.actor_name === "scheduler" || (!entry.actor_name && entry.actor_type === "scheduler")) return t("自动调度");
+    if (entry.actor_name === "system" || (!entry.actor_name && entry.actor_type === "system")) return t("系统");
+    if (!entry.actor_name && entry.actor_type === "anonymous") return t("匿名请求");
+    return entry.actor_name || entry.actor_id || entry.actor_type || "—";
+  }
+
+  function auditFindTenantName(id) {
+    if (!id || !Array.isArray(state.tenants)) return "";
+    const found = state.tenants.find((item) => item.id === id);
+    return found ? (found.name || "") : "";
+  }
+
+  function auditFindProjectName(id) {
+    if (!id || !Array.isArray(state.projects)) return "";
+    const found = state.projects.find((item) => item.id === id);
+    return found ? (found.name || "") : "";
+  }
+
+  function auditFindPrincipalName(id) {
+    if (!id || !Array.isArray(state.principals)) return "";
+    const found = state.principals.find((item) => item.id === id);
+    return found ? (found.display_name || "") : "";
+  }
+
+  function auditFindToken(id) {
+    if (!id || !Array.isArray(state.tokens)) return null;
+    return state.tokens.find((item) => item.id === id) || null;
+  }
+
+  function auditShortID(id) {
+    return id ? `#${String(id).slice(0, 8)}` : "";
+  }
+
+  function auditMemoryScopeLabel(scope) {
+    if (scope === "global") return t("全局知识");
+    if (scope === "project") return t("项目知识");
+    return "";
+  }
+
+  // auditResourceSummary formats technical resource types, IDs, and details into human-readable labels.
+  function auditResourceSummary(entry) {
+    const d = (entry && entry.details) || {};
+    const typeLabel = entry.resource_type ? (AUDIT_RESOURCE_TYPES[entry.resource_type] || entry.resource_type) : "";
+    let target = "";
+    let detail = "";
+
+    switch (entry.resource_type) {
+      case "memory":
+        if (d.title) {
+          target = d.title;
+          detail = auditMemoryScopeLabel(d.scope);
+        } else if (entry.action === "mcp.memory_query") {
+          target = d.query ? t`关键词「${d.query}」` : t("知识列表");
+          if (typeof d.result_count === "number") detail = t`命中 ${d.result_count} 条`;
+        } else if (entry.action === "mcp.memory_changes") {
+          target = t("增量变更");
+          if (typeof d.event_count === "number") detail = t`${d.event_count} 条变更`;
+        } else if (entry.action === "memory.purge") {
+          target = d.scope === "global" ? t("全局知识") : d.scope === "project" ? t("项目知识") : t("回收站");
+          if (typeof d.purged === "number") detail = t`清理 ${d.purged} 条`;
+        } else {
+          target = auditShortID(entry.resource_id);
+          detail = auditFindProjectName(entry.project_id) || auditMemoryScopeLabel(d.scope);
+        }
+        break;
+      case "project":
+        target = d.project_name || d.name || auditFindProjectName(entry.resource_id || entry.project_id);
+        if (!target && entry.action === "mcp.memory_discover" && d.mode === "global_only") {
+          target = t("仅全局记忆");
+        } else if (!target) {
+          target = auditShortID(entry.resource_id);
+        }
+        break;
+      case "tenant":
+        target = d.name || auditFindTenantName(entry.resource_id || entry.tenant_id) || auditShortID(entry.resource_id);
+        break;
+      case "principal":
+        target = d.display_name || auditFindPrincipalName(entry.resource_id) || auditShortID(entry.resource_id);
+        if (d.tenant_role) detail = AUDIT_ROLE_LABELS[d.tenant_role] || d.tenant_role;
+        break;
+      case "project_member": {
+        const projName = auditFindProjectName(d.project_id || entry.project_id);
+        const memberName = auditFindPrincipalName(entry.resource_id);
+        target = [projName, memberName].filter(Boolean).join(" / ") || auditShortID(entry.resource_id);
+        if (d.role) detail = t`权限：${AUDIT_ROLE_LABELS[d.role] || d.role}`;
+        break;
+      }
+      case "project_repository":
+        target = d.canonical_remote || auditShortID(entry.resource_id);
+        if (d.workspace_path) detail = t`子目录：${d.workspace_path}`;
+        break;
+      case "api_token": {
+        const tok = auditFindToken(entry.resource_id);
+        const name = d.token_name || (tok && tok.name) || "";
+        const prefix = d.token_prefix || (tok && tok.token_prefix) || "";
+        target = name || (prefix ? `${prefix}…` : auditShortID(entry.resource_id));
+        if (name && prefix) detail = `${prefix}…`;
+        break;
+      }
+      case "scheduled_task": {
+        const task = Array.isArray(state.schedulerTasks) && state.schedulerTasks.find((item) => item.name === entry.resource_id);
+        target = (task && t(task.display_name)) || SCHEDULER_TASK_NAMES[entry.resource_id] || entry.resource_id || "";
+        if (d.summary) detail = String(d.summary);
+        else if (typeof d.enabled === "boolean") detail = d.enabled ? t("已启用") : t("已停用");
+        break;
+      }
+      case "audit_task": {
+        const def = Array.isArray(state.auditTaskDefs) && state.auditTaskDefs.find((item) => item.task_type === entry.resource_id);
+        target = (def && t(def.name)) || AUDIT_TASK_NAMES[entry.resource_id] || entry.resource_id || "";
+        if (typeof d.findings_count === "number") detail = t`发现 ${d.findings_count} 项`;
+        break;
+      }
+      case "integration":
+        target = entry.resource_id === "safekeep" ? "SafeKeep" : (entry.resource_id || "");
+        if (d.filename) detail = d.filename;
+        else if (d.field) detail = d.field === "api_key" ? "API Key" : d.field === "backup_passphrase" ? t("备份加密口令") : d.field;
+        else if (entry.action === "integration.safekeep_test") detail = d.ok ? t("连接正常") : t("连接异常");
+        break;
+      case "audit_log":
+        if (entry.action === "audit.export") target = t`共 ${d.exported_count ?? 0} 条`;
+        else if (entry.action === "audit.cleanup") {
+          target = t`删除 ${d.deleted_count ?? 0} 条`;
+          if (d.retention) detail = t`保留 ${d.retention}`;
+        }
+        break;
+      case "export":
+        if (typeof d.exported_count === "number") target = t`共 ${d.exported_count} 条知识`;
+        break;
+      case "migration":
+        if (d.format === "engram-system-snapshot" || d.mode === "system") target = t("全量系统快照");
+        else if (d.format === "engram-knowledge-bundle" || d.mode === "knowledge") target = t("知识库迁移包");
+        if (typeof d.memories === "number") detail = t`${d.memories} 条知识`;
+        else if (typeof d.memories_imported === "number") detail = t`导入 ${d.memories_imported} 条知识`;
+        break;
+      case "admin_account":
+        target = entry.resource_id || "";
+        break;
+      case "admin_session":
+      case "mcp":
+        if (entry.client_ip) target = t`来自 ${entry.client_ip}`;
+        break;
+      default:
+        target = entry.resource_id || "";
+        break;
+    }
+
+    return { typeLabel, target, detail, rawId: entry.resource_id || "" };
+  }
+
+  function renderAuditResourceCell(entry) {
+    const info = auditResourceSummary(entry);
+    if (!info.typeLabel && !info.target && !info.detail) return "—";
+    const mainParts = [];
+    if (info.typeLabel) mainParts.push(`<span class="audit-resource-type">${escapeHtml(info.typeLabel)}</span>`);
+    if (info.target) mainParts.push(`<span class="audit-resource-target">${escapeHtml(info.target)}</span>`);
+    const sub = info.detail ? `<div class="audit-resource-sub">${escapeHtml(info.detail)}</div>` : "";
+    const titleAttr = info.rawId ? ` title="${escapeHtml(info.rawId)}"` : "";
+    return `<div class="audit-resource-cell"${titleAttr}><div class="audit-resource-main">${mainParts.join("")}</div>${sub}</div>`;
+  }
 
   function auditStatusBadgeClass(status) {
     if (status === "success") return "success";
@@ -2958,11 +3211,13 @@
     const src = $("audit-filter-source") ? $("audit-filter-source").value : "";
     const status = $("audit-filter-status") ? $("audit-filter-status").value : "";
     const tenant = $("audit-filter-tenant") ? $("audit-filter-tenant").value : "";
+    const resourceType = $("audit-filter-resource") ? $("audit-filter-resource").value : "";
     const action = $("audit-filter-action") ? $("audit-filter-action").value.trim() : "";
     if (q) p.set("q", q);
     if (src) p.set("source", src);
     if (status) p.set("status", status);
     if (tenant) p.set("tenant_id", tenant);
+    if (resourceType) p.set("resource_type", resourceType);
     if (action) p.set("action", action);
     if (includePaging) {
       p.set("page", state.auditPage);
@@ -3013,17 +3268,16 @@
     }
 
     tbody.innerHTML = state.auditLogs.map((entry) => {
-      const actor = entry.actor_name || entry.actor_id || entry.actor_type || "—";
+      const actor = auditActorLabel(entry);
       const actorSub = entry.agent_name ? `<div class="muted" style="font-size:12px;">${escapeHtml(entry.agent_name)}</div>` : "";
-      const resLabel = entry.resource_type
-        ? `${escapeHtml(entry.resource_type)}${entry.resource_id ? ` · <code>${escapeHtml(entry.resource_id.slice(0, 12))}</code>` : ""}`
-        : "—";
+      const actionLabel = auditActionLabel(entry.action);
+      const resHtml = renderAuditResourceCell(entry);
       return `<tr>
         <td><time title="${escapeHtml(formatDate(entry.created_at))}">${escapeHtml(formatDate(entry.created_at))}</time></td>
         <td><span class="badge">${escapeHtml(AUDIT_SOURCES[entry.source] || entry.source || "—")}</span></td>
-        <td><code>${escapeHtml(entry.action)}</code></td>
+        <td><span class="audit-action-label" title="${escapeHtml(entry.action || "")}">${escapeHtml(actionLabel)}</span></td>
         <td><div>${escapeHtml(actor)}</div>${actorSub}</td>
-        <td>${resLabel}</td>
+        <td>${resHtml}</td>
         <td><span class="badge ${auditStatusBadgeClass(entry.status)}">${escapeHtml(AUDIT_STATUSES[entry.status] || entry.status)}</span></td>
         <td>${entry.duration_ms || 0} ms</td>
         <td><button type="button" class="secondary small btn-audit-detail" data-id="${entry.id}">${t("详情")}</button></td>
@@ -3033,15 +3287,37 @@
 
   function openAuditDetail(entry) {
     if (!entry || !$("audit-detail-modal")) return;
+    const actionLabel = auditActionLabel(entry.action);
+    const resInfo = auditResourceSummary(entry);
     const meta = [
       `<span class="badge ${auditStatusBadgeClass(entry.status)}">${escapeHtml(AUDIT_STATUSES[entry.status] || entry.status)}</span>`,
       `<span class="badge">${escapeHtml(AUDIT_SOURCES[entry.source] || entry.source)}</span>`,
-      `<code>${escapeHtml(entry.action)}</code>`,
+      `<strong>${escapeHtml(actionLabel)}</strong>`,
       `<span class="meta-text">${escapeHtml(formatDate(entry.created_at))}</span>`,
     ];
-    if (entry.request_id) meta.push(`<span class="meta-text">Request: <code>${escapeHtml(entry.request_id)}</code></span>`);
-    if (entry.client_ip) meta.push(`<span class="meta-text">IP: <code>${escapeHtml(entry.client_ip)}</code></span>`);
     $("audit-detail-meta").innerHTML = meta.join("");
+    if ($("audit-detail-summary")) {
+      const rows = [
+        [t("操作"), entry.action && actionLabel !== entry.action ? `${actionLabel} (${entry.action})` : actionLabel],
+        [t("执行者"), auditActorLabel(entry) + (entry.agent_name ? ` · Agent: ${entry.agent_name}` : "")],
+        [t("资源类型"), resInfo.typeLabel || "—"],
+        [t("资源对象"), [resInfo.target, resInfo.detail].filter(Boolean).join(" · ") || "—"],
+      ];
+      if (entry.resource_id) rows.push([t("资源标识"), entry.resource_id]);
+      const tenantName = auditFindTenantName(entry.tenant_id);
+      if (entry.tenant_id) rows.push([t("所属租户"), tenantName || entry.tenant_id]);
+      const projectName = auditFindProjectName(entry.project_id) || (entry.details && entry.details.project_name);
+      if (entry.project_id || projectName) rows.push([t("所属项目"), projectName || entry.project_id]);
+      rows.push([t("耗时"), `${entry.duration_ms || 0} ms`]);
+      if (entry.client_ip) rows.push([t("来源 IP"), entry.client_ip]);
+      if (entry.request_id) rows.push([t("请求编号"), entry.request_id]);
+      if (entry.error_message) rows.push([t("错误信息"), entry.error_code ? `[${entry.error_code}] ${entry.error_message}` : entry.error_message]);
+      $("audit-detail-summary").innerHTML = rows
+        .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`)
+        .join("");
+    }
+    const rawDetails = $("audit-detail-modal").querySelector && $("audit-detail-modal").querySelector(".audit-raw-details");
+    if (rawDetails) rawDetails.open = false;
     $("audit-detail-json").textContent = JSON.stringify(entry, null, 2);
     $("audit-detail-modal").classList.remove("hidden");
   }
@@ -3483,7 +3759,7 @@
       try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
     });
   }
-  ["audit-filter-source", "audit-filter-status", "audit-filter-tenant"].forEach((id) => {
+  ["audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-resource", "audit-filter-action"].forEach((id) => {
     if ($(id)) {
       $(id).addEventListener("change", async () => {
         state.auditPage = 1;
@@ -3500,7 +3776,7 @@
   }
   if ($("btn-clear-audit-filters")) {
     $("btn-clear-audit-filters").addEventListener("click", async () => {
-      ["audit-filter-q", "audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-action"].forEach((id) => {
+      ["audit-filter-q", "audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-resource", "audit-filter-action"].forEach((id) => {
         if ($(id)) $(id).value = "";
       });
       state.auditPage = 1;
