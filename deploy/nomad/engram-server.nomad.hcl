@@ -97,8 +97,8 @@ job "engram-server" {
       }
 
       resources {
-        cpu    = 500
-        memory = 512
+        cpu    = 200
+        memory = 50
       }
     }
   }
