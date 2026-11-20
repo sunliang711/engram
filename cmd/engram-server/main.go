@@ -22,6 +22,7 @@ import (
 	"engram/internal/notify"
 	"engram/internal/observability"
 	"engram/internal/project"
+	"engram/internal/safekeep"
 	"engram/internal/scheduler"
 	"engram/internal/version"
 )
@@ -74,17 +75,10 @@ func main() {
 	resolver := project.NewResolver(database.Pool)
 	hub := notify.NewHub(database.Pool, signer, log)
 	auditSvc := audit.NewService(database.Pool, cfg.Audit, metrics, log)
-	sched := scheduler.New(database.Pool, cfg.Scheduler, auditSvc, metrics, log)
-	if err := sched.RegisterBuiltinTasks(cfg.Audit); err != nil {
-		log.Fatal().Err(err).Msg("failed to register builtin scheduled tasks")
+	safekeepSvc := safekeep.NewService(database.Pool, adminAuth, log)
+	if err := safekeepSvc.SeedDefaults(ctx, cfg.Safekeep); err != nil {
+		log.Fatal().Err(err).Msg("failed to seed safekeep settings")
 	}
-	if err := sched.Sync(ctx); err != nil {
-		log.Fatal().Err(err).Msg("failed to sync scheduled tasks")
-	}
-
-	go hub.RunListenLoop(ctx)
-	go exp.RunPeriodicLoop(ctx)
-	go sched.RunLoop(ctx)
 
 	svc := memory.NewService(
 		database.Pool,
@@ -111,8 +105,24 @@ func main() {
 
 	adminHandler := admin.NewHandler(database.Pool, adminAuth, svc, exp, log)
 	adminHandler.SetAuditService(auditSvc)
+	adminHandler.SetSafekeepService(safekeepSvc)
+
+	sched := scheduler.New(database.Pool, cfg.Scheduler, auditSvc, metrics, log)
+	if err := sched.RegisterBuiltinTasks(cfg.Audit); err != nil {
+		log.Fatal().Err(err).Msg("failed to register builtin scheduled tasks")
+	}
+	if err := sched.RegisterSafekeepBackupTask(safekeepSvc, adminHandler.ExportMigrationArchive); err != nil {
+		log.Fatal().Err(err).Msg("failed to register safekeep backup task")
+	}
+	if err := sched.Sync(ctx); err != nil {
+		log.Fatal().Err(err).Msg("failed to sync scheduled tasks")
+	}
 	adminHandler.SetScheduler(sched)
 	adminHandler.RegisterRoutes(mcpServer.Mux())
+
+	go hub.RunListenLoop(ctx)
+	go exp.RunPeriodicLoop(ctx)
+	go sched.RunLoop(ctx)
 
 	httpServer := &http.Server{
 		Addr:         cfg.Server.ListenAddr,

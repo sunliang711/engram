@@ -909,5 +909,8 @@ V1 稳定后再评估：
    - 自动记录 MCP `/mcp` 工具调用及鉴权失败事件、管理控制台 `/api/admin/*` 敏感操作及后台定时任务执行记录，并对口令、密钥明文、Session/Context Token 等敏感字段执行脱敏拦截。
    - 提供多维检索、统计概览、JSON 导出、按保留时长分批清理，以及三项内置审计巡检任务：凭据与访问合规审计（`credential_hygiene`）、安全事件与异常操作审计（`security_events`）与知识库数据与治理完整性审计（`data_integrity`）。
 2. **定时任务模块（`internal/scheduler`）**：
-   - 基于 PostgreSQL `scheduled_tasks` 持久化调度配置与状态，通过 `pg_try_advisory_lock` 实现多实例互斥执行，并将每次自动/手动运行记录写入 `scheduled_task_runs`。
-   - 先置内置任务 `audit_log_cleanup`（定时清理过期审计日志），支持在配置文件 `[audit]` / `[scheduler]`、环境变量及管理后台 `/scheduler` 实时调整启用状态、执行间隔（如 `1h`、`15m`）、日志保留时长（如 `30d`、`720h`、`24h`）及单批清理条数上限，并支持立即手动触发。
+   - 基于 PostgreSQL `scheduled_tasks` 持久化调度配置与状态，通过 `pg_try_advisory_lock` 实现多实例互斥执行，并将每次自动/手动运行记录写入 `scheduled_task_runs` 与 `audit_logs`。
+   - 内置任务 `audit_log_cleanup`（定时清理过期审计日志）与 `safekeep_migration_backup`（定时导出系统或知识库迁移包并上传至 SafeKeep），每个任务均可独立配置启用/禁用、执行间隔及任务参数，并支持立即手动触发。
+3. **SafeKeep 远程备份集成（`internal/safekeep`，迁移 `009_safekeep_integration.sql`）**：
+   - 在 `safekeep_settings` 表持久化 SafeKeep 服务 URL、使用服务端签名密钥 AES-256-GCM 加密的 API Key 与可选迁移包加密口令，以及默认上传模式（`sync`/`async`）、子路径与目标上游。
+   - 在「系统设置」（`/settings`）提供地址/API Key 配置、`/api/v1/upstreams` 连通性测试与一键手动备份，在「系统迁移」（`/migration`）支持导出后直接上传 SafeKeep。

@@ -29,6 +29,7 @@ type Config struct {
 	Export    ExportConfig    `toml:"export" json:"export"`
 	Audit     AuditConfig     `toml:"audit" json:"audit"`
 	Scheduler SchedulerConfig `toml:"scheduler" json:"scheduler"`
+	Safekeep  SafekeepConfig  `toml:"safekeep" json:"safekeep"`
 	Log       LogConfig       `toml:"log" json:"log"`
 }
 
@@ -88,6 +89,17 @@ type SchedulerConfig struct {
 	AuditCleanupEnabled   bool          `toml:"audit_cleanup_enabled" json:"audit_cleanup_enabled"`
 	AuditCleanupInterval  time.Duration `toml:"audit_cleanup_interval" json:"audit_cleanup_interval"`
 	AuditCleanupBatchSize int           `toml:"audit_cleanup_batch_size" json:"audit_cleanup_batch_size"`
+	SafekeepBackupEnabled bool          `toml:"safekeep_backup_enabled" json:"safekeep_backup_enabled"`
+	SafekeepBackupInterval time.Duration `toml:"safekeep_backup_interval" json:"safekeep_backup_interval"`
+}
+
+type SafekeepConfig struct {
+	Enabled        bool   `toml:"enabled" json:"enabled"`
+	BaseURL        string `toml:"base_url" json:"base_url"`
+	APIKey         string `toml:"api_key" json:"api_key"`
+	DefaultMode    string `toml:"default_mode" json:"default_mode"`
+	DefaultPath    string `toml:"default_path" json:"default_path"`
+	DefaultTargets string `toml:"default_targets" json:"default_targets"`
 }
 
 type LogConfig struct {
@@ -148,10 +160,17 @@ func Default() Config {
 			LogReads:  true,
 		},
 		Scheduler: SchedulerConfig{
-			Enabled:               true,
-			AuditCleanupEnabled:   true,
-			AuditCleanupInterval:  1 * time.Hour,
-			AuditCleanupBatchSize: 1000,
+			Enabled:                true,
+			AuditCleanupEnabled:    true,
+			AuditCleanupInterval:   1 * time.Hour,
+			AuditCleanupBatchSize:  1000,
+			SafekeepBackupEnabled:  false,
+			SafekeepBackupInterval: 24 * time.Hour,
+		},
+		Safekeep: SafekeepConfig{
+			Enabled:     false,
+			DefaultMode: "sync",
+			DefaultPath: "engram",
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -324,6 +343,23 @@ func applyEnvOverrides(cfg *Config) {
 			cfg.Scheduler.AuditCleanupBatchSize = n
 		}
 	}
+	if v := os.Getenv("ENGRAM_SAFEKEEP_ENABLED"); v != "" {
+		cfg.Safekeep.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ENGRAM_SAFEKEEP_URL"); v != "" {
+		cfg.Safekeep.BaseURL = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ENGRAM_SAFEKEEP_API_KEY"); v != "" {
+		cfg.Safekeep.APIKey = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("ENGRAM_SAFEKEEP_BACKUP_ENABLED"); v != "" {
+		cfg.Scheduler.SafekeepBackupEnabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ENGRAM_SAFEKEEP_BACKUP_INTERVAL"); v != "" {
+		if d, err := ParseDuration(v); err == nil && d > 0 {
+			cfg.Scheduler.SafekeepBackupInterval = d
+		}
+	}
 }
 
 // ParseDuration parses a Go duration string and additionally supports day units ("d" = 24h),
@@ -388,6 +424,9 @@ func (c Config) Validate() error {
 	}
 	if c.Scheduler.AuditCleanupBatchSize <= 0 {
 		return fmt.Errorf("scheduler.audit_cleanup_batch_size must be positive")
+	}
+	if c.Scheduler.SafekeepBackupInterval <= 0 {
+		return fmt.Errorf("scheduler.safekeep_backup_interval must be positive")
 	}
 	return nil
 }

@@ -101,6 +101,7 @@
         <button class="tab-btn" data-tab="tab-scheduler"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10" cy="10.5" r="6.5"/><path d="M10 7v3.8l2.5 1.5M7.5 2.5h5"/></svg><span>定时任务</span><span class="nav-chevron" aria-hidden="true">›</span></button>
         <button class="tab-btn" data-tab="tab-audit"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M10 2.5 4 5v4.5c0 4 2.5 7 6 8 3.5-1 6-4 6-8V5l-6-2.5Z"/><path d="m7.5 10 1.8 1.8 3.5-3.6"/></svg><span>审计中心</span><span class="nav-chevron" aria-hidden="true">›</span></button>
         <button class="tab-btn" data-tab="tab-migration"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 13v3h8v-3M10 3v9m0 0-3-3m3 3 3-3"/></svg><span>系统迁移</span><span class="nav-chevron" aria-hidden="true">›</span></button>
+        <button class="tab-btn" data-tab="tab-settings"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10" cy="10" r="2.6"/><path d="M10 3.2v1.6M10 15.2v1.6M3.2 10h1.6M15.2 10h1.6M5.2 5.2l1.1 1.1M13.7 13.7l1.1 1.1M14.8 5.2l-1.1 1.1M6.3 13.7l-1.1 1.1"/></svg><span>系统设置</span><span class="nav-chevron" aria-hidden="true">›</span></button>
       </nav>
 
       <div class="sidebar-user">
@@ -650,7 +651,10 @@
                   建议设置口令（整包使用 AES-256-GCM 加密）。加密的迁移包会携带密钥明文，导入到签名密钥 <code>ENGRAM_CONTEXT_SIGN_KEY</code> 不同的服务后，仍能在控制台查看和复制客户端密钥；未加密的迁移包导入后，密钥仍可用于客户端鉴权，但不能再在控制台查看。
                 </small>
               </div>
-              <button type="submit" title="下载迁移包（.zip）">导出迁移包</button>
+              <div class="button-row">
+                <button type="submit" title="下载迁移包（.zip）">导出迁移包</button>
+                <button type="button" id="btn-mig-export-safekeep" class="secondary" title="将当前导出的迁移包直接上传到 SafeKeep">导出并上传到 SafeKeep</button>
+              </div>
             </form>
           </div>
 
@@ -927,6 +931,100 @@
           </div>
         </div>
       </section>
+
+      <!-- TAB 9: System Settings & SafeKeep Integration -->
+      <section id="tab-settings" class="tab-pane hidden">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">外部集成与系统设置</p>
+            <h1>系统设置</h1>
+            <p class="desc">配置 SafeKeep 备份网关的接入地址与 API Key，用于定时导出或手动上传 Engram 迁移包。</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="section-heading">
+              <h2>SafeKeep 备份网关配置</h2>
+              <span id="sk-status-badge" class="badge">未启用</span>
+            </div>
+            <p class="desc">对接 SafeKeep 客户端 API（<code>/api/v1/upstreams</code> 与 <code>/api/v1/backups</code>），密钥使用服务端签名密钥加密存储。</p>
+            <form id="safekeep-settings-form">
+              <div class="form-group">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="sk-enabled" />
+                  <span>启用 SafeKeep 远程备份集成</span>
+                </label>
+              </div>
+              <div class="form-group">
+                <label for="sk-base-url">SafeKeep 服务地址（URL）</label>
+                <input type="url" id="sk-base-url" placeholder="例如 http://localhost:8333 或 https://safekeep.example.com" />
+              </div>
+              <div class="form-group">
+                <label for="sk-api-key">SafeKeep API Key</label>
+                <input type="password" id="sk-api-key" placeholder="输入新的 API Key（如 sk_...）" autocomplete="new-password" />
+                <div class="section-heading" style="margin-top:6px;margin-bottom:0;">
+                  <small class="field-hint" id="sk-api-key-hint">尚未配置 API Key。</small>
+                  <button type="button" id="btn-sk-clear-key" class="secondary small hidden">清除已保存密钥</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="sk-backup-passphrase">可选：定时备份加密口令</label>
+                <input type="password" id="sk-backup-passphrase" placeholder="留空则保持当前设置；设置后迁移包将使用 AES-256-GCM 加密" autocomplete="new-password" />
+                <div class="section-heading" style="margin-top:6px;margin-bottom:0;">
+                  <small class="field-hint" id="sk-passphrase-hint">未设置加密口令（全量系统快照建议设置口令以保留客户端密钥明文）。</small>
+                  <button type="button" id="btn-sk-clear-passphrase" class="secondary small hidden">清除口令</button>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="sk-default-mode">默认上传模式</label>
+                  <select id="sk-default-mode">
+                    <option value="sync">同步上传（sync）</option>
+                    <option value="async">异步上传（async）</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="sk-default-path">默认存储子路径</label>
+                  <input type="text" id="sk-default-path" placeholder="engram" value="engram" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="sk-default-targets">可选：默认目标上游（逗号分隔）</label>
+                <input type="text" id="sk-default-targets" placeholder="留空则使用 SafeKeep 客户默认上游组" />
+              </div>
+              <div class="button-row">
+                <button type="button" id="btn-sk-test" class="secondary">测试连接</button>
+                <button type="submit" id="btn-sk-save">保存配置</button>
+              </div>
+              <span id="sk-test-result" class="check-result" role="status" aria-live="polite"></span>
+            </form>
+          </div>
+
+          <div class="card">
+            <h2>立即备份到 SafeKeep</h2>
+            <p class="desc">手动导出当前 Engram 迁移包并立即调用 SafeKeep API 上传。若需按周期自动执行，请前往「定时任务」配置并启用 <code>safekeep_migration_backup</code>。</p>
+            <form id="safekeep-backup-now-form">
+              <div class="form-group">
+                <label for="sk-now-mode">导出内容</label>
+                <select id="sk-now-mode">
+                  <option value="system">全量系统快照（租户、成员、密钥与全部知识）</option>
+                  <option value="knowledge">仅知识库迁移包（全部租户）</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="sk-now-path">上传子路径（可选，覆盖默认）</label>
+                <input type="text" id="sk-now-path" placeholder="留空使用 SafeKeep 默认路径" />
+              </div>
+              <div class="button-row">
+                <button type="submit" id="btn-sk-backup-now">立即导出并备份</button>
+                <button type="button" class="secondary" data-open-tab="tab-scheduler">前往定时任务配置</button>
+              </div>
+            </form>
+            <div id="sk-backup-result" class="mig-inspect-box hidden" style="margin-top:16px;"></div>
+          </div>
+        </div>
+      </section>
     </main>
     <footer class="app-footer">
       <span>Engram · 让每一次协作都有共享记忆</span>
@@ -1126,7 +1224,7 @@
         <div id="sched-cfg-audit-cleanup-fields">
           <div class="form-group">
             <label for="sched-cfg-retention">审计日志保留时长</label>
-            <input type="text" id="sched-cfg-retention" placeholder="例如 30d、720h、7d" required />
+            <input type="text" id="sched-cfg-retention" placeholder="例如 30d、720h、7d" />
             <div class="preset-chips" data-target="sched-cfg-retention">
               <button type="button" class="secondary small preset-chip" data-value="24h">1 天</button>
               <button type="button" class="secondary small preset-chip" data-value="7d">7 天</button>
@@ -1138,8 +1236,42 @@
           </div>
           <div class="form-group">
             <label for="sched-cfg-batch-size">单批清理条数上限</label>
-            <input type="number" id="sched-cfg-batch-size" min="100" max="10000" step="100" value="1000" required />
+            <input type="number" id="sched-cfg-batch-size" min="100" max="10000" step="100" value="1000" />
             <small class="field-hint">每次数据库事务最多删除的条数（100 ~ 10000），防止长锁阻塞。</small>
+          </div>
+        </div>
+        <div id="sched-cfg-safekeep-fields" class="hidden">
+          <div class="form-group">
+            <label for="sched-cfg-mig-mode">导出迁移包类型</label>
+            <select id="sched-cfg-mig-mode">
+              <option value="system">全量系统快照（租户、成员、密钥与全部知识）</option>
+              <option value="knowledge">仅知识库迁移包（全部租户）</option>
+            </select>
+          </div>
+          <div class="form-group" id="sched-cfg-include-deleted-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="sched-cfg-include-deleted" checked />
+              <span>知识库模式包含回收站已删除条目</span>
+            </label>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="sched-cfg-upload-mode">SafeKeep 上传模式</label>
+              <select id="sched-cfg-upload-mode">
+                <option value="">使用 SafeKeep 默认设置</option>
+                <option value="sync">同步上传（sync）</option>
+                <option value="async">异步上传（async）</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="sched-cfg-remote-path">远程路径（可选）</label>
+              <input type="text" id="sched-cfg-remote-path" placeholder="留空使用 SafeKeep 默认路径" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="sched-cfg-targets">目标上游名称（可选，逗号分隔）</label>
+            <input type="text" id="sched-cfg-targets" placeholder="留空使用 SafeKeep 默认上游" />
+            <small class="field-hint">请先在「系统设置」中配置 SafeKeep URL 与 API Key 并启用集成。</small>
           </div>
         </div>
         <div class="button-row confirm-actions">

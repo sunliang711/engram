@@ -19,8 +19,13 @@ test('navigation and panes include Audit Center and Scheduled Tasks tabs', () =>
   assert.match(html, /id="topbar-current-page"/);
   assert.match(html, /data-tab="tab-audit"/);
   assert.match(html, /data-tab="tab-scheduler"/);
+  assert.match(html, /data-tab="tab-settings"/);
   assert.match(html, /<section id="tab-audit" class="tab-pane hidden">/);
   assert.match(html, /<section id="tab-scheduler" class="tab-pane hidden">/);
+  assert.match(html, /<section id="tab-settings" class="tab-pane hidden">/);
+  assert.match(html, /id="safekeep-settings-form"/);
+  assert.match(html, /id="sk-base-url"/);
+  assert.match(html, /id="sk-api-key"/);
   assert.match(html, /id="audit-cleanup-modal"/);
   assert.match(html, /id="scheduler-config-modal"/);
 });
@@ -43,6 +48,7 @@ test('SPA route parser resolves /audit and /scheduler paths', () => {
 
   assert.equal(runRoute('/audit').tab, 'tab-audit');
   assert.equal(runRoute('/scheduler').tab, 'tab-scheduler');
+  assert.equal(runRoute('/settings').tab, 'tab-settings');
 });
 
 test('audit and scheduler renderers escape dynamic strings and translate in English', () => {
@@ -95,6 +101,15 @@ test('audit and scheduler renderers escape dynamic strings and translate in Engl
         config: { retention: '30d', batch_size: 1000 },
         last_status: 'success',
         run_count: 2,
+      }, {
+        name: 'safekeep_migration_backup',
+        display_name: '定时导出迁移包到 SafeKeep',
+        description: '按配置的执行间隔自动导出 Engram 系统或知识库迁移包，并通过 SafeKeep API 上传至远程存储。',
+        enabled: false,
+        interval_seconds: 86400,
+        config: { migration_mode: 'system', upload_mode: 'sync', remote_path: 'engram' },
+        last_status: 'idle',
+        run_count: 0,
       }],
     },
     escapeHtml: (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
@@ -126,6 +141,10 @@ test('audit and scheduler renderers escape dynamic strings and translate in Engl
   context.renderSchedulerTasks();
   assert.match(schedTbody.innerHTML, /Scheduled expired audit log cleanup/);
   assert.match(schedTbody.innerHTML, /Keep 30d/);
+  assert.match(schedTbody.innerHTML, /Scheduled migration backup to SafeKeep/);
+  assert.match(schedTbody.innerHTML, /btn-sched-toggle/);
+  assert.match(schedTbody.innerHTML, />Disable</);
+  assert.match(schedTbody.innerHTML, />Enable</);
   assert.match(schedTbody.innerHTML, /Configure/);
   assert.match(schedTbody.innerHTML, /Run now/);
 });

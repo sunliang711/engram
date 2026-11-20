@@ -24,6 +24,7 @@ import (
 	"engram/internal/memory"
 	"engram/internal/observability"
 	"engram/internal/project"
+	"engram/internal/safekeep"
 	"engram/internal/scheduler"
 	"engram/internal/version"
 
@@ -44,6 +45,7 @@ type Handler struct {
 	exporter     *exporter.Exporter
 	auditSvc     *audit.Service
 	scheduler    *scheduler.Scheduler
+	safekeepSvc  *safekeep.Service
 	loginLimiter *auth.RateLimiter
 	log          zerolog.Logger
 }
@@ -56,6 +58,11 @@ func (h *Handler) SetAuditService(svc *audit.Service) {
 // SetScheduler attaches the scheduled task module to manage and trigger background jobs.
 func (h *Handler) SetScheduler(sched *scheduler.Scheduler) {
 	h.scheduler = sched
+}
+
+// SetSafekeepService attaches the SafeKeep remote backup integration service.
+func (h *Handler) SetSafekeepService(svc *safekeep.Service) {
+	h.safekeepSvc = svc
 }
 
 func NewHandler(
@@ -136,12 +143,15 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/scheduler/tasks", h.requireActiveAdmin(h.handleSchedulerTasks))
 	mux.HandleFunc("/api/admin/scheduler/tasks/run", h.requireActiveAdmin(h.handleSchedulerTaskRun))
 	mux.HandleFunc("/api/admin/scheduler/runs", h.requireActiveAdmin(h.handleSchedulerRuns))
+	mux.HandleFunc("/api/admin/integrations/safekeep", h.requireActiveAdmin(h.handleSafekeepSettings))
+	mux.HandleFunc("/api/admin/integrations/safekeep/test", h.requireActiveAdmin(h.handleSafekeepTest))
+	mux.HandleFunc("/api/admin/integrations/safekeep/backup", h.requireActiveAdmin(h.handleSafekeepBackupNow))
 }
 
 // isUIRoutePath matches Web UI SPA paths so browser refreshes and deep links serve index.html
 // without shadowing unknown API or asset paths.
 func isUIRoutePath(p string) bool {
-	if p == "/" || p == "/overview" || p == "/memories" || p == "/projects" || p == "/tenants" || p == "/migration" || p == "/audit" || p == "/scheduler" {
+	if p == "/" || p == "/overview" || p == "/memories" || p == "/projects" || p == "/tenants" || p == "/migration" || p == "/audit" || p == "/scheduler" || p == "/settings" {
 		return true
 	}
 	trimmed := strings.Trim(p, "/")

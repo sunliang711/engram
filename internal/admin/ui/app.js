@@ -44,6 +44,7 @@
     schedulerRunsPage: 1,
     schedulerRunsPageSize: 20,
     schedulerRunsTotal: 0,
+    safekeepSettings: null,
   };
 
   function $(id) {
@@ -229,6 +230,8 @@
           await loadAuditCenter();
         } else if (activeTab() === "tab-scheduler") {
           await loadSchedulerCenter();
+        } else if (activeTab() === "tab-settings") {
+          await loadSafekeepSettings();
         }
       }
       await loadRecentMemories();
@@ -1166,6 +1169,7 @@
     renderManagementViews();
     if (tabId === "tab-audit" && state.locationReady) loadAuditCenter().catch((err) => showToast(err.message, true));
     if (tabId === "tab-scheduler" && state.locationReady) loadSchedulerCenter().catch((err) => showToast(err.message, true));
+    if (tabId === "tab-settings" && state.locationReady) loadSafekeepSettings().catch((err) => showToast(err.message, true));
     if (updateURL) syncLocation(true);
   }
 
@@ -1177,6 +1181,7 @@
     "tab-audit": "/audit",
     "tab-scheduler": "/scheduler",
     "tab-migration": "/migration",
+    "tab-settings": "/settings",
   };
 
   // syncLocation stores navigation in URL paths and keeps only active list filters in query params.
@@ -1250,6 +1255,8 @@
       out.tab = "tab-scheduler";
     } else if (parts[0] === "migration") {
       out.tab = "tab-migration";
+    } else if (parts[0] === "settings") {
+      out.tab = "tab-settings";
     }
     return out;
   }
@@ -2888,11 +2895,17 @@
       const cfgPills = [];
       if (cfg.retention) cfgPills.push(`<span class="badge">${t`保留 ${escapeHtml(String(cfg.retention))}`}</span>`);
       if (cfg.batch_size) cfgPills.push(`<span class="badge">${t`每批 ${escapeHtml(String(cfg.batch_size))} 条`}</span>`);
+      if (cfg.migration_mode) cfgPills.push(`<span class="badge">${escapeHtml(cfg.migration_mode === "knowledge" ? t("仅知识库") : t("全量系统"))}</span>`);
+      if (cfg.upload_mode) cfgPills.push(`<span class="badge">${escapeHtml(String(cfg.upload_mode))}</span>`);
+      if (cfg.remote_path) cfgPills.push(`<span class="badge"><code>${escapeHtml(String(cfg.remote_path))}</code></span>`);
+      if (cfg.targets) cfgPills.push(`<span class="badge">${escapeHtml(String(cfg.targets))}</span>`);
       const lastAt = task.last_run_at ? formatDate(task.last_run_at) : t("尚未执行");
       const nextAt = task.enabled && task.next_run_at ? formatDate(task.next_run_at) : t("已暂停");
       const lastOutcome = task.last_status && task.last_status !== "idle"
         ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span>`
         : `<span class="badge">${t("待运行")}</span>`;
+      const toggleLabel = task.enabled ? t("停用") : t("启用");
+      const toggleClass = task.enabled ? "danger-outline small btn-sched-toggle" : "secondary small btn-sched-toggle";
       return `<tr>
         <td>
           <strong>${escapeHtml(t(task.display_name) || task.name)}</strong>
@@ -2914,6 +2927,7 @@
         </td>
         <td>
           <div class="row-actions">
+            <button type="button" class="${toggleClass}" data-name="${escapeHtml(task.name)}" data-enabled="${task.enabled ? "true" : "false"}">${toggleLabel}</button>
             <button type="button" class="secondary small btn-sched-config" data-name="${escapeHtml(task.name)}">${t("配置")}</button>
             <button type="button" class="small btn-sched-run" data-name="${escapeHtml(task.name)}">${t("立即执行")}</button>
           </div>
@@ -2974,10 +2988,26 @@
     $("sched-cfg-interval").value = formatIntervalInput(task.interval_seconds);
     const cfg = task.config || {};
     const isCleanup = task.name === "audit_log_cleanup";
+    const isSafekeep = task.name === "safekeep_migration_backup";
     $("sched-cfg-audit-cleanup-fields").classList.toggle("hidden", !isCleanup);
+    $("sched-cfg-retention").required = isCleanup;
+    $("sched-cfg-batch-size").required = isCleanup;
     if (isCleanup) {
       $("sched-cfg-retention").value = cfg.retention || "30d";
       $("sched-cfg-batch-size").value = cfg.batch_size || 1000;
+    }
+    if ($("sched-cfg-safekeep-fields")) {
+      $("sched-cfg-safekeep-fields").classList.toggle("hidden", !isSafekeep);
+      if (isSafekeep) {
+        $("sched-cfg-mig-mode").value = cfg.migration_mode || "system";
+        $("sched-cfg-include-deleted").checked = cfg.include_deleted !== false;
+        $("sched-cfg-upload-mode").value = cfg.upload_mode || "";
+        $("sched-cfg-remote-path").value = cfg.remote_path || "";
+        $("sched-cfg-targets").value = cfg.targets || "";
+        if ($("sched-cfg-include-deleted-group")) {
+          $("sched-cfg-include-deleted-group").classList.toggle("hidden", $("sched-cfg-mig-mode").value !== "knowledge");
+        }
+      }
     }
     $("scheduler-config-modal").classList.remove("hidden");
   }
@@ -3146,6 +3176,25 @@
   }
   if ($("scheduler-tasks-table")) {
     $("scheduler-tasks-table").addEventListener("click", async (e) => {
+      const toggleBtn = e.target.closest(".btn-sched-toggle");
+      if (toggleBtn) {
+        const taskName = toggleBtn.dataset.name;
+        const currentlyEnabled = toggleBtn.dataset.enabled === "true";
+        toggleBtn.disabled = true;
+        try {
+          await api("/api/admin/scheduler/tasks", {
+            method: "PATCH",
+            body: JSON.stringify({ name: taskName, enabled: !currentlyEnabled }),
+          });
+          showToast(currentlyEnabled ? t("定时任务已停用") : t("定时任务已启用"));
+          await loadSchedulerCenter();
+        } catch (err) {
+          showToast(err.message, true);
+        } finally {
+          toggleBtn.disabled = false;
+        }
+        return;
+      }
       const cfgBtn = e.target.closest(".btn-sched-config");
       if (cfgBtn) {
         openSchedulerConfigModal(cfgBtn.dataset.name);
@@ -3173,6 +3222,14 @@
     });
   }
 
+  if ($("sched-cfg-mig-mode")) {
+    $("sched-cfg-mig-mode").addEventListener("change", () => {
+      if ($("sched-cfg-include-deleted-group")) {
+        $("sched-cfg-include-deleted-group").classList.toggle("hidden", $("sched-cfg-mig-mode").value !== "knowledge");
+      }
+    });
+  }
+
   if ($("btn-close-scheduler-config")) $("btn-close-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
   if ($("btn-cancel-scheduler-config")) $("btn-cancel-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
   if ($("scheduler-config-modal")) $("scheduler-config-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-config-modal")) $("scheduler-config-modal").classList.add("hidden"); });
@@ -3191,6 +3248,14 @@
           retention: $("sched-cfg-retention").value.trim(),
           batch_size: Number($("sched-cfg-batch-size").value) || 1000,
         };
+      } else if (name === "safekeep_migration_backup") {
+        payload.config = {
+          migration_mode: $("sched-cfg-mig-mode").value,
+          include_deleted: $("sched-cfg-include-deleted").checked,
+          upload_mode: $("sched-cfg-upload-mode").value,
+          remote_path: $("sched-cfg-remote-path").value.trim(),
+          targets: $("sched-cfg-targets").value.trim(),
+        };
       }
       await api("/api/admin/scheduler/tasks", {
         method: "PATCH",
@@ -3199,6 +3264,199 @@
       $("scheduler-config-modal").classList.add("hidden");
       showToast(t("定时任务配置已保存"));
       await loadSchedulerCenter();
+    });
+  }
+
+  // SafeKeep Integration Settings & Backup
+  async function loadSafekeepSettings() {
+    if (!$("safekeep-settings-form")) return;
+    const data = await api("/api/admin/integrations/safekeep");
+    state.safekeepSettings = data;
+    renderSafekeepSettings(data);
+  }
+
+  function renderSafekeepSettings(data) {
+    if (!data || !$("safekeep-settings-form")) return;
+    $("sk-enabled").checked = !!data.enabled;
+    $("sk-base-url").value = data.base_url || "";
+    $("sk-api-key").value = "";
+    $("sk-backup-passphrase").value = "";
+    $("sk-default-mode").value = data.default_mode || "sync";
+    $("sk-default-path").value = data.default_path || "engram";
+    $("sk-default-targets").value = data.default_targets || "";
+
+    const badge = $("sk-status-badge");
+    if (badge) {
+      badge.textContent = data.enabled ? t("已启用") : t("未启用");
+      badge.className = "badge " + (data.enabled ? "success" : "");
+    }
+    if ($("sk-api-key-hint")) {
+      $("sk-api-key-hint").textContent = data.has_api_key
+        ? t`已保存 API Key（${data.api_key_masked || "****"}），留空则保持不变。`
+        : t("尚未配置 API Key。");
+    }
+    if ($("btn-sk-clear-key")) $("btn-sk-clear-key").classList.toggle("hidden", !data.has_api_key);
+    if ($("sk-passphrase-hint")) {
+      $("sk-passphrase-hint").textContent = data.has_backup_passphrase
+        ? t("已设置定时备份加密口令，留空则保持不变。")
+        : t("未设置加密口令（全量系统快照建议设置口令以保留客户端密钥明文）。");
+    }
+    if ($("btn-sk-clear-passphrase")) $("btn-sk-clear-passphrase").classList.toggle("hidden", !data.has_backup_passphrase);
+
+    const testResult = $("sk-test-result");
+    if (testResult && data.last_tested_at) {
+      if (data.last_test_status === "ok") {
+        testResult.className = "check-result ok";
+        testResult.textContent = t`最近连通测试成功（${formatDate(data.last_tested_at)}）`;
+      } else if (data.last_test_status === "failed") {
+        testResult.className = "check-result error";
+        testResult.textContent = t`最近连通测试失败：${data.last_test_error || ""}`;
+      }
+    }
+  }
+
+  if ($("safekeep-settings-form")) {
+    onSubmit("safekeep-settings-form", async (e) => {
+      e.preventDefault();
+      const payload = {
+        enabled: $("sk-enabled").checked,
+        base_url: $("sk-base-url").value.trim(),
+        default_mode: $("sk-default-mode").value,
+        default_path: $("sk-default-path").value.trim(),
+        default_targets: $("sk-default-targets").value.trim(),
+      };
+      const apiKey = $("sk-api-key").value.trim();
+      if (apiKey) payload.api_key = apiKey;
+      const passphrase = $("sk-backup-passphrase").value;
+      if (passphrase) payload.backup_passphrase = passphrase;
+
+      const updated = await api("/api/admin/integrations/safekeep", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      state.safekeepSettings = updated;
+      renderSafekeepSettings(updated);
+      showToast(t("SafeKeep 配置已保存"));
+    });
+  }
+
+  if ($("btn-sk-clear-key")) {
+    $("btn-sk-clear-key").addEventListener("click", async () => {
+      try {
+        const updated = await api("/api/admin/integrations/safekeep", {
+          method: "PUT",
+          body: JSON.stringify({ enabled: false, clear_api_key: true }),
+        });
+        state.safekeepSettings = updated;
+        renderSafekeepSettings(updated);
+        showToast(t("已清除 SafeKeep API Key"));
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
+  if ($("btn-sk-clear-passphrase")) {
+    $("btn-sk-clear-passphrase").addEventListener("click", async () => {
+      try {
+        const updated = await api("/api/admin/integrations/safekeep", {
+          method: "PUT",
+          body: JSON.stringify({ clear_backup_passphrase: true }),
+        });
+        state.safekeepSettings = updated;
+        renderSafekeepSettings(updated);
+        showToast(t("已清除定时备份加密口令"));
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
+  if ($("btn-sk-test")) {
+    $("btn-sk-test").addEventListener("click", async () => {
+      const resultEl = $("sk-test-result");
+      const btn = $("btn-sk-test");
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      if (resultEl) {
+        resultEl.className = "check-result";
+        resultEl.textContent = t("正在测试连接…");
+      }
+      try {
+        const res = await api("/api/admin/integrations/safekeep/test", {
+          method: "POST",
+          body: JSON.stringify({
+            base_url: $("sk-base-url").value.trim(),
+            api_key: $("sk-api-key").value.trim(),
+          }),
+        });
+        if (resultEl) {
+          resultEl.className = "check-result ok";
+          const names = (res.upstreams || []).map((u) => u.name).filter(Boolean).join(", ");
+          resultEl.textContent = names ? `${res.message} (${names})` : res.message;
+        }
+        showToast(res.message || t("SafeKeep 连接成功"));
+      } catch (err) {
+        if (resultEl) {
+          resultEl.className = "check-result error";
+          resultEl.textContent = err.message;
+        }
+        showToast(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+      }
+    });
+  }
+
+  async function runManualSafekeepBackup(opts = {}) {
+    const res = await api("/api/admin/integrations/safekeep/backup", {
+      method: "POST",
+      body: JSON.stringify(opts),
+    });
+    return res;
+  }
+
+  if ($("safekeep-backup-now-form")) {
+    onSubmit("safekeep-backup-now-form", async (e) => {
+      e.preventDefault();
+      const res = await runManualSafekeepBackup({
+        mode: $("sk-now-mode").value,
+        path: $("sk-now-path").value.trim(),
+        include_deleted: true,
+      });
+      const box = $("sk-backup-result");
+      if (box) {
+        const sk = res.safekeep || {};
+        box.innerHTML = `<div class="mig-inspect-header"><span class="badge success">${escapeHtml(sk.status || "ok")}</span><code>${escapeHtml(res.filename)}</code></div><p class="desc" style="margin-bottom:0;">${escapeHtml(t`已上传 ${res.memories || 0} 条知识（${res.file_size || 0} 字节）至 SafeKeep 任务 ${sk.task_id || ""}`)}</p>`;
+        box.classList.remove("hidden");
+      }
+      showToast(t("已成功导出迁移包并备份至 SafeKeep"));
+    });
+  }
+
+  if ($("btn-mig-export-safekeep")) {
+    $("btn-mig-export-safekeep").addEventListener("click", async () => {
+      const btn = $("btn-mig-export-safekeep");
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      try {
+        const mode = selectedMigrationExportMode();
+        const passphrase = $("mig-export-passphrase") ? $("mig-export-passphrase").value : "";
+        const includeDeleted = $("mig-export-include-deleted") ? $("mig-export-include-deleted").checked : true;
+        const res = await runManualSafekeepBackup({
+          mode,
+          passphrase,
+          include_deleted: includeDeleted,
+        });
+        const sk = res.safekeep || {};
+        showToast(t`已将迁移包 ${res.filename} 上传至 SafeKeep（任务 ${sk.task_id || ""}）`);
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+      }
     });
   }
 

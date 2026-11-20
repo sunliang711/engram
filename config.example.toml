@@ -49,6 +49,16 @@ enabled = true
 audit_cleanup_enabled = true
 audit_cleanup_interval = "1h"
 audit_cleanup_batch_size = 1000
+safekeep_backup_enabled = false
+safekeep_backup_interval = "24h"
+
+[safekeep]
+enabled = false
+# base_url = "http://localhost:8333"
+# api_key = "sk_..."
+default_mode = "sync"
+default_path = "engram"
+default_targets = ""
 
 [log]
 level = "info"
