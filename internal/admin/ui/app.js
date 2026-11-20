@@ -53,10 +53,49 @@
     schedulerConfigOpener: null,
     schedulerHistoryOpener: null,
     safekeepSettings: null,
+    settingsTab: "backup",
   };
 
   function $(id) {
     return document.getElementById(id);
+  }
+
+  // defaultMemoryPageSize reads a validated browser preference without requiring storage access.
+  function defaultMemoryPageSize() {
+    try {
+      const size = Number(localStorage.getItem("engram.memoryPageSize"));
+      if ([20, 50, 100].includes(size)) return size;
+    } catch (_) {
+      // Browsers may disable local storage while the current session remains usable.
+    }
+    return 20;
+  }
+
+  // saveMemoryPageSize keeps list controls and the settings preference in sync.
+  function saveMemoryPageSize(size) {
+    if (![20, 50, 100].includes(size)) return;
+    try { localStorage.setItem("engram.memoryPageSize", String(size)); } catch (_) { /* Storage is optional. */ }
+    $("settings-memory-page-size").value = size;
+    $("mem-page-size").value = size;
+    state.memoryPageSize = size;
+    state.memoryPage = 1;
+  }
+
+  // setSettingsTab updates accessible panels while preserving drafts and shareable URLs.
+  function setSettingsTab(name, updateURL = true) {
+    const selected = ["backup", "appearance", "security"].includes(name) ? name : "backup";
+    if (state.settingsTab === "backup" && selected !== "backup") {
+      resetSecretField($("sk-api-key"));
+      resetSecretField($("sk-backup-passphrase"));
+    }
+    state.settingsTab = selected;
+    document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+      const active = button.dataset.settingsTab === selected;
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+      $("settings-panel-" + button.dataset.settingsTab).classList.toggle("hidden", !active);
+    });
+    if (updateURL && state.locationReady) syncLocation(true);
   }
 
   // Secret fields keep saved masks separate from editable values and cancel stale reveals.
@@ -185,6 +224,7 @@
 
   // ERROR_MESSAGES translates validation messages the management API returns in English.
   const ERROR_MESSAGES = [
+    [/^SafeKeep upload settings are managed in system settings$/, t("请在系统设置中修改 SafeKeep 上传配置。")],
     [/^(invalid remote url|remote host cannot be empty|invalid repository path)/i, t("仓库地址格式不正确，请填写 SSH 或 HTTPS 形式的 Git 地址。")],
     [/^(path must be relative|relative path must not contain)/i, t("子目录请填写相对仓库根目录的路径，不能以 / 开头，也不能包含 . 或 ..。")],
     [/^principal is not a member of the specified tenant/i, t("该成员还不属于所选租户，请先在「租户管理」页把成员绑定到这个租户。")],
@@ -271,6 +311,7 @@
 
     const username = sessionState.username || "admin";
     $("current-admin-user").textContent = username;
+    $("settings-admin-user").textContent = username;
     if ($("sidebar-admin-user")) $("sidebar-admin-user").textContent = username;
     if ($("sidebar-user-avatar")) $("sidebar-user-avatar").textContent = username.slice(0, 1).toUpperCase();
     $("app-view").classList.remove("hidden");
@@ -1328,6 +1369,7 @@
     renderManagementViews();
     if (tabId === "tab-audit" && state.locationReady) loadAuditCenter().catch((err) => showToast(err.message, true));
     if (tabId === "tab-scheduler" && state.locationReady) loadSchedulerCenter().catch((err) => showToast(err.message, true));
+    if (tabId === "tab-settings") setSettingsTab(state.settingsTab, false);
     if (tabId === "tab-settings" && state.locationReady) loadSafekeepSettings().catch((err) => showToast(err.message, true));
     if (updateURL) syncLocation(true);
   }
@@ -1361,6 +1403,7 @@
     const params = new URLSearchParams();
     const currentLang = new URLSearchParams(location.search).get("lang");
     if (currentLang) params.set("lang", currentLang);
+    if (tab === "tab-settings" && state.settingsTab !== "backup") params.set("section", state.settingsTab);
     if (tab === "tab-memories") {
       MEMORY_FILTERS.forEach(([key, id]) => {
         const value = $(id).value;
@@ -1435,6 +1478,7 @@
     $("tenant-forms-panel").classList.add("hidden");
     $("create-tenant-card").classList.add("hidden");
     $("project-forms-panel").classList.add("hidden");
+    if (tab === "tab-settings") state.settingsTab = ["appearance", "security"].includes(params.get("section")) ? params.get("section") : "backup";
     switchMainTab(allowed.includes(tab) ? tab : "tab-overview", false);
     const filterParams = tab === "tab-memories" ? params : new URLSearchParams();
     MEMORY_FILTERS.forEach(([key, id]) => {
@@ -1453,7 +1497,7 @@
     const page = Number(filterParams.get("page"));
     state.memoryPage = Number.isInteger(page) && page > 0 && page <= 1000000 ? page : 1;
     const size = Number(filterParams.get("size"));
-    state.memoryPageSize = [20, 50, 100].includes(size) ? size : 20;
+    state.memoryPageSize = [20, 50, 100].includes(size) ? size : defaultMemoryPageSize();
     $("mem-page-size").value = state.memoryPageSize;
     await loadMemories();
     if (request !== state.locationRequest) return;
@@ -1676,6 +1720,23 @@
       wrapper.appendChild(table);
     }
   });
+
+  // Settings navigation supports the standard tab-list keyboard controls.
+  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+    button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab));
+    button.addEventListener("keydown", (event) => {
+      const buttons = Array.from(document.querySelectorAll("[data-settings-tab]"));
+      const index = buttons.indexOf(button);
+      const target = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowRight" ? (index + 1) % buttons.length : event.key === "ArrowLeft" ? (index + buttons.length - 1) % buttons.length : -1;
+      if (target < 0) return;
+      event.preventDefault();
+      setSettingsTab(buttons[target].dataset.settingsTab);
+      buttons[target].focus();
+    });
+  });
+  $("settings-memory-page-size").value = defaultMemoryPageSize();
+  $("settings-memory-page-size").addEventListener("change", () => saveMemoryPageSize(Number($("settings-memory-page-size").value)));
+  $("btn-settings-change-password").addEventListener("click", () => $("btn-open-change-pwd").click());
 
   // Event Listeners
   document.querySelectorAll(".tab-btn").forEach((btn) => {
@@ -2202,7 +2263,7 @@
   $("memory-detail-card").addEventListener("click", (event) => { if (event.target === $("memory-detail-card")) closeMemoryDetail(); });
   $("btn-memory-prev").addEventListener("click", () => { state.memoryPage--; syncLocation(true); loadMemories(); });
   $("btn-memory-next").addEventListener("click", () => { state.memoryPage++; syncLocation(true); loadMemories(); });
-  $("mem-page-size").addEventListener("change", () => { state.memoryPageSize = Number($("mem-page-size").value); state.memoryPage = 1; syncLocation(true); loadMemories(); });
+  $("mem-page-size").addEventListener("change", () => { saveMemoryPageSize(Number($("mem-page-size").value)); syncLocation(true); loadMemories(); });
   $("btn-clear-memory-filters").addEventListener("click", () => { $("filter-memories-form").reset(); renderMemoryProjectFilter(); state.memoryPage = 1; syncLocation(true); loadMemories(); });
   $("btn-detail-preview").addEventListener("click", () => setDetailMode(false));
   $("btn-detail-source").addEventListener("click", () => setDetailMode(true));
@@ -3202,9 +3263,6 @@
       if (isSafekeep) {
         $("sched-cfg-mig-mode").value = cfg.migration_mode || "system";
         $("sched-cfg-include-deleted").checked = cfg.include_deleted !== false;
-        $("sched-cfg-upload-mode").value = cfg.upload_mode || "";
-        $("sched-cfg-remote-path").value = cfg.remote_path || "";
-        $("sched-cfg-targets").value = cfg.targets || "";
         if ($("sched-cfg-include-deleted-group")) {
           $("sched-cfg-include-deleted-group").classList.toggle("hidden", $("sched-cfg-mig-mode").value !== "knowledge");
         }
@@ -3214,7 +3272,29 @@
     $("scheduler-config-modal").classList.remove("hidden");
     document.body.classList.add("scheduler-drawer-open");
     $("btn-close-scheduler-config").focus();
+    if (isSafekeep) loadSchedulerUploadSettings(task.name);
     return requestSchedulePreview();
+  }
+
+  // loadSchedulerUploadSettings shows persisted settings and ignores responses for a closed drawer.
+  async function loadSchedulerUploadSettings(taskName) {
+    const request = state.schedulerUploadRequest = (state.schedulerUploadRequest || 0) + 1;
+    const summary = $("sched-cfg-upload-summary");
+    summary.textContent = t("正在读取上传配置…");
+    try {
+      const data = await api("/api/admin/integrations/safekeep");
+      if (request !== state.schedulerUploadRequest || $("scheduler-config-modal").classList.contains("hidden") || $("sched-cfg-name").value !== taskName) return;
+      const fields = [
+        [t("服务地址"), data.base_url || t("未配置")],
+        [t("上传模式"), data.default_mode === "async" ? t("异步上传（async）") : t("同步上传（sync）")],
+        [t("远程存储路径"), data.default_path || t("SafeKeep 默认路径")],
+        [t("目标上游"), data.default_targets || t("SafeKeep 默认上游")],
+        [t("备份加密"), data.has_backup_passphrase ? t("已设置") : t("未设置")],
+      ];
+      summary.innerHTML = `<dl class="scheduler-upload-summary">${fields.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>`;
+    } catch (err) {
+      if (request === state.schedulerUploadRequest && !$("scheduler-config-modal").classList.contains("hidden") && $("sched-cfg-name").value === taskName) summary.textContent = err.message;
+    }
   }
 
   // schedulerConfigPayload excludes hidden plan fields from dirty comparisons.
@@ -3234,9 +3314,6 @@
       payload.config = {
         migration_mode: $("sched-cfg-mig-mode").value,
         include_deleted: $("sched-cfg-include-deleted").checked,
-        upload_mode: $("sched-cfg-upload-mode").value,
-        remote_path: $("sched-cfg-remote-path").value.trim(),
-        targets: $("sched-cfg-targets").value.trim(),
       };
     }
     return payload;
@@ -3594,6 +3671,12 @@
     });
   }
 
+  $("btn-sched-upload-settings").addEventListener("click", () => {
+    state.settingsTab = "backup";
+    switchMainTab("tab-settings");
+    $("settings-tab-backup").focus();
+  });
+
   if ($("sched-cfg-mig-mode")) {
     $("sched-cfg-mig-mode").addEventListener("change", () => {
       if ($("sched-cfg-include-deleted-group")) {
@@ -3637,7 +3720,7 @@
     if (!saved) return false;
     return $("sk-base-url").value.trim() !== (saved.base_url || "") ||
       $("sk-default-mode").value !== (saved.default_mode || "sync") ||
-      $("sk-default-path").value.trim() !== (saved.default_path || "engram") ||
+      $("sk-default-path").value.trim() !== (saved.default_path ?? "engram") ||
       $("sk-default-targets").value.trim() !== (saved.default_targets || "") ||
       !!secretDraft("sk-api-key").trim() || !!secretDraft("sk-backup-passphrase");
   }
@@ -3658,7 +3741,7 @@
     renderStoredSecret("sk-api-key", data.has_api_key);
     renderStoredSecret("sk-backup-passphrase", data.has_backup_passphrase);
     $("sk-default-mode").value = data.default_mode || "sync";
-    $("sk-default-path").value = data.default_path || "engram";
+    $("sk-default-path").value = data.default_path ?? "engram";
     $("sk-default-targets").value = data.default_targets || "";
     $("btn-sk-save").disabled = true;
 
@@ -3676,7 +3759,7 @@
     if ($("btn-sk-clear-key")) $("btn-sk-clear-key").classList.toggle("hidden", !data.has_api_key);
     if ($("sk-passphrase-hint")) {
       $("sk-passphrase-hint").textContent = data.has_backup_passphrase
-        ? t("已设置定时备份加密口令，留空则保持不变。")
+        ? t("已设置默认备份加密口令，留空则保持不变。")
         : t("未设置加密口令（全量系统快照建议设置口令以保留客户端密钥明文）。");
     }
     if ($("btn-sk-clear-passphrase")) $("btn-sk-clear-passphrase").classList.toggle("hidden", !data.has_backup_passphrase);
@@ -3742,7 +3825,7 @@
         });
         state.safekeepSettings = updated;
         renderSafekeepSettings(updated);
-        showToast(t("已清除定时备份加密口令"));
+        showToast(t("已清除默认备份加密口令"));
       } catch (err) {
         showToast(err.message, true);
       }

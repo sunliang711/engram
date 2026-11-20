@@ -9,7 +9,7 @@ const times = ['2026-11-20T00:00:00Z', '2026-11-21T00:00:00Z', '2026-11-22T00:00
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 
 // calendarHarness runs production drawer, preview and history functions with controllable responses.
-function calendarHarness(tasks = [], preview = async () => ({ next_runs: times }), history = async () => ({ items: [], total: 0 })) {
+function calendarHarness(tasks = [], preview = async () => ({ next_runs: times }), history = async () => ({ items: [], total: 0 }), settings = async () => ({ default_mode: 'sync', default_path: 'engram' })) {
   const nodes = new Map(), calls = [];
   const groups = { 'sched-cfg-cron-group': ['sched-cfg-cron'], 'sched-cfg-timezone-group': ['sched-cfg-timezone'], 'sched-cfg-interval-group': ['sched-cfg-interval'] };
   const document = { activeElement: null };
@@ -36,6 +36,7 @@ function calendarHarness(tasks = [], preview = async () => ({ next_runs: times }
     api: async (url, options = {}) => {
       const payload = options.body ? JSON.parse(options.body) : null;
       calls.push({ url, payload });
+      if (url.includes('/integrations/safekeep')) return settings();
       return url.includes('/preview') ? preview(payload) : history(url);
     },
   });
@@ -143,4 +144,33 @@ test('common Cron expressions get readable descriptions and complex rules keep t
   const h = calendarHarness();
   for (const [expression, description] of Object.entries({ '* * * * *': '每分钟', '*/5 * * * *': '每 5 分钟', '0 * * * *': '每小时整点', '0 4 * * *': '每天 04:00', '0 5 * * 1': '每周一 05:00', '0 9 * * 1-5': '每周一至周五 09:00', '30 4 1,15 * *': '每月 1 日、15 日 04:30' })) assert.equal(h.context.describeTaskCron(expression), description);
   for (const expression of ['0 4 1 * 1', '0 4 * 6 *', '*/5 1-3 * * *']) assert.equal(h.context.describeTaskCron(expression), null);
+});
+
+
+test('backup tasks show escaped global upload settings and submit only export choices', async () => {
+  const h = calendarHarness([task('safekeep_migration_backup', { config: { migration_mode: 'knowledge', include_deleted: false, upload_mode: 'sync', remote_path: 'legacy/path' } })], undefined, undefined,
+    async () => ({ default_mode: 'async', default_path: '<img src=x>', default_targets: 'global-upstream', has_backup_passphrase: true, api_key: 'must-not-render' }));
+  await h.context.openSchedulerConfigModal('safekeep_migration_backup');
+  await h.context.loadSchedulerUploadSettings('safekeep_migration_backup');
+  const summary = h.$('sched-cfg-upload-summary').innerHTML;
+  assert.match(summary, /async/);
+  assert.match(summary, /&lt;img/);
+  assert.match(summary, /global-upstream/);
+  assert.doesNotMatch(summary, /legacy\/path|must-not-render|<img/);
+  const payload = JSON.parse(JSON.stringify(h.context.schedulerConfigPayload()));
+  assert.deepEqual(payload.config, { migration_mode: 'knowledge', include_deleted: false });
+  assert.equal(h.$('btn-save-scheduler-config').disabled, true);
+});
+
+test('closing the drawer prevents late upload summaries from changing its content', async () => {
+  const pending = deferred();
+  let requests = 0;
+  const h = calendarHarness([task('safekeep_migration_backup')], undefined, undefined,
+    () => ++requests === 1 ? Promise.resolve({ default_path: 'initial' }) : pending.promise);
+  await h.context.openSchedulerConfigModal('safekeep_migration_backup');
+  const reading = h.context.loadSchedulerUploadSettings('safekeep_migration_backup');
+  h.context.closeSchedulerConfig();
+  pending.resolve({ default_path: 'late-secret-path' });
+  await reading;
+  assert.doesNotMatch(h.$('sched-cfg-upload-summary').innerHTML, /late-secret-path/);
 });

@@ -200,6 +200,10 @@ test('SafeKeep settings use credentials for status and save without an integrati
     assert.equal(badge.textContent, 'Not configured');
   }
 
+  context.state.safekeepSettings = { ...settings, default_path: '' };
+  context.renderSafekeepSettings(context.state.safekeepSettings);
+  assert.equal(elements.get('sk-default-path').value, '');
+  assert.equal(context.canSaveSafekeepSettings(), false);
   context.state.safekeepSettings = settings;
   context.renderSafekeepSettings(settings);
   assert.equal(context.canSaveSafekeepSettings(), false);

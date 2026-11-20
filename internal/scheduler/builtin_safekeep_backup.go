@@ -51,9 +51,6 @@ func (s *Scheduler) RegisterSafekeepBackupTask(skSvc *safekeep.Service, exportFn
 		DefaultConfig: map[string]any{
 			"migration_mode":  "system",
 			"include_deleted": true,
-			"upload_mode":     "",
-			"remote_path":     "",
-			"targets":         "",
 		},
 		ValidateConfig: validateSafekeepBackupConfig,
 		Run: func(ctx context.Context, cfg map[string]any) (TaskResult, error) {
@@ -70,10 +67,6 @@ func (s *Scheduler) RegisterSafekeepBackupTask(skSvc *safekeep.Service, exportFn
 
 			migMode := validated["migration_mode"].(string)
 			includeDeleted := validated["include_deleted"].(bool)
-			uploadMode := validated["upload_mode"].(string)
-			remotePath := validated["remote_path"].(string)
-			targets := validated["targets"].(string)
-
 			passphrase, err := skSvc.BackupPassphrase(ctx)
 			if err != nil {
 				return TaskResult{}, err
@@ -89,9 +82,6 @@ func (s *Scheduler) RegisterSafekeepBackupTask(skSvc *safekeep.Service, exportFn
 			}
 
 			res, err := skSvc.UploadArchive(ctx, archive.Filename, archive.Data, safekeep.UploadOptions{
-				Mode:           uploadMode,
-				Path:           remotePath,
-				Targets:        targets,
 				IdempotencyKey: "engram-sched-" + uuid.NewString(),
 				Metadata: map[string]any{
 					"source":         "engram",
@@ -130,6 +120,7 @@ func (s *Scheduler) RegisterSafekeepBackupTask(skSvc *safekeep.Service, exportFn
 	})
 }
 
+// validateSafekeepBackupConfig accepts export choices and keeps upload settings centralized.
 func validateSafekeepBackupConfig(raw map[string]any) (map[string]any, error) {
 	migMode := "system"
 	if v, ok := raw["migration_mode"].(string); ok && strings.TrimSpace(v) != "" {
@@ -148,32 +139,18 @@ func validateSafekeepBackupConfig(raw map[string]any) (map[string]any, error) {
 		includeDeleted = b
 	}
 
-	uploadMode := ""
-	if v, ok := raw["upload_mode"].(string); ok {
-		uploadMode = strings.ToLower(strings.TrimSpace(v))
-	}
-	if uploadMode != "" && uploadMode != "sync" && uploadMode != "async" {
-		return nil, fmt.Errorf("upload_mode must be '', 'sync', or 'async'")
-	}
-
-	remotePath := ""
-	if v, ok := raw["remote_path"].(string); ok {
-		remotePath = strings.Trim(strings.TrimSpace(v), "/")
-	}
-	if strings.Contains(remotePath, "..") {
-		return nil, fmt.Errorf("remote_path must not contain '..'")
-	}
-
-	targets := ""
-	if v, ok := raw["targets"].(string); ok {
-		targets = strings.TrimSpace(v)
+	// Reject stale overrides instead of silently reintroducing a second configuration source.
+	for _, key := range []string{"upload_mode", "remote_path", "targets"} {
+		if value, exists := raw[key]; exists && value != nil {
+			text, ok := value.(string)
+			if !ok || strings.TrimSpace(text) != "" {
+				return nil, fmt.Errorf("SafeKeep upload settings are managed in system settings")
+			}
+		}
 	}
 
 	return map[string]any{
 		"migration_mode":  migMode,
 		"include_deleted": includeDeleted,
-		"upload_mode":     uploadMode,
-		"remote_path":     remotePath,
-		"targets":         targets,
 	}, nil
 }

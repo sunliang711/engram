@@ -39,6 +39,7 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	t.Cleanup(database.Close)
 
 	var uploadedFilename string
+	var uploadedMode, uploadedPath, uploadedTargets string
 	var uploadedZip []byte
 	mockSafekeep := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -51,6 +52,9 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 		case "/api/v1/upstreams":
 			_, _ = w.Write([]byte(`{"items":[{"id":"up1","name":"local-s3","provider":"s3","enabled":true}]}`))
 		case "/api/v1/backups":
+			uploadedMode = r.URL.Query().Get("mode")
+			uploadedPath = r.URL.Query().Get("path")
+			uploadedTargets = r.URL.Query().Get("targets")
 			if err := r.ParseMultipartForm(16 << 20); err != nil {
 				t.Fatal(err)
 			}
@@ -103,6 +107,7 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 		"backup_passphrase": "backup-secret-passphrase",
 		"default_mode":      "sync",
 		"default_path":      "engram/test",
+		"default_targets":   "local-s3",
 	})
 	rec := httptest.NewRecorder()
 	h.handleSafekeepSettings(rec, httptest.NewRequest(http.MethodPut, "/api/admin/integrations/safekeep", bytes.NewReader(savePayload)))
@@ -182,6 +187,29 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	}
 	if decoded.Manifest.Format != SnapshotFormat || !decoded.Manifest.Encrypted {
 		t.Fatalf("unexpected decoded manifest: %+v", decoded.Manifest)
+	}
+
+	if uploadedMode != "sync" || uploadedPath != "engram/test" || uploadedTargets != "local-s3" {
+		t.Fatalf("scheduled backup ignored system settings: mode=%q path=%q targets=%q", uploadedMode, uploadedPath, uploadedTargets)
+	}
+
+	// Editing system settings takes effect on the next run without saving the task again.
+	rec = httptest.NewRecorder()
+	h.handleSafekeepSettings(rec, httptest.NewRequest(http.MethodPut, "/api/admin/integrations/safekeep", strings.NewReader(`{"default_mode":"async","default_path":"engram/changed","default_targets":"new-upstream"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update upload settings: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	h.handleSchedulerTaskRun(rec, httptest.NewRequest(http.MethodPost, "/api/admin/scheduler/tasks/run", bytes.NewReader(runReq)))
+	if rec.Code != http.StatusOK || uploadedMode != "async" || uploadedPath != "engram/changed" || uploadedTargets != "new-upstream" {
+		t.Fatalf("scheduled backup used stale upload settings: status=%d mode=%q path=%q targets=%q", rec.Code, uploadedMode, uploadedPath, uploadedTargets)
+	}
+
+	// Old clients cannot reintroduce hidden task overrides after the upgrade.
+	rec = httptest.NewRecorder()
+	h.handleSchedulerTasks(rec, httptest.NewRequest(http.MethodPatch, "/api/admin/scheduler/tasks", strings.NewReader(`{"name":"safekeep_migration_backup","config":{"upload_mode":"sync"}}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("legacy upload override accepted: %d %s", rec.Code, rec.Body.String())
 	}
 
 	// 5. Also verify manual backup endpoint works in knowledge mode
