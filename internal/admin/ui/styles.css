@@ -1430,3 +1430,86 @@ body:has(.modal-backdrop:not(.hidden)) { overflow: hidden; }
 .preset-chip { font-size: 12px; padding: 4px 10px; }
 #audit-detail-json { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sched-config-pills { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* Operations pages share compact headers, clear form sections and restrained actions. */
+.operations-page .page-heading { margin-bottom: 24px; }
+.operations-page .page-heading .desc { max-width: 700px; }
+.operations-page .grid-2 { gap: 24px; }
+.operations-page .grid-2 > .card { margin-bottom: 0; }
+.operations-page .card { padding: 24px; border-radius: 14px; }
+.operation-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-width: 0; }
+.operation-heading h2 { margin: 0; font-size: 16px; line-height: 1.5; }
+.operation-icon { width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--text-accent); background: var(--focus-ring); border-radius: 11px; }
+.operation-icon svg { width: 21px; height: 21px; }
+.operation-caption { margin-top: 3px; color: var(--text-muted); font-size: 12px; font-weight: 400; }
+.operations-page .section-heading > .operation-heading { margin-bottom: 0; }
+.operations-page .section-heading { margin-bottom: 18px; }
+.operations-page .form-group { margin-bottom: 20px; }
+.operations-page .field-hint { font-weight: 400; line-height: 1.65; }
+.operations-page .operation-actions { padding-top: 18px; margin-top: 24px; border-top: 1px solid var(--border); gap: 10px; }
+.operations-page .operation-actions button { min-height: 38px; }
+.operations-page button:disabled, .scheduler-drawer button:disabled { opacity: 0.45; box-shadow: none; transform: none; }
+.operations-page .migration-mode-option { padding: 14px; border-radius: 10px; gap: 10px; }
+.operations-page .migration-mode-option strong { font-size: 13px; }
+.operations-page .migration-mode-option .field-hint { margin-top: 5px; font-size: 12px; }
+.operations-page .migration-mode-option:has(input:checked) { background: var(--bg-panel); border-color: var(--primary); box-shadow: inset 3px 0 var(--primary); }
+.operations-page .tenant-checkbox-list { background: var(--bg-panel); padding: 12px 14px; }
+.import-passphrase-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.import-passphrase-row .secret-input { flex-basis: 100%; }
+.upload-zone { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 154px; padding: 22px 16px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--bg-panel); cursor: pointer; text-align: center; overflow: hidden; }
+.upload-zone:hover, .upload-zone:focus-within { border-color: var(--primary); background: var(--bg-hover); }
+.upload-zone:focus-within { outline: 3px solid var(--focus-ring); }
+.upload-zone strong { font-size: 13px; overflow-wrap: anywhere; }
+.upload-zone .operation-icon { width: 32px; height: 32px; background: transparent; }
+.upload-zone .field-hint { margin: 0; font-size: 12px; }
+.upload-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.operations-page .settings-grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+#safekeep-settings-form { padding-top: 6px; }
+#safekeep-settings-form > .form-row { padding-top: 20px; border-top: 1px solid var(--border); }
+#safekeep-settings-form .section-heading { align-items: flex-start; gap: 8px; }
+#safekeep-settings-form .section-heading .field-hint { margin-top: 0; }
+#safekeep-settings-form .section-heading button { flex-shrink: 0; padding: 3px 8px; font-size: 11px; box-shadow: none; color: var(--text-muted); }
+#sk-test-result:empty { display: none; }
+#tab-scheduler .scheduler-card { padding: 0; overflow: hidden; }
+.scheduler-card > .section-heading { padding: 20px 24px; margin: 0; }
+.scheduler-card h2 { margin: 0; }
+.scheduler-card .table-scroll { border: 0; border-radius: 0; margin: 0; }
+.scheduler-plans-table { width: 100%; min-width: 960px !important; table-layout: fixed; }
+.scheduler-plans-table th:first-child { width: 24%; min-width: 0; }
+.scheduler-plans-table th:nth-child(2) { width: 13%; }
+.scheduler-plans-table th:nth-child(3) { width: 17%; }
+.scheduler-plans-table th:nth-child(4) { width: auto; }
+.scheduler-plans-table th:nth-child(5) { width: 58px; }
+.scheduler-plans-table th:nth-child(6) { width: 190px; }
+.scheduler-plans-table th, .scheduler-plans-table td { padding: 18px 16px; }
+.scheduler-plans-table th { font-size: 12px; font-weight: 500; }
+.scheduler-plans-table td:first-child strong { display: block; font-size: 13px; margin-bottom: 6px; }
+.scheduler-plans-table td { font-size: 12px; }
+.scheduler-plans-table .scheduler-task-desc { line-height: 1.7; margin: 0; }
+.scheduler-plans-table .date-cell { font-size: 12px; white-space: normal; font-variant-numeric: tabular-nums; }
+.scheduler-plans-table .badge { font-size: 11px; padding: 2px 8px; margin-bottom: 4px; }
+.scheduler-plans-table .row-actions { gap: 5px; }
+.scheduler-plans-table .row-actions button { padding: 5px 8px; font-size: 12px; box-shadow: none; }
+.scheduler-plans-table .btn-sched-run { color: var(--text-accent); border-color: var(--focus-ring); background: var(--bg-panel); }
+.scheduler-plan-code { display: inline-block; padding: 2px 6px; border-radius: 4px; background: var(--bg-panel); font-size: 11px; }
+.scheduler-outcome { margin-top: 6px; color: var(--text-muted); font-size: 12px; line-height: 1.65; }
+.scheduler-outcome summary { cursor: pointer; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.scheduler-outcome summary::before { content: "›"; display: inline-block; margin-right: 5px; color: var(--text-accent); }
+.scheduler-outcome[open] summary::before { transform: rotate(90deg); }
+.scheduler-outcome summary:hover { color: var(--text-accent); }
+.scheduler-outcome[open] summary { display: block; }
+@media (max-width: 1200px) {
+  .operations-page .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .operations-page .grid-2 > .card { width: 100%; }
+}
+@media (max-width: 700px) {
+  .operations-page .card { padding: 20px 16px; }
+  .operations-page .grid-2 { gap: 18px; }
+  .operations-page .page-heading { margin-bottom: 20px; }
+  .operations-page .page-heading h1 { font-size: 24px; }
+  .operations-page .operation-actions { flex-wrap: wrap; margin-top: 20px; }
+  .operations-page .operation-actions button { flex: 1 1 auto; }
+  .operations-page .section-heading { flex-wrap: wrap; gap: 10px; }
+  .scheduler-card > .section-heading { padding: 18px 16px; }
+  #safekeep-settings-form .form-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

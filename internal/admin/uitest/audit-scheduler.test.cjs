@@ -21,8 +21,8 @@ test('navigation and panes include Audit Center and Scheduled Tasks tabs', () =>
   assert.match(html, /data-tab="tab-scheduler"/);
   assert.match(html, /data-tab="tab-settings"/);
   assert.match(html, /<section id="tab-audit" class="tab-pane hidden">/);
-  assert.match(html, /<section id="tab-scheduler" class="tab-pane hidden">/);
-  assert.match(html, /<section id="tab-settings" class="tab-pane hidden">/);
+  assert.match(html, /<section id="tab-scheduler" class="tab-pane hidden[^"]*">/);
+  assert.match(html, /<section id="tab-settings" class="tab-pane hidden[^"]*">/);
   assert.match(html, /id="safekeep-settings-form"/);
   assert.match(html, /id="sk-base-url"/);
   assert.match(html, /id="sk-api-key"/);
@@ -154,9 +154,9 @@ test('SafeKeep settings use credentials for status and save without an integrati
   const elements = new Map();
   const handlers = new Map();
   const calls = [];
-  for (const id of ['safekeep-settings-form', 'sk-base-url', 'sk-api-key', 'sk-backup-passphrase', 'sk-default-mode', 'sk-default-path', 'sk-default-targets', 'sk-status-badge', 'btn-sk-clear-key', 'btn-secret-sk-api-key', 'btn-secret-sk-backup-passphrase']) {
+  for (const id of ['btn-sk-save', 'safekeep-settings-form', 'sk-base-url', 'sk-api-key', 'sk-backup-passphrase', 'sk-default-mode', 'sk-default-path', 'sk-default-targets', 'sk-status-badge', 'btn-sk-clear-key', 'btn-secret-sk-api-key', 'btn-secret-sk-backup-passphrase']) {
     elements.set(id, {
-      id, dataset: {}, placeholder: '',
+      id, dataset: {}, placeholder: '', contains: () => false,
       value: '', textContent: '', className: '',
       classList: { toggle() {} },
       setAttribute(name, value) { this[name] = value; },
@@ -175,6 +175,7 @@ test('SafeKeep settings use credentials for status and save without an integrati
     localStorage: { getItem: () => null, setItem() {} },
     state: {},
     api: async (url, options) => {
+      if (!options) return settings;
       const payload = JSON.parse(options.body);
       calls.push({ url, payload });
       return { ...settings, has_api_key: !payload.clear_api_key };
@@ -199,7 +200,17 @@ test('SafeKeep settings use credentials for status and save without an integrati
     assert.equal(badge.textContent, 'Not configured');
   }
 
+  context.state.safekeepSettings = settings;
   context.renderSafekeepSettings(settings);
+  assert.equal(context.canSaveSafekeepSettings(), false);
+  elements.get('sk-base-url').value += '/new';
+  assert.equal(context.canSaveSafekeepSettings(), true);
+  elements.get('sk-base-url').value = settings.base_url;
+  assert.equal(context.canSaveSafekeepSettings(), false);
+  elements.get('sk-api-key').value = 'revealed-key';
+  elements.get('sk-api-key').dataset.secretSource = 'saved';
+  assert.equal(context.canSaveSafekeepSettings(), false);
+  elements.get('sk-api-key').dataset.secretSource = '';
   elements.get('sk-api-key').value = 'replacement-key';
   await handlers.get('safekeep-settings-form:submit')({ preventDefault() {} });
   assert.equal(calls[0].url, '/api/admin/integrations/safekeep');
@@ -210,5 +221,18 @@ test('SafeKeep settings use credentials for status and save without an integrati
   await handlers.get('btn-sk-clear-key:click')();
   assert.deepEqual(calls[1].payload, { clear_api_key: true });
   assert.equal(badge.textContent, 'Not configured');
+  const baseline = context.state.safekeepSettings;
+  elements.get('sk-default-path').value = 'unsaved-path';
+  await context.loadSafekeepSettings();
+  assert.equal(elements.get('sk-default-path').value, 'unsaved-path');
+  assert.equal(context.state.safekeepSettings, baseline);
+  elements.get('sk-default-path').value = baseline.default_path || 'engram';
+  elements.get('safekeep-settings-form').contains = () => true;
+  await context.loadSafekeepSettings();
+  assert.equal(context.state.safekeepSettings, baseline);
+  elements.get('safekeep-settings-form').contains = () => false;
+  await context.loadSafekeepSettings();
+  assert.equal(context.state.safekeepSettings, settings);
+  assert.equal(elements.get('btn-sk-save').disabled, true);
   assert.equal(context.t('请先在「系统设置」中配置 SafeKeep URL 与 API Key，自动备份由本任务的启用开关控制。'), "Configure the SafeKeep URL and API key in Settings first. This task's enable switch controls automatic backups.");
 });

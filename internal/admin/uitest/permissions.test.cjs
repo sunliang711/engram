@@ -84,15 +84,16 @@ test('project grant picker supports explicit grants and revocation for a global-
 test('member grant actions submit none to revoke a project and remove global access', async () => {
   const h = harness();
   const attributes = {};
+  const select = { value: 'none', dataset: { saved: 'writer' }, disabled: false };
   const button = {
     disabled: false, dataset: { project: h.project.id },
     setAttribute(key, value) { attributes[key] = value; },
     removeAttribute(key) { delete attributes[key]; },
-    closest: () => ({ querySelector: () => ({ value: 'none' }) }),
+    closest: () => ({ querySelector: () => select }),
   };
   await h.$('member-projects-table').click({ target: { closest: () => button } });
   assert.deepEqual(h.requests[0], { url: '/api/admin/projects/members', method: 'POST', body: { project_id: 'project', principal_id: 'member', role: 'none' } });
-  assert.equal(button.disabled, false);
+  assert.equal(button.disabled, true);
   assert.equal(attributes['aria-busy'], undefined);
   h.$('member-role').value = 'none';
   await h.submissions['member-role-form']({ preventDefault() {} });
@@ -170,4 +171,26 @@ test('creating or binding a member explicitly configures project creation permis
       assert.equal(h.requests[0].body.can_create_project, allowed);
     }
   }
+});
+
+
+test('permission save predicates require changes and preserve inactive access guards', () => {
+  const h = harness();
+  h.context.renderMemberDetail();
+  assert.equal(h.context.canSaveMemberRole(), false);
+  h.$('member-create-project').checked = true;
+  assert.equal(h.context.canSaveMemberRole(), true);
+  h.$('member-create-project').checked = false;
+  assert.equal(h.context.canSaveMemberRole(), false);
+  h.$('member-role').value = 'global_writer';
+  assert.equal(h.context.canSaveMemberRole(), true);
+  h.$('member-role').disabled = true;
+  assert.equal(h.context.canSaveMemberRole(), false);
+  h.$('pm-principal').value = h.principal.id;
+  h.context.renderProjectRole();
+  assert.equal(h.context.canSaveProjectRole(), false);
+  h.$('pm-role').value = 'writer';
+  assert.equal(h.context.canSaveProjectRole(), true);
+  h.$('pm-role').value = 'none';
+  assert.equal(h.context.canSaveProjectRole(), false);
 });

@@ -483,7 +483,7 @@
     const active = tenant.status === "active" && principal.status === "active";
     $("member-role").disabled = !active;
     $("member-create-project").disabled = !active;
-    $("member-role-form").querySelector('button[type="submit"]').disabled = !active;
+    $("member-role-form").querySelector('button[type="submit"]').disabled = !canSaveMemberRole();
     $("member-token-name").disabled = !active;
     $("member-token-form").querySelector('button[type="submit"]').disabled = !active;
     if (!sameContext) { $("member-token-name").value = ""; clearFormErrors($("member-role-form")); clearFormErrors($("member-token-form")); }
@@ -501,8 +501,13 @@
       const role = member ? member.role : "none";
       const label = project.status !== "active" ? t("项目已停用，无法访问") : PROJECT_ROLES[role] || t("无权限");
       const options = Object.entries(PROJECT_ROLES).map(([value, name]) => `<option value="${value}"${(drafts.get(project.id) || role) === value ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
-      return `<tr><td><strong>${escapeHtml(project.name)}</strong></td><td>${escapeHtml(label)}</td><td><div class="row-actions"><select data-project="${project.id}" data-saved="${role}" aria-label="${escapeHtml(t`项目「${project.name}」的权限`)}"${enabled ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-member-project" data-project="${project.id}"${enabled ? "" : " disabled"}>${t("保存授权")}</button></div></td></tr>`;
+      return `<tr><td><strong>${escapeHtml(project.name)}</strong></td><td>${escapeHtml(label)}</td><td><div class="row-actions"><select data-project="${project.id}" data-saved="${role}" aria-label="${escapeHtml(t`项目「${project.name}」的权限`)}"${enabled ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-member-project" data-project="${project.id}"${enabled && drafts.has(project.id) && drafts.get(project.id) !== role ? "" : " disabled"}>${t("保存授权")}</button></div></td></tr>`;
     }).join("") || t('<tr><td colspan="3" class="empty-state">当前租户还没有项目，可前往“项目”页注册。</td></tr>');
+  }
+
+  // canSaveMemberRole compares effective permissions without treating refreshes as edits.
+  function canSaveMemberRole() {
+    return !$("member-role").disabled && ($("member-role").value !== $("member-role").dataset.saved || String(!!$("member-create-project").checked) !== $("member-create-project").dataset.saved);
   }
 
   // renderManagementViews validates parent contexts before displaying any scoped management data.
@@ -611,6 +616,7 @@
     select.disabled = !enabled || !members.length;
     renderProjectRole();
     if (previous === select.value && savedRole === $("pm-role").dataset.saved && !$("pm-role").disabled) $("pm-role").value = previousRole;
+    $("add-project-member-form").querySelector('button[type="submit"]').disabled = !canSaveProjectRole();
   }
 
   // renderProjectRole shows explicit grants and supports revoking project access.
@@ -623,7 +629,11 @@
     $("pm-role").dataset.saved = $("pm-role").value;
     const disabled = $("pm-principal").disabled || !membership;
     $("pm-role").disabled = disabled;
-    $("add-project-member-form").querySelector('button[type="submit"]').disabled = disabled;
+    $("add-project-member-form").querySelector('button[type="submit"]').disabled = !canSaveProjectRole();
+  }
+
+  function canSaveProjectRole() {
+    return !$("pm-role").disabled && $("pm-role").value !== $("pm-role").dataset.saved;
   }
 
   // openProject resets form drafts when moving between project contexts.
@@ -1525,6 +1535,8 @@
     $("rename-input").value = initialValue || "";
     state.renameOpener = document.activeElement;
     state.renameTask = onSubmitValue;
+    state.renameInitialValue = $("rename-input").value.trim();
+    $("btn-rename-ok").disabled = true;
     modal.classList.remove("hidden");
     $("rename-input").focus();
     $("rename-input").select();
@@ -1629,10 +1641,19 @@
   // onSubmit prevents duplicate writes, shows failures inline, and releases the busy state afterwards.
   function onSubmit(id, handler, canSubmit = () => true) {
     const form = $(id);
-    form.addEventListener("input", () => clearFormErrors(form));
+    const tracksChanges = arguments.length > 2;
+    const updateButton = () => {
+      // Creation and action forms retain their own availability rules.
+      if (!tracksChanges) return;
+      const button = form.querySelector('button[type="submit"]');
+      if (button) button.disabled = form.dataset.submitting === "true" || !canSubmit();
+    };
+    form.addEventListener("input", () => { clearFormErrors(form); updateButton(); });
+    form.addEventListener("change", updateButton);
+    updateButton();
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (form.dataset.submitting === "true") return;
+      if (form.dataset.submitting === "true" || !canSubmit()) return;
       clearFormErrors(form);
       const button = form.querySelector('button[type="submit"]');
       form.dataset.submitting = "true";
@@ -1645,13 +1666,15 @@
 
   // Keep wide tables scrollable inside their cards instead of widening the document.
   document.querySelectorAll("table").forEach((table) => {
-    const wrapper = document.createElement("div");
+    const wrapper = table.parentElement.classList.contains("table-scroll") ? table.parentElement : document.createElement("div");
     wrapper.className = "table-scroll";
     wrapper.tabIndex = 0;
     wrapper.setAttribute("role", "region");
     wrapper.setAttribute("aria-label", (table.closest(".member-section, .card, .glossary-section")?.querySelector("h2, h3")?.textContent || table.closest(".tab-pane")?.querySelector("h1")?.textContent || t("数据表格")) + t("，可横向滚动"));
-    table.before(wrapper);
-    wrapper.appendChild(table);
+    if (table.parentElement !== wrapper) {
+      table.before(wrapper);
+      wrapper.appendChild(table);
+    }
   });
 
   // Event Listeners
@@ -1740,7 +1763,7 @@
     $("confirm-admin-password").value = "";
     showToast(t("管理员密码已更新！"));
     renderView(s);
-  });
+  }, () => !!$("new-admin-password").value || !!$("confirm-admin-password").value);
 
   $("btn-open-change-pwd").addEventListener("click", () => {
     resetSecretVisibility();
@@ -1759,6 +1782,7 @@
     $("current-admin-password").value = "";
     $("new-admin-password").value = "";
     $("confirm-admin-password").value = "";
+    $("force-password-form").querySelector('button[type="submit"]').disabled = true;
     $("force-password-view").classList.add("hidden");
     $("app-view").classList.remove("hidden");
   });
@@ -1972,7 +1996,7 @@
       await state.renameTask(val);
       closeRenameModal();
     }
-  });
+  }, () => !!$("rename-input").value.trim() && $("rename-input").value.trim() !== state.renameInitialValue);
   ["prin-mode", "prin-existing", "prin-role"].forEach((id) => $(id).addEventListener("change", updatePrincipalMode));
   $("member-role").addEventListener("change", () => { $("member-role-hint").textContent = tenantRoleHint($("member-role").value); });
 
@@ -2015,6 +2039,13 @@
     });
     showToast(t("成员权限已更新"));
     await refreshAllData();
+  }, canSaveMemberRole);
+
+  $("member-projects-table").addEventListener("change", (event) => {
+    const select = event.target.closest("select[data-project]");
+    if (!select) return;
+    const button = select.closest("tr").querySelector(".btn-save-member-project");
+    button.disabled = button.getAttribute("aria-busy") === "true" || select.disabled || select.value === select.dataset.saved;
   });
 
   // Project updates capture the current identity before awaiting the scoped write.
@@ -2023,19 +2054,21 @@
     const principal = selectedMember();
     if (!button || button.disabled || !principal) return;
     const select = button.closest("tr").querySelector("select");
+    const role = select.value;
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     try {
       await api("/api/admin/projects/members", {
         method: "POST",
-        body: JSON.stringify({ project_id: button.dataset.project, principal_id: principal.id, role: select.value }),
+        body: JSON.stringify({ project_id: button.dataset.project, principal_id: principal.id, role }),
       });
+      select.dataset.saved = role;
       showToast(t("项目权限已更新"));
       await refreshAllData();
     } catch (err) {
       showToast(err.message, true);
     } finally {
-      button.disabled = false;
+      button.disabled = select.disabled || select.value === select.dataset.saved;
       button.removeAttribute("aria-busy");
     }
   });
@@ -2099,8 +2132,8 @@
       }),
     });
     showToast(t("项目权限已更新"));
-    refreshAllData();
-  });
+    await refreshAllData();
+  }, canSaveProjectRole);
 
   onSubmit("add-project-remote-form", async (e) => {
     e.preventDefault();
@@ -2656,6 +2689,7 @@
   if ($("mig-import-file")) {
     $("mig-import-file").addEventListener("change", async () => {
       state.migInspect = null;
+      $("mig-import-filename").textContent = $("mig-import-file").files[0]?.name || t("选择迁移包（.zip）");
       if ($("mig-import-result")) $("mig-import-result").classList.add("hidden");
       renderMigrationInspect();
       try {
@@ -3055,7 +3089,7 @@
       const calendar = task.schedule_type && task.schedule_type !== "interval";
       const nextAt = task.enabled && task.next_run_at ? (calendar ? formatScheduleTime(task.next_run_at, task.timezone) : formatDate(task.next_run_at)) : "—";
       const lastOutcome = task.last_run_at
-        ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span><div class="date-cell">${escapeHtml(formatDate(task.last_run_at))}</div><div class="scheduler-task-desc">${escapeHtml(task.last_summary || task.last_error || "")}</div>`
+        ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span><div class="date-cell">${escapeHtml(formatDate(task.last_run_at))}</div><details class="scheduler-outcome"><summary>${escapeHtml(task.last_summary || task.last_error || "—")}</summary></details>`
         : "—";
       const description = calendar ? describeTaskCron(task.cron_expression || "") : formatDurationSeconds(task.interval_seconds);
       const expression = calendar ? task.cron_expression : formatIntervalInput(task.interval_seconds);
@@ -3176,10 +3210,44 @@
         }
       }
     }
+    state.schedulerConfigBaseline = JSON.stringify(schedulerConfigPayload());
     $("scheduler-config-modal").classList.remove("hidden");
     document.body.classList.add("scheduler-drawer-open");
     $("btn-close-scheduler-config").focus();
     return requestSchedulePreview();
+  }
+
+  // schedulerConfigPayload excludes hidden plan fields from dirty comparisons.
+  function schedulerConfigPayload() {
+    const payload = {
+      name: $("sched-cfg-name").value,
+      enabled: $("sched-cfg-enabled").checked,
+      timeout_seconds: Number($("sched-cfg-timeout").value),
+      ...calendarSchedulePayload(),
+    };
+    if (payload.name === "audit_log_cleanup") {
+      payload.config = {
+        retention: $("sched-cfg-retention").value.trim(),
+        batch_size: Number($("sched-cfg-batch-size").value) || 1000,
+      };
+    } else if (payload.name === "safekeep_migration_backup") {
+      payload.config = {
+        migration_mode: $("sched-cfg-mig-mode").value,
+        include_deleted: $("sched-cfg-include-deleted").checked,
+        upload_mode: $("sched-cfg-upload-mode").value,
+        remote_path: $("sched-cfg-remote-path").value.trim(),
+        targets: $("sched-cfg-targets").value.trim(),
+      };
+    }
+    return payload;
+  }
+
+  function canSaveSchedulerConfig() {
+    return state.schedulerPreviewValid && JSON.stringify(schedulerConfigPayload()) !== state.schedulerConfigBaseline;
+  }
+
+  function updateSchedulerSaveButton() {
+    $("btn-save-scheduler-config").disabled = $("scheduler-config-form").dataset.submitting === "true" || !canSaveSchedulerConfig();
   }
 
   // schedulerPlanPresets matches the reference project's preset expressions exactly.
@@ -3230,7 +3298,7 @@
       $("sched-cfg-next-runs").innerHTML = times.map((time) => `<li><time datetime="${escapeHtml(time)}">${escapeHtml(formatScheduleTime(time, zone))}</time></li>`).join("");
       $("sched-cfg-preview-status").textContent = payload.schedule_type === "interval" ? formatDurationSecondsPreview(payload.interval) : describeTaskCron(payload.cron_expression) || payload.cron_expression;
       state.schedulerPreviewValid = true;
-      $("btn-save-scheduler-config").disabled = false;
+      updateSchedulerSaveButton();
     } catch (err) {
       if (request !== state.schedulerPreviewRequest || $("scheduler-config-modal").classList.contains("hidden")) return;
       $("sched-cfg-preview-status").textContent = err.message;
@@ -3552,26 +3620,7 @@
       if (!state.schedulerPreviewValid) throw new Error(t("请先确认执行计划有效。"));
       const name = $("sched-cfg-name").value;
       const previewRequest = state.schedulerPreviewRequest;
-      const payload = {
-        name,
-        enabled: $("sched-cfg-enabled").checked,
-        timeout_seconds: Number($("sched-cfg-timeout").value),
-        ...calendarSchedulePayload(),
-      };
-      if (name === "audit_log_cleanup") {
-        payload.config = {
-          retention: $("sched-cfg-retention").value.trim(),
-          batch_size: Number($("sched-cfg-batch-size").value) || 1000,
-        };
-      } else if (name === "safekeep_migration_backup") {
-        payload.config = {
-          migration_mode: $("sched-cfg-mig-mode").value,
-          include_deleted: $("sched-cfg-include-deleted").checked,
-          upload_mode: $("sched-cfg-upload-mode").value,
-          remote_path: $("sched-cfg-remote-path").value.trim(),
-          targets: $("sched-cfg-targets").value.trim(),
-        };
-      }
+      const payload = schedulerConfigPayload();
       await api("/api/admin/scheduler/tasks", {
         method: "PATCH",
         body: JSON.stringify(payload),
@@ -3579,13 +3628,26 @@
       if (name === $("sched-cfg-name").value && previewRequest === state.schedulerPreviewRequest) closeSchedulerConfig();
       showToast(t("定时任务配置已保存"));
       await loadSchedulerCenter();
-    }, () => state.schedulerPreviewValid);
+    }, canSaveSchedulerConfig);
   }
 
   // SafeKeep Integration Settings & Backup
+  function canSaveSafekeepSettings() {
+    const saved = state.safekeepSettings;
+    if (!saved) return false;
+    return $("sk-base-url").value.trim() !== (saved.base_url || "") ||
+      $("sk-default-mode").value !== (saved.default_mode || "sync") ||
+      $("sk-default-path").value.trim() !== (saved.default_path || "engram") ||
+      $("sk-default-targets").value.trim() !== (saved.default_targets || "") ||
+      !!secretDraft("sk-api-key").trim() || !!secretDraft("sk-backup-passphrase");
+  }
+
   async function loadSafekeepSettings() {
     if (!$("safekeep-settings-form")) return;
     const data = await api("/api/admin/integrations/safekeep");
+    const form = $("safekeep-settings-form");
+    // Background refreshes must not replace a draft or cancel an active secret reveal.
+    if (state.safekeepSettings && (canSaveSafekeepSettings() || form.contains(document.activeElement) || form.dataset.submitting === "true")) return;
     state.safekeepSettings = data;
     renderSafekeepSettings(data);
   }
@@ -3598,6 +3660,7 @@
     $("sk-default-mode").value = data.default_mode || "sync";
     $("sk-default-path").value = data.default_path || "engram";
     $("sk-default-targets").value = data.default_targets || "";
+    $("btn-sk-save").disabled = true;
 
     const badge = $("sk-status-badge");
     if (badge) {
@@ -3651,7 +3714,7 @@
       state.safekeepSettings = updated;
       renderSafekeepSettings(updated);
       showToast(t("SafeKeep 配置已保存"));
-    });
+    }, canSaveSafekeepSettings);
   }
 
   if ($("btn-sk-clear-key")) {

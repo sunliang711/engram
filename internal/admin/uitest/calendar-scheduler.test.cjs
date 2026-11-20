@@ -17,7 +17,7 @@ function calendarHarness(tasks = [], preview = async () => ({ next_runs: times }
     if (!nodes.has(id)) {
       const classes = new Set(id.endsWith('-modal') ? ['hidden'] : []);
       nodes.set(id, {
-        value: '', textContent: '', innerHTML: '', isConnected: true,
+        value: '', textContent: '', innerHTML: '', isConnected: true, dataset: {},
         classList: { toggle(name, value) { if (value) classes.add(name); else classes.delete(name); }, add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
         querySelectorAll: () => (groups[id] || []).map($),
         focus() { document.activeElement = this; },
@@ -78,7 +78,13 @@ test('editing preserves existing custom dates, time zones, timeouts and fixed in
   assert.equal(h.context.calendarSchedulePayload().cron_expression, tasks[0].cron_expression);
   assert.equal(h.context.calendarSchedulePayload().timezone, 'UTC');
   assert.equal((h.$('sched-cfg-next-runs').innerHTML.match(/<li>/g) || []).length, 5);
+  assert.equal(h.$('btn-save-scheduler-config').disabled, true);
+  h.$('sched-cfg-timeout').value = 180;
+  h.context.updateSchedulerSaveButton();
   assert.equal(h.$('btn-save-scheduler-config').disabled, false);
+  h.$('sched-cfg-timeout').value = 120;
+  h.context.updateSchedulerSaveButton();
+  assert.equal(h.$('btn-save-scheduler-config').disabled, true);
   await h.context.openSchedulerConfigModal('legacy');
   assert.equal(h.context.calendarSchedulePayload().interval, '15m');
   assert.match(html, /class="scheduler-drawer"/);
