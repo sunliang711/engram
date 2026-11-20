@@ -26,6 +26,7 @@ test('navigation and panes include Audit Center and Scheduled Tasks tabs', () =>
   assert.match(html, /id="safekeep-settings-form"/);
   assert.match(html, /id="sk-base-url"/);
   assert.match(html, /id="sk-api-key"/);
+  assert.doesNotMatch(html, /id="sk-enabled"/);
   assert.match(html, /id="audit-cleanup-modal"/);
   assert.match(html, /id="scheduler-config-modal"/);
 });
@@ -147,4 +148,63 @@ test('audit and scheduler renderers escape dynamic strings and translate in Engl
   assert.match(schedTbody.innerHTML, />Enable</);
   assert.match(schedTbody.innerHTML, /Configure/);
   assert.match(schedTbody.innerHTML, /Run now/);
+});
+
+test('SafeKeep settings use credentials for status and save without an integration switch', async () => {
+  const elements = new Map();
+  const handlers = new Map();
+  const calls = [];
+  for (const id of ['safekeep-settings-form', 'sk-base-url', 'sk-api-key', 'sk-backup-passphrase', 'sk-default-mode', 'sk-default-path', 'sk-default-targets', 'sk-status-badge', 'btn-sk-clear-key']) {
+    elements.set(id, {
+      value: '', textContent: '', className: '',
+      classList: { toggle() {} },
+      addEventListener: (event, handler) => handlers.set(`${id}:${event}`, handler),
+    });
+  }
+  const settings = { base_url: 'https://backup.example.com', has_api_key: true, enabled: false };
+  const context = vm.createContext({
+    $: (id) => elements.get(id),
+    window: { matchMedia: () => ({ matches: false }) },
+    document: { documentElement: { dataset: {} } },
+    navigator: { language: 'en-US' },
+    location: { search: '?lang=en', href: 'http://localhost/settings?lang=en' },
+    URL, URLSearchParams,
+    localStorage: { getItem: () => null, setItem() {} },
+    state: {},
+    api: async (url, options) => {
+      const payload = JSON.parse(options.body);
+      calls.push({ url, payload });
+      return { ...settings, has_api_key: !payload.clear_api_key };
+    },
+    onSubmit: (id, handler) => handlers.set(`${id}:submit`, handler),
+    showToast() {},
+  });
+  vm.runInContext(i18nSource, context);
+  context.t = context.window.EngramI18n.t;
+  const start = appSource.indexOf('  // SafeKeep Integration Settings & Backup');
+  const end = appSource.indexOf('  if ($("scheduler-runs-filter"))', start);
+  assert.ok(start >= 0 && end > start, 'Missing SafeKeep UI block');
+  vm.runInContext(appSource.slice(start, end), context);
+
+  context.renderSafekeepSettings(settings);
+  const badge = elements.get('sk-status-badge');
+  assert.equal(badge.textContent, 'Configured');
+  assert.equal(badge.className, 'badge success');
+  for (const incomplete of [{ base_url: '', has_api_key: true }, { base_url: settings.base_url, has_api_key: false }]) {
+    context.renderSafekeepSettings({ ...incomplete, enabled: true });
+    assert.equal(badge.textContent, 'Not configured');
+  }
+
+  context.renderSafekeepSettings(settings);
+  elements.get('sk-api-key').value = 'replacement-key';
+  await handlers.get('safekeep-settings-form:submit')({ preventDefault() {} });
+  assert.equal(calls[0].url, '/api/admin/integrations/safekeep');
+  assert.equal(calls[0].payload.base_url, settings.base_url);
+  assert.equal(calls[0].payload.api_key, 'replacement-key');
+  assert.equal(Object.hasOwn(calls[0].payload, 'enabled'), false);
+
+  await handlers.get('btn-sk-clear-key:click')();
+  assert.deepEqual(calls[1].payload, { clear_api_key: true });
+  assert.equal(badge.textContent, 'Not configured');
+  assert.equal(context.t('请先在「系统设置」中配置 SafeKeep URL 与 API Key，自动备份由本任务的启用开关控制。'), "Configure the SafeKeep URL and API key in Settings first. This task's enable switch controls automatic backups.");
 });

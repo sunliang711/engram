@@ -53,7 +53,6 @@ safekeep_backup_enabled = false
 safekeep_backup_interval = "24h"
 
 [safekeep]
-enabled = false
 # base_url = "http://localhost:8333"
 # api_key = "sk_..."
 default_mode = "sync"

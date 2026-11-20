@@ -94,7 +94,6 @@ type SchedulerConfig struct {
 }
 
 type SafekeepConfig struct {
-	Enabled        bool   `toml:"enabled" json:"enabled"`
 	BaseURL        string `toml:"base_url" json:"base_url"`
 	APIKey         string `toml:"api_key" json:"api_key"`
 	DefaultMode    string `toml:"default_mode" json:"default_mode"`
@@ -168,7 +167,6 @@ func Default() Config {
 			SafekeepBackupInterval: 24 * time.Hour,
 		},
 		Safekeep: SafekeepConfig{
-			Enabled:     false,
 			DefaultMode: "sync",
 			DefaultPath: "engram",
 		},
@@ -284,6 +282,7 @@ func normalizeDurationFields(raw map[string]any, structType reflect.Type, prefix
 	return nil
 }
 
+// applyEnvOverrides applies supported environment variables to the loaded config.
 func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("ENGRAM_LISTEN_ADDR"); v != "" {
 		cfg.Server.ListenAddr = v
@@ -342,9 +341,6 @@ func applyEnvOverrides(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			cfg.Scheduler.AuditCleanupBatchSize = n
 		}
-	}
-	if v := os.Getenv("ENGRAM_SAFEKEEP_ENABLED"); v != "" {
-		cfg.Safekeep.Enabled = strings.EqualFold(v, "true") || v == "1"
 	}
 	if v := os.Getenv("ENGRAM_SAFEKEEP_URL"); v != "" {
 		cfg.Safekeep.BaseURL = strings.TrimSpace(v)

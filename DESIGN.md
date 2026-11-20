@@ -914,3 +914,4 @@ V1 稳定后再评估：
 3. **SafeKeep 远程备份集成（`internal/safekeep`，迁移 `009_safekeep_integration.sql`）**：
    - 在 `safekeep_settings` 表持久化 SafeKeep 服务 URL、使用服务端签名密钥 AES-256-GCM 加密的 API Key 与可选迁移包加密口令，以及默认上传模式（`sync`/`async`）、子路径与目标上游。
    - 在「系统设置」（`/settings`）提供地址/API Key 配置、`/api/v1/upstreams` 连通性测试与一键手动备份，在「系统迁移」（`/migration`）支持导出后直接上传 SafeKeep。
+   - 系统设置不提供独立集成开关；地址与 API Key 配置完整即可手动备份，自动备份仅由定时任务的启用状态控制。旧数据库的 `safekeep_settings.enabled` 字段保留但不再读写，旧 `[safekeep].enabled` 与 `ENGRAM_SAFEKEEP_ENABLED` 配置不再生效。

@@ -18,7 +18,6 @@ type UpstreamInfo struct {
 
 // SettingsView is the public representation of SafeKeep integration settings (secrets are masked).
 type SettingsView struct {
-	Enabled             bool       `json:"enabled"`
 	BaseURL             string     `json:"base_url"`
 	HasAPIKey           bool       `json:"has_api_key"`
 	APIKeyMasked        string     `json:"api_key_masked"`
@@ -34,7 +33,6 @@ type SettingsView struct {
 
 // UpdateSettingsRequest updates persisted SafeKeep settings.
 type UpdateSettingsRequest struct {
-	Enabled               *bool   `json:"enabled,omitempty"`
 	BaseURL               *string `json:"base_url,omitempty"`
 	APIKey                *string `json:"api_key,omitempty"`
 	ClearAPIKey           bool    `json:"clear_api_key,omitempty"`

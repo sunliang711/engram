@@ -36,7 +36,6 @@ func NewService(pool *pgxpool.Pool, sealer Sealer, log zerolog.Logger) *Service 
 }
 
 type storedSettings struct {
-	enabled            bool
 	baseURL            string
 	apiKeyCipher       string
 	apiKeyPrefix       string
@@ -78,17 +77,18 @@ func (s *Service) SeedDefaults(ctx context.Context, cfg config.SafekeepConfig) e
 
 	_, err = s.pool.Exec(ctx, `
 		INSERT INTO safekeep_settings (
-			id, enabled, base_url, api_key_ciphertext, api_key_prefix,
+			id, base_url, api_key_ciphertext, api_key_prefix,
 			default_mode, default_path, default_targets, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 		ON CONFLICT (id) DO NOTHING
-	`, settingsRowID, cfg.Enabled, cleanURL, apiKeyCipher, apiKeyPrefix, mode, defaultPath, strings.TrimSpace(cfg.DefaultTargets))
+	`, settingsRowID, cleanURL, apiKeyCipher, apiKeyPrefix, mode, defaultPath, strings.TrimSpace(cfg.DefaultTargets))
 	if err != nil {
 		return fmt.Errorf("seed safekeep settings: %w", err)
 	}
 	return nil
 }
 
+// loadSettings reads connection settings without the legacy integration switch.
 func (s *Service) loadSettings(ctx context.Context) (storedSettings, error) {
 	var st storedSettings
 	if s == nil || s.pool == nil {
@@ -97,14 +97,14 @@ func (s *Service) loadSettings(ctx context.Context) (storedSettings, error) {
 		return st, nil
 	}
 	err := s.pool.QueryRow(ctx, `
-		SELECT enabled, base_url, api_key_ciphertext, api_key_prefix,
+		SELECT base_url, api_key_ciphertext, api_key_prefix,
 		       backup_passphrase_ciphertext, has_backup_passphrase,
 		       default_mode, default_path, default_targets,
 		       last_tested_at, last_test_status, last_test_error, updated_at
 		FROM safekeep_settings
 		WHERE id = $1
 	`, settingsRowID).Scan(
-		&st.enabled, &st.baseURL, &st.apiKeyCipher, &st.apiKeyPrefix,
+		&st.baseURL, &st.apiKeyCipher, &st.apiKeyPrefix,
 		&st.passphraseCipher, &st.hasPassphrase,
 		&st.defaultMode, &st.defaultPath, &st.defaultTargets,
 		&st.lastTestedAt, &st.lastTestStatus, &st.lastTestError, &st.updatedAt,
@@ -123,9 +123,9 @@ func (s *Service) loadSettings(ctx context.Context) (storedSettings, error) {
 	return st, nil
 }
 
+// toSettingsView exposes connection settings while masking saved credentials.
 func toSettingsView(st storedSettings) *SettingsView {
 	return &SettingsView{
-		Enabled:             st.enabled,
 		BaseURL:             st.baseURL,
 		HasAPIKey:           st.apiKeyCipher != "",
 		APIKeyMasked:        st.apiKeyPrefix,
@@ -159,9 +159,6 @@ func (s *Service) UpdateSettings(ctx context.Context, req UpdateSettingsRequest)
 		return nil, err
 	}
 
-	if req.Enabled != nil {
-		st.enabled = *req.Enabled
-	}
 	if req.BaseURL != nil {
 		cleanURL, err := ValidateBaseURL(*req.BaseURL)
 		if err != nil {
@@ -212,24 +209,14 @@ func (s *Service) UpdateSettings(ctx context.Context, req UpdateSettingsRequest)
 		st.defaultTargets = strings.TrimSpace(*req.DefaultTargets)
 	}
 
-	if st.enabled {
-		if st.baseURL == "" {
-			return nil, apperror.New(apperror.CodeInvalidArgument, "base_url is required when safekeep is enabled")
-		}
-		if st.apiKeyCipher == "" {
-			return nil, apperror.New(apperror.CodeInvalidArgument, "api_key is required when safekeep is enabled")
-		}
-	}
-
 	now := time.Now().UTC()
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO safekeep_settings (
-			id, enabled, base_url, api_key_ciphertext, api_key_prefix,
+			id, base_url, api_key_ciphertext, api_key_prefix,
 			backup_passphrase_ciphertext, has_backup_passphrase,
 			default_mode, default_path, default_targets, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
-			enabled = EXCLUDED.enabled,
 			base_url = EXCLUDED.base_url,
 			api_key_ciphertext = EXCLUDED.api_key_ciphertext,
 			api_key_prefix = EXCLUDED.api_key_prefix,
@@ -239,7 +226,7 @@ func (s *Service) UpdateSettings(ctx context.Context, req UpdateSettingsRequest)
 			default_path = EXCLUDED.default_path,
 			default_targets = EXCLUDED.default_targets,
 			updated_at = EXCLUDED.updated_at
-	`, settingsRowID, st.enabled, st.baseURL, st.apiKeyCipher, st.apiKeyPrefix,
+	`, settingsRowID, st.baseURL, st.apiKeyCipher, st.apiKeyPrefix,
 		st.passphraseCipher, st.hasPassphrase, st.defaultMode, st.defaultPath, st.defaultTargets, now); err != nil {
 		return nil, apperror.Wrap(apperror.CodeInternalError, "save safekeep settings", err)
 	}
@@ -327,9 +314,6 @@ func (s *Service) UploadArchive(ctx context.Context, filename string, data []byt
 	st, err := s.loadSettings(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if !st.enabled {
-		return nil, apperror.New(apperror.CodeInvalidArgument, "SafeKeep 集成未启用，请先在「系统设置」中配置并启用 SafeKeep")
 	}
 	if strings.TrimSpace(st.baseURL) == "" || st.apiKeyCipher == "" || s.sealer == nil {
 		return nil, apperror.New(apperror.CodeInvalidArgument, "SafeKeep URL 或 API Key 未配置，请先在「系统设置」中完善配置")

@@ -946,16 +946,10 @@
           <div class="card">
             <div class="section-heading">
               <h2>SafeKeep 备份网关配置</h2>
-              <span id="sk-status-badge" class="badge">未启用</span>
+              <span id="sk-status-badge" class="badge">未配置</span>
             </div>
             <p class="desc">对接 SafeKeep 客户端 API（<code>/api/v1/upstreams</code> 与 <code>/api/v1/backups</code>），密钥使用服务端签名密钥加密存储。</p>
             <form id="safekeep-settings-form">
-              <div class="form-group">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="sk-enabled" />
-                  <span>启用 SafeKeep 远程备份集成</span>
-                </label>
-              </div>
               <div class="form-group">
                 <label for="sk-base-url">SafeKeep 服务地址（URL）</label>
                 <input type="url" id="sk-base-url" placeholder="例如 http://localhost:8333 或 https://safekeep.example.com" />
@@ -1271,7 +1265,7 @@
           <div class="form-group">
             <label for="sched-cfg-targets">目标上游名称（可选，逗号分隔）</label>
             <input type="text" id="sched-cfg-targets" placeholder="留空使用 SafeKeep 默认上游" />
-            <small class="field-hint">请先在「系统设置」中配置 SafeKeep URL 与 API Key 并启用集成。</small>
+            <small class="field-hint">请先在「系统设置」中配置 SafeKeep URL 与 API Key，自动备份由本任务的启用开关控制。</small>
           </div>
         </div>
         <div class="button-row confirm-actions">

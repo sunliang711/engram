@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// TestAdminSafekeepSettingsAndScheduledMigrationBackup verifies backups need only connection settings.
 func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	dsn := os.Getenv("ENGRAM_ADMIN_TEST_DSN")
 	if dsn == "" {
@@ -96,7 +97,6 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 
 	// 1. Save SafeKeep URL, API Key, and optional backup passphrase via HTTP
 	savePayload, _ := json.Marshal(map[string]any{
-		"enabled":           true,
 		"base_url":          mockSafekeep.URL,
 		"api_key":           "sk_integration_key",
 		"backup_passphrase": "backup-secret-passphrase",
@@ -112,7 +112,7 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
 	}
-	if !view.Enabled || !view.HasAPIKey || !view.HasBackupPassphrase {
+	if !view.HasAPIKey || !view.HasBackupPassphrase {
 		t.Fatalf("unexpected saved settings view: %+v", view)
 	}
 
@@ -160,6 +160,13 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	}
 
 	// 5. Also verify manual backup endpoint works in knowledge mode
+	// Disabling automatic backups must not prevent manual backups.
+	disableReq, _ := json.Marshal(map[string]any{"name": scheduler.TaskSafekeepMigrationBackup, "enabled": false})
+	rec = httptest.NewRecorder()
+	h.handleSchedulerTasks(rec, httptest.NewRequest(http.MethodPatch, "/api/admin/scheduler/tasks", bytes.NewReader(disableReq)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable scheduled backup: %d %s", rec.Code, rec.Body.String())
+	}
 	manualReq, _ := json.Marshal(map[string]any{"mode": "knowledge", "include_deleted": false})
 	rec = httptest.NewRecorder()
 	h.handleSafekeepBackupNow(rec, httptest.NewRequest(http.MethodPost, "/api/admin/integrations/safekeep/backup", bytes.NewReader(manualReq)))

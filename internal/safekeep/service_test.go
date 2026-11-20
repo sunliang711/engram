@@ -117,6 +117,7 @@ func TestClientListUpstreamsAndUploadBackup(t *testing.T) {
 	}
 }
 
+// TestServicePersistAndMaskCredentials verifies configured backups ignore the legacy switch.
 func TestServicePersistAndMaskCredentials(t *testing.T) {
 	dsn := os.Getenv("ENGRAM_TEST_DSN")
 	if dsn == "" {
@@ -146,12 +147,19 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM safekeep_settings`)
 	})
 
-	enabled := true
+	// Seed connection defaults without requiring an integration enable flag.
+	if err := svc.SeedDefaults(ctx, config.SafekeepConfig{BaseURL: srv.URL, APIKey: "seed-key"}); err != nil {
+		t.Fatal(err)
+	}
+	seeded, err := svc.GetSettings(ctx)
+	if err != nil || seeded.BaseURL != srv.URL || !seeded.HasAPIKey || seeded.DefaultMode != "sync" || seeded.DefaultPath != "engram" {
+		t.Fatalf("unexpected seeded settings: %+v, err=%v", seeded, err)
+	}
+
 	url := srv.URL
 	key := "sk_live_1234567890"
 	pass := "archive-passphrase"
 	view, err := svc.UpdateSettings(ctx, UpdateSettingsRequest{
-		Enabled:          &enabled,
 		BaseURL:          &url,
 		APIKey:           &key,
 		BackupPassphrase: &pass,
@@ -159,7 +167,7 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !view.Enabled || !view.HasAPIKey || !view.HasBackupPassphrase || strings.Contains(view.APIKeyMasked, "7890") == false || view.APIKeyMasked == key {
+	if !view.HasAPIKey || !view.HasBackupPassphrase || strings.Contains(view.APIKeyMasked, "7890") == false || view.APIKeyMasked == key {
 		t.Fatalf("unexpected settings view: %+v", view)
 	}
 
@@ -171,8 +179,22 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 	if err != nil || gotPass != pass {
 		t.Fatalf("BackupPassphrase = %q, %v", gotPass, err)
 	}
-	upRes, err := svc.UploadArchive(ctx, "snap.zip", []byte("zipdata"), UploadOptions{})
-	if err != nil || upRes.TaskID != "t1" {
-		t.Fatalf("UploadArchive failed: %+v, err=%v", upRes, err)
+	for _, legacyEnabled := range []bool{false, true} {
+		// Existing databases may retain either value; neither may block uploads.
+		if _, err := database.Pool.Exec(ctx, `UPDATE safekeep_settings SET enabled = $1`, legacyEnabled); err != nil {
+			t.Fatal(err)
+		}
+		upRes, err := svc.UploadArchive(ctx, "snap.zip", []byte("zipdata"), UploadOptions{})
+		if err != nil || upRes.TaskID != "t1" {
+			t.Fatalf("UploadArchive with legacy enabled=%v failed: %+v, err=%v", legacyEnabled, upRes, err)
+		}
+	}
+
+	view, err = svc.UpdateSettings(ctx, UpdateSettingsRequest{ClearAPIKey: true})
+	if err != nil || view.HasAPIKey {
+		t.Fatalf("clear API key failed: %+v, err=%v", view, err)
+	}
+	if _, err := svc.UploadArchive(ctx, "snap.zip", []byte("zipdata"), UploadOptions{}); err == nil || !strings.Contains(err.Error(), "URL 或 API Key 未配置") {
+		t.Fatalf("expected missing configuration error after clearing key, got %v", err)
 	}
 }

@@ -73,6 +73,7 @@ func (h *Handler) ExportMigrationArchive(ctx context.Context, req scheduler.Migr
 	}
 }
 
+// handleSafekeepSettings reads or updates SafeKeep connection and upload settings.
 func (h *Handler) handleSafekeepSettings(w http.ResponseWriter, r *http.Request) {
 	if h.safekeepSvc == nil {
 		if r.Method == http.MethodGet {
@@ -108,7 +109,6 @@ func (h *Handler) handleSafekeepSettings(w http.ResponseWriter, r *http.Request)
 			ResourceType: "integration",
 			ResourceID:   "safekeep",
 			Details: map[string]any{
-				"enabled":         view.Enabled,
 				"base_url":        view.BaseURL,
 				"has_api_key":     view.HasAPIKey,
 				"default_mode":    view.DefaultMode,

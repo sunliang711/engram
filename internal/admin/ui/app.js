@@ -3277,7 +3277,6 @@
 
   function renderSafekeepSettings(data) {
     if (!data || !$("safekeep-settings-form")) return;
-    $("sk-enabled").checked = !!data.enabled;
     $("sk-base-url").value = data.base_url || "";
     $("sk-api-key").value = "";
     $("sk-backup-passphrase").value = "";
@@ -3287,8 +3286,9 @@
 
     const badge = $("sk-status-badge");
     if (badge) {
-      badge.textContent = data.enabled ? t("已启用") : t("未启用");
-      badge.className = "badge " + (data.enabled ? "success" : "");
+      const configured = !!data.base_url && !!data.has_api_key;
+      badge.textContent = configured ? t("已配置") : t("未配置");
+      badge.className = "badge " + (configured ? "success" : "");
     }
     if ($("sk-api-key-hint")) {
       $("sk-api-key-hint").textContent = data.has_api_key
@@ -3319,7 +3319,6 @@
     onSubmit("safekeep-settings-form", async (e) => {
       e.preventDefault();
       const payload = {
-        enabled: $("sk-enabled").checked,
         base_url: $("sk-base-url").value.trim(),
         default_mode: $("sk-default-mode").value,
         default_path: $("sk-default-path").value.trim(),
@@ -3345,7 +3344,7 @@
       try {
         const updated = await api("/api/admin/integrations/safekeep", {
           method: "PUT",
-          body: JSON.stringify({ enabled: false, clear_api_key: true }),
+          body: JSON.stringify({ clear_api_key: true }),
         });
         state.safekeepSettings = updated;
         renderSafekeepSettings(updated);
