@@ -569,7 +569,7 @@
 
   // renderProjectsTable leaves detailed repositories and permissions on the project detail page.
   function renderProjectsTable() {
-    $("projects-table").querySelector("tbody").innerHTML = state.projects.map((project) => `<tr><td><button type="button" class="text-button btn-open-project" data-id="${project.id}">${escapeHtml(project.name)}</button></td><td>${escapeHtml(project.tenant_name)}</td><td>${(project.repositories || []).length}</td><td>${projectPrincipals(project).length}</td><td><span class="badge ${project.status === "active" ? "success" : "danger"}">${statusLabel(project.status)}</span></td><td><button type="button" class="secondary small btn-open-project" data-id="${project.id}">${t("管理")}</button></td></tr>`).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无项目，请注册第一个项目。")}</td></tr>`;
+    $("projects-table").querySelector("tbody").innerHTML = state.projects.map((project) => `<tr><td><button type="button" class="text-button btn-open-project" data-id="${project.id}">${escapeHtml(project.name)}</button></td><td>${escapeHtml(project.tenant_name)}</td><td>${(project.repositories || []).length}</td><td>${projectPrincipals(project).length}</td><td><span class="badge ${project.status === "active" ? "success" : "danger"}">${statusLabel(project.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-project-memories" data-id="${project.id}">${t("知识库")}</button><button type="button" class="secondary small btn-open-project" data-id="${project.id}">${t("管理")}</button></div></td></tr>`).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无项目，请注册第一个项目。")}</td></tr>`;
   }
 
   // renderProjectDetail binds all repository and permission operations to the displayed project.
@@ -638,6 +638,35 @@
     switchMainTab("tab-projects", false);
     syncLocation(true);
     $(state.selectedProject ? "project-detail-title" : "project-list-title").focus();
+  }
+
+  // openProjectMemories jumps from a project directly to its scoped knowledge base.
+  function openProjectMemories(projectID) {
+    const project = state.projects.find((item) => item.id === projectID);
+    if (!project) return;
+    $("filter-memories-form").reset();
+    $("mem-filter-q").value = "";
+    $("mem-filter-category").value = "";
+    $("mem-filter-tag").value = "";
+    $("mem-filter-deleted").value = "active";
+    $("mem-filter-project").value = "";
+    const tenantSelect = $("mem-filter-tenant");
+    if (project.tenant_id && !Array.from(tenantSelect.options || []).some((option) => option.value === project.tenant_id)) {
+      tenantSelect.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(project.tenant_id)}">${escapeHtml(project.tenant_name || project.tenant_id)}</option>`);
+    }
+    tenantSelect.value = project.tenant_id || "";
+    renderMemoryProjectFilter();
+    $("mem-filter-scope").value = "project";
+    const projectSelect = $("mem-filter-project");
+    if (!Array.from(projectSelect.options || []).some((option) => option.value === project.id)) {
+      projectSelect.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(project.id)}">${escapeHtml(projectLabel(project))}</option>`);
+    }
+    projectSelect.value = project.id;
+    state.memoryPage = 1;
+    switchMainTab("tab-memories", false);
+    syncLocation(true);
+    loadMemories();
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
   }
 
   // resolveTokenSecret reads an existing key and prevents late responses from crossing logout.
@@ -1406,6 +1435,10 @@
         else { el.value = fallback; return; }
       }
       el.value = value;
+      if (key === "tenant") {
+        $("mem-filter-project").value = "";
+        renderMemoryProjectFilter();
+      }
     });
     const page = Number(filterParams.get("page"));
     state.memoryPage = Number.isInteger(page) && page > 0 && page <= 1000000 ? page : 1;
@@ -1889,9 +1922,12 @@
   $("btn-tenant-list").addEventListener("click", () => openTenant(""));
   $("btn-tenant-detail").addEventListener("click", () => openTenant(state.memberTenant));
   $("projects-table").addEventListener("click", (event) => {
+    const memoriesBtn = event.target.closest(".btn-open-project-memories");
+    if (memoriesBtn) { openProjectMemories(memoriesBtn.dataset.id); return; }
     const button = event.target.closest(".btn-open-project");
     if (button) openProject(button.dataset.id);
   });
+  if ($("btn-open-project-memories")) $("btn-open-project-memories").addEventListener("click", () => state.selectedProject && openProjectMemories(state.selectedProject));
   $("btn-project-list").addEventListener("click", () => openProject(""));
   $("btn-new-project").addEventListener("click", () => { $("project-forms-panel").classList.remove("hidden"); $("proj-name").focus(); });
   $("btn-cancel-project").addEventListener("click", () => { $("project-forms-panel").classList.add("hidden"); $("btn-new-project").focus(); });

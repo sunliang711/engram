@@ -170,6 +170,7 @@
     "连接你的第一个 AI 客户端": "Connect your first AI client",
     "创建空间、关联项目，再复制客户端配置，即可开始共享记忆。": "Create a space, link a project, then copy the client configuration to start sharing memories.",
     "浏览知识库": "Browse knowledge",
+    "查看知识库": "View knowledge",
     "知识条目": "Memories",
     "已关联项目": "Linked projects",
     "活跃客户端密钥": "Active client keys",
