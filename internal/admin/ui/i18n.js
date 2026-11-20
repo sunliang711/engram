@@ -20,8 +20,6 @@
     "点击选择文件，或将 ZIP 文件拖到此处": "Choose a file or drag a ZIP file here",
     "连接远程存储，统一管理备份": "Connect remote storage and manage backups",
     "配置服务地址和访问密钥。密钥与备份口令均加密存储。": "Configure the service URL and access key. Keys and backup passphrases are stored encrypted.",
-    "手动创建一次远程备份": "Create a remote backup on demand",
-    "导出当前数据并上传至已配置的 SafeKeep 网关。周期备份可前往定时任务配置。": "Export current data to the configured SafeKeep gateway. Configure scheduled tasks for recurring backups.",
     "留空保持不变，输入新口令可替换": "Leave blank to keep the current passphrase",
     "按计划自动运行，也可随时手动触发": "Runs on schedule or manually on demand",
     "密钥读取已取消，请重新选择客户端。": "Key retrieval was cancelled. Select the client again.",
@@ -943,15 +941,10 @@
     "可选：默认目标上游（逗号分隔）": "Optional: default target upstreams (comma-separated)",
     "留空则使用 SafeKeep 客户默认上游组": "Leave blank to use SafeKeep client default upstreams",
     "测试连接": "Test connection",
-    "立即备份到 SafeKeep": "Back up to SafeKeep now",
     "手动导出当前 Engram 迁移包并立即调用 SafeKeep API 上传。若需按周期自动执行，请前往「定时任务」配置并启用": "Export an Engram migration archive now and upload it via SafeKeep API. To schedule automatic backups, configure and enable",
-    "导出内容": "Export scope",
     "全量系统快照（租户、成员、密钥与全部知识）": "Full system snapshot (tenants, members, keys, and memories)",
     "仅知识库迁移包（全部租户）": "Knowledge bundle only (all tenants)",
-    "上传子路径（可选，覆盖默认）": "Remote subpath (optional override)",
     "留空使用 SafeKeep 默认路径": "Leave blank to use SafeKeep default",
-    "立即导出并备份": "Export & back up now",
-    "前往定时任务配置": "Go to Scheduler",
     "导出并上传到 SafeKeep": "Export & upload to SafeKeep",
     "定时导出迁移包到 SafeKeep": "Scheduled migration backup to SafeKeep",
     "按配置的执行间隔自动导出 Engram 系统或知识库迁移包，并通过 SafeKeep API 上传至远程存储。": "Periodically export an Engram system or knowledge migration archive and upload it to SafeKeep.",
@@ -975,8 +968,6 @@
     "SafeKeep 连接成功": "Connected to SafeKeep",
     "最近连通测试成功（{0}）": "Last connection test succeeded ({0})",
     "最近连通测试失败：{0}": "Last connection test failed: {0}",
-    "已上传 {0} 条知识（{1} 字节）至 SafeKeep 任务 {2}": "Uploaded {0} memories ({1} bytes) to SafeKeep task {2}",
-    "已成功导出迁移包并备份至 SafeKeep": "Exported and backed up archive to SafeKeep",
     "已将迁移包 {0} 上传至 SafeKeep（任务 {1}）": "Uploaded {0} to SafeKeep (task {1})"
   };
 

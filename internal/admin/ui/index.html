@@ -994,29 +994,6 @@
               <span id="sk-test-result" class="check-result" role="status" aria-live="polite"></span>
             </form>
           </div>
-
-          <div class="card">
-            <div class="operation-heading"><span class="operation-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17H6a4 4 0 0 1-.5-8A6.5 6.5 0 0 1 18 8.5 4.5 4.5 0 0 1 18 17h-1M12 21V11m0 0-3 3m3-3 3 3"/></svg></span><div><h2>立即备份到 SafeKeep</h2><p class="operation-caption">手动创建一次远程备份</p></div></div>
-            <p class="desc">导出当前数据并上传至已配置的 SafeKeep 网关。周期备份可前往定时任务配置。</p>
-            <form id="safekeep-backup-now-form">
-              <div class="form-group">
-                <label for="sk-now-mode">导出内容</label>
-                <select id="sk-now-mode">
-                  <option value="system">全量系统快照（租户、成员、密钥与全部知识）</option>
-                  <option value="knowledge">仅知识库迁移包（全部租户）</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label for="sk-now-path">上传子路径（可选，覆盖默认）</label>
-                <input type="text" id="sk-now-path" placeholder="留空使用 SafeKeep 默认路径" />
-              </div>
-              <div class="button-row operation-actions">
-                <button type="submit" id="btn-sk-backup-now">立即导出并备份</button>
-                <button type="button" class="secondary" data-open-tab="tab-scheduler">前往定时任务配置</button>
-              </div>
-            </form>
-            <div id="sk-backup-result" class="mig-inspect-box hidden" style="margin-top:16px;"></div>
-          </div>
         </div>
       </section>
     </main>

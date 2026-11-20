@@ -3794,24 +3794,6 @@
     return res;
   }
 
-  if ($("safekeep-backup-now-form")) {
-    onSubmit("safekeep-backup-now-form", async (e) => {
-      e.preventDefault();
-      const res = await runManualSafekeepBackup({
-        mode: $("sk-now-mode").value,
-        path: $("sk-now-path").value.trim(),
-        include_deleted: true,
-      });
-      const box = $("sk-backup-result");
-      if (box) {
-        const sk = res.safekeep || {};
-        box.innerHTML = `<div class="mig-inspect-header"><span class="badge success">${escapeHtml(sk.status || "ok")}</span><code>${escapeHtml(res.filename)}</code></div><p class="desc" style="margin-bottom:0;">${escapeHtml(t`已上传 ${res.memories || 0} 条知识（${res.file_size || 0} 字节）至 SafeKeep 任务 ${sk.task_id || ""}`)}</p>`;
-        box.classList.remove("hidden");
-      }
-      showToast(t("已成功导出迁移包并备份至 SafeKeep"));
-    });
-  }
-
   if ($("btn-mig-export-safekeep")) {
     $("btn-mig-export-safekeep").addEventListener("click", async () => {
       const btn = $("btn-mig-export-safekeep");
