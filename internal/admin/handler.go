@@ -141,6 +141,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/audit/tasks", h.requireActiveAdmin(h.handleAuditTasks))
 	mux.HandleFunc("/api/admin/audit/tasks/run", h.requireActiveAdmin(h.handleAuditTaskRun))
 	mux.HandleFunc("/api/admin/scheduler/tasks", h.requireActiveAdmin(h.handleSchedulerTasks))
+	mux.HandleFunc("/api/admin/scheduler/preview", h.requireActiveAdmin(h.handleSchedulerPreview))
 	mux.HandleFunc("/api/admin/scheduler/tasks/run", h.requireActiveAdmin(h.handleSchedulerTaskRun))
 	mux.HandleFunc("/api/admin/scheduler/runs", h.requireActiveAdmin(h.handleSchedulerRuns))
 	mux.HandleFunc("/api/admin/integrations/safekeep", h.requireActiveAdmin(h.handleSafekeepSettings))

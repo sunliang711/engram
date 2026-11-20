@@ -317,6 +317,25 @@ func (h *Handler) handleSchedulerTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSchedulerPreview validates unsaved plans and returns five actual future occurrences.
+func (h *Handler) handleSchedulerPreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req scheduler.SchedulePreviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	times, err := scheduler.PreviewSchedule(req, time.Now().UTC())
+	if err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"next_runs": times})
+}
+
 func (h *Handler) handleSchedulerTaskRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

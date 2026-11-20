@@ -913,6 +913,8 @@ V1 稳定后再评估：
    - 内置任务 `audit_log_cleanup`（定时清理过期审计日志）与 `safekeep_migration_backup`（定时导出系统或知识库迁移包并上传至 SafeKeep），每个任务均可独立配置启用/禁用、执行间隔及任务参数，并支持立即手动触发。
    - 迁移 `010_calendar_schedules.sql` 增加 `schedule_type`、`cron_expression` 与 `timezone`。支持每小时指定分钟、每天指定时间、每周指定星期、每月指定日期及五字段自定义 Cron；使用 `robfig/cron/v3` 解析和计算真实日历时间，时区默认 `Asia/Singapore`，原有任务默认保留 `interval` 模式。月份缺少指定日期时跳过该月。
    - 调度仍使用数据库下一次执行时间与 PostgreSQL advisory lock。获取锁后重新检查到期状态，避免多个实例重复执行同一时点；任务运行期间保存的新执行计划不会被旧运行结果覆盖。
+   - 定时任务列表与配置参考 `proxystack-web/web/src/views/JobsView.vue`：右侧编辑抽屉采用预设计划／自定义 Cron，调用受管理员鉴权保护的 `POST /api/admin/scheduler/preview` 预览未来 5 次执行时间；预览无效或尚未完成时禁止保存，并使用请求序号隔离迟到响应。每行提供启用开关、立即执行、编辑和记录抽屉，常见 Cron 显示可读说明。
+   - 迁移 `011_scheduler_timeouts.sql` 增加 `timeout_seconds`（默认 600，范围 1～86400）及 `timeout` 执行状态。执行器通过 `context.WithTimeout` 传播取消，等待任务协作退出后释放锁并写入超时记录；超时按失败审计。旧固定间隔及自定义时间仍原样保留，不被预设默认值覆盖。
 3. **SafeKeep 远程备份集成（`internal/safekeep`，迁移 `009_safekeep_integration.sql`）**：
    - 在 `safekeep_settings` 表持久化 SafeKeep 服务 URL、使用服务端签名密钥 AES-256-GCM 加密的 API Key 与可选迁移包加密口令，以及默认上传模式（`sync`/`async`）、子路径与目标上游。
    - 在「系统设置」（`/settings`）提供地址/API Key 配置、`/api/v1/upstreams` 连通性测试与一键手动备份，在「系统迁移」（`/migration`）支持导出后直接上传 SafeKeep。

@@ -141,12 +141,12 @@ test('audit and scheduler renderers escape dynamic strings and translate in Engl
   elements.set('scheduler-tasks-table', { querySelector: () => schedTbody });
   context.renderSchedulerTasks();
   assert.match(schedTbody.innerHTML, /Scheduled expired audit log cleanup/);
-  assert.match(schedTbody.innerHTML, /Keep 30d/);
   assert.match(schedTbody.innerHTML, /Scheduled migration backup to SafeKeep/);
   assert.match(schedTbody.innerHTML, /btn-sched-toggle/);
-  assert.match(schedTbody.innerHTML, />Disable</);
-  assert.match(schedTbody.innerHTML, />Enable</);
-  assert.match(schedTbody.innerHTML, /Configure/);
+  assert.match(schedTbody.innerHTML, /role="switch" aria-checked="true"/);
+  assert.match(schedTbody.innerHTML, /role="switch" aria-checked="false"/);
+  assert.match(schedTbody.innerHTML, /Edit/);
+  assert.match(schedTbody.innerHTML, /History/);
   assert.match(schedTbody.innerHTML, /Run now/);
 });
 
@@ -186,7 +186,7 @@ test('SafeKeep settings use credentials for status and save without an integrati
   context.t = context.window.EngramI18n.t;
   vm.runInContext(appSource.slice(appSource.indexOf('  // Secret fields'), appSource.indexOf('  // showToast')), context);
   const start = appSource.indexOf('  // SafeKeep Integration Settings & Backup');
-  const end = appSource.indexOf('  if ($("scheduler-runs-filter"))', start);
+  const end = appSource.indexOf('  // Scheduler history pagination', start);
   assert.ok(start >= 0 && end > start, 'Missing SafeKeep UI block');
   vm.runInContext(appSource.slice(start, end), context);
 

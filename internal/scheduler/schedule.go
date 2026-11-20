@@ -6,10 +6,51 @@ import (
 	"time"
 	_ "time/tzdata"
 
+	"engram/internal/config"
+
 	"github.com/robfig/cron/v3"
 )
 
 const defaultScheduleTimezone = "Asia/Singapore"
+
+// SchedulePreviewRequest uses the same schedule fields as task updates without changing persisted state.
+type SchedulePreviewRequest struct {
+	ScheduleType    string `json:"schedule_type"`
+	CronExpression  string `json:"cron_expression"`
+	Timezone        string `json:"timezone"`
+	Interval        string `json:"interval"`
+	IntervalSeconds int64  `json:"interval_seconds"`
+}
+
+// PreviewSchedule validates a draft and returns its next five occurrences using the execution calculator.
+func PreviewSchedule(req SchedulePreviewRequest, after time.Time) ([]time.Time, error) {
+	kind := strings.TrimSpace(req.ScheduleType)
+	if kind == "" {
+		kind = "cron"
+	}
+	zone := strings.TrimSpace(req.Timezone)
+	if zone == "" {
+		zone = defaultScheduleTimezone
+	}
+	interval := req.IntervalSeconds
+	if kind == "interval" && strings.TrimSpace(req.Interval) != "" {
+		duration, err := config.ParseDuration(req.Interval)
+		if err != nil || duration < minTaskInterval || duration > maxTaskInterval {
+			return nil, fmt.Errorf("invalid interval_seconds")
+		}
+		interval = int64(duration.Seconds())
+	}
+	out := make([]time.Time, 0, 5)
+	for range 5 {
+		next, err := nextScheduledRun(kind, req.CronExpression, zone, interval, after)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, next)
+		after = next
+	}
+	return out, nil
+}
 
 // nextScheduledRun computes calendar occurrences without converting months into durations.
 func nextScheduledRun(scheduleType, expression, timezone string, intervalSeconds int64, after time.Time) (time.Time, error) {

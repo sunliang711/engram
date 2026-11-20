@@ -271,12 +271,13 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 		cronExpression  string
 		timezone        string
 		nextRunAt       *time.Time
+		timeoutSeconds  int64
 	)
 	if err := s.pool.QueryRow(ctx, `
-		SELECT enabled, interval_seconds, config_json, schedule_type, cron_expression, timezone, next_run_at
+		SELECT enabled, interval_seconds, config_json, schedule_type, cron_expression, timezone, next_run_at, timeout_seconds
 		FROM scheduled_tasks
 		WHERE name = $1
-	`, name).Scan(&enabled, &intervalSeconds, &cfgRaw, &scheduleType, &cronExpression, &timezone, &nextRunAt); err != nil {
+	`, name).Scan(&enabled, &intervalSeconds, &cfgRaw, &scheduleType, &cronExpression, &timezone, &nextRunAt, &timeoutSeconds); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeNotFound, "scheduled task not found: "+name)
 		}
@@ -316,7 +317,14 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 		s.log.Warn().Err(err).Str("task", name).Msg("failed to mark scheduled task running")
 	}
 
-	res, runErr := spec.Run(ctx, cfgMap)
+	// Keep the execution lock until the task exits its cooperative timeout context.
+	runCtx, cancelRun := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	res, runErr := spec.Run(runCtx, cfgMap)
+	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+	cancelRun()
+	if timedOut {
+		runErr = context.DeadlineExceeded
+	}
 	finishedAt := time.Now().UTC()
 	durationMS := finishedAt.Sub(startedAt).Milliseconds()
 	if durationMS < 0 {
@@ -327,6 +335,10 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 	errMsg := ""
 	if runErr != nil {
 		status = StatusFailed
+		if timedOut {
+			status = StatusTimeout
+			res.Summary = fmt.Sprintf("任务执行超时（上限 %d 秒）", timeoutSeconds)
+		}
 		errMsg = runErr.Error()
 		if res.Summary == "" {
 			res.Summary = "任务执行失败：" + errMsg
@@ -435,8 +447,9 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 	return run, nil
 }
 
+// mapRunStatusToAudit treats timeouts as failed audit outcomes.
 func mapRunStatusToAudit(runStatus string) string {
-	if runStatus == StatusFailed {
+	if runStatus == StatusFailed || runStatus == StatusTimeout {
 		return audit.StatusFailed
 	}
 	return audit.StatusSuccess
@@ -450,7 +463,7 @@ func (s *Scheduler) ListTasks(ctx context.Context) ([]TaskView, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT name, display_name, description, task_type, enabled, interval_seconds, config_json,
 		       last_run_at, next_run_at, last_status, last_duration_ms, last_summary, last_error,
-		       run_count, updated_at, schedule_type, cron_expression, timezone
+		       run_count, updated_at, schedule_type, cron_expression, timezone, timeout_seconds
 		FROM scheduled_tasks
 		ORDER BY name ASC
 	`)
@@ -481,7 +494,7 @@ func (s *Scheduler) GetTask(ctx context.Context, name string) (*TaskView, error)
 	row := s.pool.QueryRow(ctx, `
 		SELECT name, display_name, description, task_type, enabled, interval_seconds, config_json,
 		       last_run_at, next_run_at, last_status, last_duration_ms, last_summary, last_error,
-		       run_count, updated_at, schedule_type, cron_expression, timezone
+		       run_count, updated_at, schedule_type, cron_expression, timezone, timeout_seconds
 		FROM scheduled_tasks
 		WHERE name = $1
 	`, strings.TrimSpace(name))
@@ -514,6 +527,13 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 	enabled := current.Enabled
 	if req.Enabled != nil {
 		enabled = *req.Enabled
+	}
+	timeoutSeconds := current.TimeoutSeconds
+	if req.TimeoutSeconds != nil {
+		if *req.TimeoutSeconds < 1 || *req.TimeoutSeconds > 86400 {
+			return nil, apperror.New(apperror.CodeInvalidArgument, "timeout_seconds must be between 1 and 86400")
+		}
+		timeoutSeconds = *req.TimeoutSeconds
 	}
 
 	intervalSeconds := current.IntervalSeconds
@@ -597,9 +617,10 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 		    updated_at = $6,
 		    schedule_type = $7,
 		    cron_expression = $8,
-		    timezone = $9
+		    timezone = $9,
+		    timeout_seconds = $10
 		WHERE name = $1
-	`, name, enabled, intervalSeconds, cfgJSON, nextRun, now, scheduleType, expression, timezone); err != nil {
+	`, name, enabled, intervalSeconds, cfgJSON, nextRun, now, scheduleType, expression, timezone, timeoutSeconds); err != nil {
 		return nil, apperror.Wrap(apperror.CodeInternalError, "update scheduled task", err)
 	}
 
@@ -620,6 +641,7 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 				"schedule_type":    scheduleType,
 				"cron_expression":  expression,
 				"timezone":         timezone,
+				"timeout_seconds":  timeoutSeconds,
 				"config":           mergedCfg,
 			},
 		})
@@ -712,7 +734,7 @@ func scanTaskView(row rowScanner) (TaskView, error) {
 	err := row.Scan(
 		&t.Name, &t.DisplayName, &t.Description, &t.TaskType, &t.Enabled, &t.IntervalSeconds, &cfgRaw,
 		&t.LastRunAt, &t.NextRunAt, &t.LastStatus, &t.LastDurationMS, &t.LastSummary, &t.LastError,
-		&t.RunCount, &t.UpdatedAt, &t.ScheduleType, &t.CronExpression, &t.Timezone,
+		&t.RunCount, &t.UpdatedAt, &t.ScheduleType, &t.CronExpression, &t.Timezone, &t.TimeoutSeconds,
 	)
 	if err != nil {
 		return TaskView{}, err

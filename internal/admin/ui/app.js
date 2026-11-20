@@ -45,6 +45,13 @@
     schedulerRunsPage: 1,
     schedulerRunsPageSize: 20,
     schedulerRunsTotal: 0,
+    schedulerHistoryTask: "",
+    schedulerHistoryRequest: 0,
+    schedulerPreviewRequest: 0,
+    schedulerPreviewTimer: null,
+    schedulerPreviewValid: false,
+    schedulerConfigOpener: null,
+    schedulerHistoryOpener: null,
     safekeepSettings: null,
   };
 
@@ -195,6 +202,7 @@
     [/^invalid (json body|tenant role|principal mode|identity provider)/i, t("提交的内容不正确，请刷新页面后重试。")],
     [/admin password change required/i, t("请先修改管理员密码。")],
     [/^invalid schedule timezone/i, t("请填写有效的 IANA 时区，例如 Asia/Singapore 或 UTC。")],
+    [/^timeout_seconds must be between/i, t("超时范围为 1 ~ 86400 秒。")],
     [/^(invalid cron expression|cron expression must contain)/i, t("请填写有效的五字段 Cron 表达式（分 时 日 月 周）。")],
     [/^cron expression does not match schedule_type/i, t("执行规则与所选时间粒度不匹配，请重新配置。")],
     [/^cron expression has no occurrence/i, t("该执行规则在未来五年内没有有效日期，请修改。")],
@@ -1255,6 +1263,8 @@
 
   // switchMainTab maintains navigation state without carrying an unrelated detail panel.
   function switchMainTab(tabId, updateURL = true) {
+    closeSchedulerConfig(false);
+    closeSchedulerHistory(false);
     resetSecretVisibility();
     state.visibleTokens = {};
     state.revealedTokens = {};
@@ -1584,7 +1594,7 @@
   }
 
   // onSubmit prevents duplicate writes, shows failures inline, and releases the busy state afterwards.
-  function onSubmit(id, handler) {
+  function onSubmit(id, handler, canSubmit = () => true) {
     const form = $(id);
     form.addEventListener("input", () => clearFormErrors(form));
     form.addEventListener("submit", async (event) => {
@@ -1596,7 +1606,7 @@
       if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
       try { await handler(event); }
       catch (err) { showFormError(form, err); }
-      finally { form.dataset.submitting = "false"; if (button) { button.disabled = false; button.removeAttribute("aria-busy"); } }
+      finally { form.dataset.submitting = "false"; if (button) { button.disabled = !canSubmit(); button.removeAttribute("aria-busy"); } }
     });
   }
 
@@ -2197,6 +2207,7 @@
     const auditDetailOpen = $("audit-detail-modal") && !$("audit-detail-modal").classList.contains("hidden");
     const auditCleanupOpen = $("audit-cleanup-modal") && !$("audit-cleanup-modal").classList.contains("hidden");
     const schedConfigOpen = $("scheduler-config-modal") && !$("scheduler-config-modal").classList.contains("hidden");
+    const schedHistoryOpen = $("scheduler-history-modal") && !$("scheduler-history-modal").classList.contains("hidden");
     const glossaryOpen = !$("glossary-modal").classList.contains("hidden");
     const clientConfigOpen = !$("client-config-modal").classList.contains("hidden");
     const detailOpen = !$("memory-detail-card").classList.contains("hidden");
@@ -2206,7 +2217,8 @@
       else if (purgeOpen) closePurgeModal();
       else if (auditDetailOpen) $("audit-detail-modal").classList.add("hidden");
       else if (auditCleanupOpen) $("audit-cleanup-modal").classList.add("hidden");
-      else if (schedConfigOpen) $("scheduler-config-modal").classList.add("hidden");
+      else if (schedHistoryOpen) closeSchedulerHistory();
+      else if (schedConfigOpen) closeSchedulerConfig();
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (clientConfigOpen) closeClientGuides();
       else if (detailOpen) closeMemoryDetail();
@@ -2216,8 +2228,8 @@
         document.querySelector(".account-menu summary").focus();
       }
     }
-    if (e.key === "Tab" && (confirmOpen || renameOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen)) {
-      const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : purgeOpen ? "purge-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
+    if (e.key === "Tab" && (confirmOpen || renameOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
+      const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
       if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
@@ -2764,6 +2776,7 @@
     running: t("执行中"),
     success: t("成功"),
     failed: t("失败"),
+    timeout: t("超时"),
   };
   const SEVERITY_LABELS = {
     high: t("高风险"),
@@ -2781,7 +2794,7 @@
   function schedStatusBadgeClass(status) {
     if (status === "success") return "success";
     if (status === "failed") return "danger";
-    if (status === "running") return "warning";
+    if (status === "running" || status === "timeout") return "warning";
     return "";
   }
 
@@ -2983,7 +2996,8 @@
   }
 
   async function loadSchedulerCenter() {
-    await Promise.all([loadSchedulerTasks(), loadSchedulerRuns()]);
+    await loadSchedulerTasks();
+    if (state.schedulerHistoryTask) await loadSchedulerRuns();
   }
 
   async function loadSchedulerTasks() {
@@ -2991,105 +3005,99 @@
     const data = await api("/api/admin/scheduler/tasks");
     state.schedulerTasks = data.items || [];
     renderSchedulerTasks();
-    const filterSel = $("scheduler-runs-filter");
-    if (filterSel) {
-      fillSelect("scheduler-runs-filter", state.schedulerTasks.map((task) => [task.name, t(task.display_name) || task.name]));
-    }
   }
 
+  // renderSchedulerTasks follows the reference list: plan, next run, last result, switch and row actions.
   function renderSchedulerTasks() {
     const tbody = $("scheduler-tasks-table") && $("scheduler-tasks-table").querySelector("tbody");
     if (!tbody) return;
     if (!state.schedulerTasks.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("暂无已注册的定时任务。")}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${t("暂无已注册的定时任务。")}</td></tr>`;
       return;
     }
     tbody.innerHTML = state.schedulerTasks.map((task) => {
-      const cfg = task.config || {};
-      const cfgPills = [];
-      if (cfg.retention) cfgPills.push(`<span class="badge">${t`保留 ${escapeHtml(String(cfg.retention))}`}</span>`);
-      if (cfg.batch_size) cfgPills.push(`<span class="badge">${t`每批 ${escapeHtml(String(cfg.batch_size))} 条`}</span>`);
-      if (cfg.migration_mode) cfgPills.push(`<span class="badge">${escapeHtml(cfg.migration_mode === "knowledge" ? t("仅知识库") : t("全量系统"))}</span>`);
-      if (cfg.upload_mode) cfgPills.push(`<span class="badge">${escapeHtml(String(cfg.upload_mode))}</span>`);
-      if (cfg.remote_path) cfgPills.push(`<span class="badge"><code>${escapeHtml(String(cfg.remote_path))}</code></span>`);
-      if (cfg.targets) cfgPills.push(`<span class="badge">${escapeHtml(String(cfg.targets))}</span>`);
-      const lastAt = task.last_run_at ? formatDate(task.last_run_at) : t("尚未执行");
-      const nextAt = task.enabled && task.next_run_at ? formatDate(task.next_run_at) : t("已暂停");
-      const lastOutcome = task.last_status && task.last_status !== "idle"
-        ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span>`
-        : `<span class="badge">${t("待运行")}</span>`;
-      const toggleLabel = task.enabled ? t("停用") : t("启用");
-      const toggleClass = task.enabled ? "danger-outline small btn-sched-toggle" : "secondary small btn-sched-toggle";
+      const calendar = task.schedule_type && task.schedule_type !== "interval";
+      const nextAt = task.enabled && task.next_run_at ? (calendar ? formatScheduleTime(task.next_run_at, task.timezone) : formatDate(task.next_run_at)) : "—";
+      const lastOutcome = task.last_run_at
+        ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span><div class="date-cell">${escapeHtml(formatDate(task.last_run_at))}</div><div class="scheduler-task-desc">${escapeHtml(task.last_summary || task.last_error || "")}</div>`
+        : "—";
+      const description = calendar ? describeTaskCron(task.cron_expression || "") : formatDurationSeconds(task.interval_seconds);
+      const expression = calendar ? task.cron_expression : formatIntervalInput(task.interval_seconds);
       return `<tr>
-        <td>
-          <strong>${escapeHtml(t(task.display_name) || task.name)}</strong>
-          <div class="muted" style="font-size:12px;"><code>${escapeHtml(task.name)}</code> · ${escapeHtml(t(task.description))}</div>
-        </td>
-        <td>
-          <span class="badge ${task.enabled ? "success" : "danger"}">${task.enabled ? t("已启用") : t("已停用")}</span>
-          <div style="margin-top:4px;">${lastOutcome}</div>
-        </td>
-        <td>${escapeHtml(formatTaskSchedule(task))}</td>
-        <td><div class="sched-config-pills">${cfgPills.join("") || "—"}</div></td>
-        <td>
-          <div style="font-size:12.5px;">${t("上次")}: ${escapeHtml(lastAt)}</div>
-          <div class="muted" style="font-size:12px;">${t("下次")}: ${escapeHtml(nextAt)}</div>
-        </td>
-        <td>
-          <div style="font-size:12.5px;">${escapeHtml(task.last_summary || task.last_error || "—")}</div>
-          <div class="muted" style="font-size:12px;">${t`累计 ${task.run_count || 0} 次`}</div>
-        </td>
-        <td>
-          <div class="row-actions">
-            <button type="button" class="${toggleClass}" data-name="${escapeHtml(task.name)}" data-enabled="${task.enabled ? "true" : "false"}">${toggleLabel}</button>
-            <button type="button" class="secondary small btn-sched-config" data-name="${escapeHtml(task.name)}">${t("配置")}</button>
-            <button type="button" class="small btn-sched-run" data-name="${escapeHtml(task.name)}">${t("立即执行")}</button>
-          </div>
-        </td>
+        <td><strong>${escapeHtml(t(task.display_name) || task.name)}</strong><div class="scheduler-task-desc">${escapeHtml(t(task.description) || "")}</div></td>
+        <td>${description ? `<div>${escapeHtml(description)}</div>` : ""}<code class="scheduler-plan-code">${escapeHtml(expression)}</code>${calendar ? `<div class="scheduler-plan-zone">${escapeHtml(task.timezone)}</div>` : ""}</td>
+        <td class="date-cell">${escapeHtml(nextAt)}</td>
+        <td>${lastOutcome}</td>
+        <td><button type="button" role="switch" aria-checked="${!!task.enabled}" aria-label="${escapeHtml(t(task.display_name) || task.name)} · ${task.enabled ? t("停用") : t("启用")}" class="task-switch btn-sched-toggle" data-name="${escapeHtml(task.name)}" data-enabled="${!!task.enabled}"><span aria-hidden="true"></span></button></td>
+        <td><div class="row-actions">
+          <button type="button" class="secondary small btn-sched-run" data-name="${escapeHtml(task.name)}">${t("立即执行")}</button>
+          <button type="button" class="secondary small btn-sched-config" data-name="${escapeHtml(task.name)}">${t("编辑")}</button>
+          <button type="button" class="secondary small btn-sched-history" data-name="${escapeHtml(task.name)}">${t("记录")}</button>
+        </div></td>
       </tr>`;
     }).join("");
   }
 
+  // openSchedulerHistory scopes records to one task and preserves the invoking row.
+  async function openSchedulerHistory(name) {
+    const task = state.schedulerTasks.find((item) => item.name === name);
+    if (!task) return;
+    state.schedulerHistoryOpener = document.activeElement;
+    state.schedulerHistoryTask = name;
+    state.schedulerRunsPage = 1;
+    $("scheduler-history-title").textContent = `${t(task.display_name) || name} · ${t("执行记录")}`;
+    $("scheduler-history-modal").classList.remove("hidden");
+    document.body.classList.add("scheduler-drawer-open");
+    $("btn-close-scheduler-history").focus();
+    await loadSchedulerRuns();
+  }
+
+  // closeSchedulerHistory invalidates requests so records cannot cross tasks or reopen a closed drawer.
+  function closeSchedulerHistory(restoreFocus = true) {
+    state.schedulerHistoryRequest = (state.schedulerHistoryRequest || 0) + 1;
+    state.schedulerHistoryTask = "";
+    $("scheduler-history-modal").classList.add("hidden");
+    document.body.classList.remove("scheduler-drawer-open");
+    if (restoreFocus && state.schedulerHistoryOpener?.isConnected) state.schedulerHistoryOpener.focus();
+  }
+
+  // loadSchedulerRuns replaces history only when its task and pagination request are still current.
   async function loadSchedulerRuns() {
-    if (!$("scheduler-runs-table")) return;
-    const p = new URLSearchParams();
-    p.set("page", state.schedulerRunsPage);
-    p.set("page_size", state.schedulerRunsPageSize);
-    const taskFilter = $("scheduler-runs-filter") ? $("scheduler-runs-filter").value : "";
-    if (taskFilter) p.set("task_name", taskFilter);
-    const data = await api("/api/admin/scheduler/runs?" + p.toString());
-    state.schedulerRuns = data.items || [];
-    state.schedulerRunsTotal = data.total || 0;
-    state.schedulerRunsPage = data.page || 1;
-    renderSchedulerRuns();
+    const name = state.schedulerHistoryTask;
+    if (!name) return;
+    const request = state.schedulerHistoryRequest = (state.schedulerHistoryRequest || 0) + 1;
+    const page = state.schedulerRunsPage;
+    $("scheduler-history-status").textContent = t("正在加载执行记录…");
+    $("scheduler-history-list").innerHTML = "";
+    $("btn-sched-runs-prev").disabled = true;
+    $("btn-sched-runs-next").disabled = true;
+    try {
+      const params = new URLSearchParams({ task_name: name, page: String(page), page_size: String(state.schedulerRunsPageSize) });
+      const data = await api("/api/admin/scheduler/runs?" + params);
+      if (request !== state.schedulerHistoryRequest || name !== state.schedulerHistoryTask) return;
+      state.schedulerRuns = data.items || [];
+      state.schedulerRunsTotal = data.total || 0;
+      state.schedulerRunsPage = data.page || page;
+      $("scheduler-history-status").textContent = "";
+      renderSchedulerRuns();
+    } catch (err) {
+      if (request !== state.schedulerHistoryRequest || name !== state.schedulerHistoryTask) return;
+      $("scheduler-history-status").textContent = err.message;
+    }
   }
 
+  // renderSchedulerRuns displays each real result, error and structured details without inventing logs.
   function renderSchedulerRuns() {
-    const tbody = $("scheduler-runs-table") && $("scheduler-runs-table").querySelector("tbody");
-    if (!tbody) return;
     const totalPages = Math.max(1, Math.ceil(state.schedulerRunsTotal / state.schedulerRunsPageSize));
-    if ($("scheduler-runs-page-info")) $("scheduler-runs-page-info").textContent = t`第 ${state.schedulerRunsPage} / ${totalPages} 页`;
-    if ($("btn-sched-runs-prev")) $("btn-sched-runs-prev").disabled = state.schedulerRunsPage <= 1;
-    if ($("btn-sched-runs-next")) $("btn-sched-runs-next").disabled = state.schedulerRunsPage >= totalPages;
-
-    if (!state.schedulerRuns.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("暂无定时任务执行历史。")}</td></tr>`;
-      return;
-    }
-    tbody.innerHTML = state.schedulerRuns.map((run) => {
-      const task = state.schedulerTasks.find((item) => item.name === run.task_name);
-      const taskTitle = task ? t(task.display_name) : run.task_name;
-      const triggerLabel = run.trigger_type === "manual" ? t("手动触发") : t("自动调度");
-      return `<tr>
-        <td>${escapeHtml(formatDate(run.started_at))}</td>
-        <td><strong>${escapeHtml(taskTitle)}</strong></td>
-        <td><span class="badge">${escapeHtml(triggerLabel)}</span></td>
-        <td><span class="badge ${schedStatusBadgeClass(run.status)}">${escapeHtml(SCHED_STATUSES[run.status] || run.status)}</span></td>
-        <td>${run.duration_ms || 0} ms</td>
-        <td>${run.affected_rows || 0}</td>
-        <td>${escapeHtml(run.summary || run.error_message || "—")}</td>
-      </tr>`;
-    }).join("");
+    $("scheduler-runs-page-info").textContent = t`第 ${state.schedulerRunsPage} / ${totalPages} 页`;
+    $("btn-sched-runs-prev").disabled = state.schedulerRunsPage <= 1;
+    $("btn-sched-runs-next").disabled = state.schedulerRunsPage >= totalPages;
+    $("scheduler-history-list").innerHTML = state.schedulerRuns.map((run) => `<article class="scheduler-run">
+      <div class="scheduler-run-header"><span class="badge ${schedStatusBadgeClass(run.status)}">${escapeHtml(SCHED_STATUSES[run.status] || run.status)}</span><time>${escapeHtml(formatDate(run.started_at))}</time><span class="muted">${run.trigger_type === "manual" ? t("手动触发") : t("自动调度")}</span><span class="muted">${run.duration_ms || 0} ms</span></div>
+      <p>${escapeHtml(run.summary || "—")}</p>
+      ${run.error_message ? `<pre>${escapeHtml(run.error_message)}</pre>` : ""}
+      ${run.details && Object.keys(run.details).length ? `<details><summary>${t("详情")}</summary><pre>${escapeHtml(JSON.stringify(run.details, null, 2))}</pre></details>` : ""}
+    </article>`).join("") || `<p class="empty-state">${t("暂无定时任务执行历史。")}</p>`;
   }
 
   // openSchedulerConfigModal restores both calendar rules and legacy intervals.
@@ -3097,18 +3105,17 @@
     const task = state.schedulerTasks.find((item) => item.name === taskName);
     if (!task || !$("scheduler-config-modal")) return;
     $("sched-cfg-name").value = task.name;
-    $("scheduler-config-title").textContent = `${t("配置定时任务")} · ${t(task.display_name) || task.name}`;
+    $("scheduler-config-title").textContent = t(task.display_name) || task.name;
     $("sched-cfg-desc").textContent = t(task.description) || "";
     $("sched-cfg-enabled").checked = !!task.enabled;
+    state.schedulerConfigOpener = document.activeElement;
     $("sched-cfg-interval").value = formatIntervalInput(task.interval_seconds);
-    $("sched-cfg-schedule-type").value = task.schedule_type || "interval";
+    const presets = schedulerPlanPresets();
+    const selected = Object.keys(presets).find((kind) => presets[kind] === task.cron_expression);
+    $("sched-cfg-schedule-type").value = !task.schedule_type || task.schedule_type === "interval" ? "interval" : selected || "cron";
     $("sched-cfg-timezone").value = task.timezone || "Asia/Singapore";
-    $("sched-cfg-cron").value = task.cron_expression || "0 2 * * *";
-    const fields = (task.cron_expression || "0 2 1 * 1").split(/\s+/);
-    $("sched-cfg-minute").value = /^\d+$/.test(fields[0]) ? fields[0] : "0";
-    $("sched-cfg-time").value = `${String(/^\d+$/.test(fields[1]) ? fields[1] : "2").padStart(2, "0")}:${String(/^\d+$/.test(fields[0]) ? fields[0] : "0").padStart(2, "0")}`;
-    $("sched-cfg-weekday").value = /^[0-6]$/.test(fields[4]) ? fields[4] : "1";
-    $("sched-cfg-monthday").value = /^\d+$/.test(fields[2]) ? fields[2] : "1";
+    $("sched-cfg-cron").value = task.cron_expression || "0 4 * * *";
+    $("sched-cfg-timeout").value = task.timeout_seconds || 600;
     updateScheduleFields();
     const cfg = task.config || {};
     const isCleanup = task.name === "audit_log_cleanup";
@@ -3134,51 +3141,137 @@
       }
     }
     $("scheduler-config-modal").classList.remove("hidden");
+    document.body.classList.add("scheduler-drawer-open");
+    $("btn-close-scheduler-config").focus();
+    return requestSchedulePreview();
   }
 
-  // updateScheduleFields enables validation only for the selected scheduling mode.
+  // schedulerPlanPresets matches the reference project's preset expressions exactly.
+  function schedulerPlanPresets() {
+    return { hourly: "0 * * * *", daily: "0 4 * * *", weekly: "0 5 * * 1", monthly: "0 4 1 * *" };
+  }
+
+  // updateScheduleFields exposes raw Cron only for custom rules and retains legacy intervals.
   function updateScheduleFields() {
     const type = $("sched-cfg-schedule-type").value;
-    const calendar = type !== "interval";
-    const modes = {
-      "sched-cfg-calendar-fields": calendar && type !== "cron",
-      "sched-cfg-minute-group": type === "hourly",
-      "sched-cfg-time-group": ["daily", "weekly", "monthly"].includes(type),
-      "sched-cfg-weekday-group": type === "weekly",
-      "sched-cfg-monthday-group": type === "monthly",
-      "sched-cfg-cron-group": type === "cron",
-      "sched-cfg-timezone-group": calendar,
-      "sched-cfg-interval-group": !calendar,
-    };
-    Object.entries(modes).forEach(([id, visible]) => {
+    const preset = schedulerPlanPresets()[type];
+    if (preset) $("sched-cfg-cron").value = preset;
+    for (const [id, visible] of [["sched-cfg-cron-group", type === "cron"], ["sched-cfg-timezone-group", type !== "interval"], ["sched-cfg-interval-group", type === "interval"]]) {
       $(id).classList.toggle("hidden", !visible);
-      $(id).querySelectorAll("input, select").forEach((input) => {
-        input.disabled = !visible;
-        input.required = visible;
-      });
-    });
+      $(id).querySelectorAll("input, select").forEach((input) => { input.disabled = !visible; input.required = visible; });
+    }
   }
 
-  // calendarSchedulePayload turns preset controls into standard five-field Cron rules.
+  // calendarSchedulePayload uses identical schedule fields for preview and persistence.
   function calendarSchedulePayload() {
     const type = $("sched-cfg-schedule-type").value;
     if (type === "interval") return { schedule_type: type, interval: $("sched-cfg-interval").value.trim() };
-    const [hour, minute] = $("sched-cfg-time").value.split(":").map(Number);
-    const presets = {
-      hourly: `${Number($("sched-cfg-minute").value)} * * * *`,
-      daily: `${minute} ${hour} * * *`,
-      weekly: `${minute} ${hour} * * ${$("sched-cfg-weekday").value}`,
-      monthly: `${minute} ${hour} ${Number($("sched-cfg-monthday").value)} * *`,
-      cron: $("sched-cfg-cron").value.trim(),
-    };
-    return { schedule_type: type, cron_expression: presets[type], timezone: $("sched-cfg-timezone").value.trim() };
+    return { schedule_type: type, cron_expression: schedulerPlanPresets()[type] || $("sched-cfg-cron").value.trim(), timezone: $("sched-cfg-timezone").value.trim() };
   }
 
-  // formatTaskSchedule identifies the calendar rule and zone alongside its next run.
+  // invalidateSchedulePreview prevents stale or invalid plans from being saved.
+  function invalidateSchedulePreview() {
+    clearTimeout(state.schedulerPreviewTimer);
+    state.schedulerPreviewRequest = (state.schedulerPreviewRequest || 0) + 1;
+    state.schedulerPreviewValid = false;
+    $("btn-save-scheduler-config").disabled = true;
+    $("sched-cfg-next-runs").innerHTML = "";
+    $("sched-cfg-preview-status").textContent = t("正在计算执行时间…");
+    $("sched-cfg-preview-status").classList.remove("error");
+  }
+
+  // requestSchedulePreview ignores superseded results and formats dates in the selected execution zone.
+  async function requestSchedulePreview() {
+    invalidateSchedulePreview();
+    const request = state.schedulerPreviewRequest;
+    const payload = calendarSchedulePayload();
+    try {
+      const result = await api("/api/admin/scheduler/preview", { method: "POST", body: JSON.stringify(payload) });
+      if (request !== state.schedulerPreviewRequest || $("scheduler-config-modal").classList.contains("hidden")) return;
+      const times = result.next_runs || [];
+      if (times.length !== 5) throw new Error(t("无法计算未来 5 次执行时间。"));
+      const zone = payload.timezone || "Asia/Singapore";
+      $("sched-cfg-next-runs").innerHTML = times.map((time) => `<li><time datetime="${escapeHtml(time)}">${escapeHtml(formatScheduleTime(time, zone))}</time></li>`).join("");
+      $("sched-cfg-preview-status").textContent = payload.schedule_type === "interval" ? formatDurationSecondsPreview(payload.interval) : describeTaskCron(payload.cron_expression) || payload.cron_expression;
+      state.schedulerPreviewValid = true;
+      $("btn-save-scheduler-config").disabled = false;
+    } catch (err) {
+      if (request !== state.schedulerPreviewRequest || $("scheduler-config-modal").classList.contains("hidden")) return;
+      $("sched-cfg-preview-status").textContent = err.message;
+      $("sched-cfg-preview-status").classList.add("error");
+    }
+  }
+
+  // formatDurationSecondsPreview keeps a legacy draft readable without parsing it differently from the server.
+  function formatDurationSecondsPreview(interval) { return t`固定间隔 ${interval}`; }
+
+  // schedulePreviewChanged debounces input while immediately invalidating an earlier response.
+  function schedulePreviewChanged() {
+    invalidateSchedulePreview();
+    state.schedulerPreviewTimer = setTimeout(requestSchedulePreview, 250);
+  }
+
+  // closeSchedulerConfig cancels preview work and restores focus to its invoking row.
+  function closeSchedulerConfig(restoreFocus = true) {
+    clearTimeout(state.schedulerPreviewTimer);
+    state.schedulerPreviewRequest = (state.schedulerPreviewRequest || 0) + 1;
+    state.schedulerPreviewValid = false;
+    $("scheduler-config-modal").classList.add("hidden");
+    document.body.classList.remove("scheduler-drawer-open");
+    if (restoreFocus && state.schedulerConfigOpener?.isConnected) state.schedulerConfigOpener.focus();
+  }
+
+  // formatScheduleTime keeps list and preview dates in the same explicit execution time zone.
+  function formatScheduleTime(value, timezone) {
+    return new Intl.DateTimeFormat(locale, { timeZone: timezone || "Asia/Singapore", dateStyle: "medium", timeStyle: "medium", hour12: false }).format(new Date(value));
+  }
+
+  // describeTaskCron adapts the reference description rules and leaves complex expressions untranslated.
+  function describeTaskCron(expression) {
+    const fields = expression.trim().split(/\s+/);
+    if (fields.length !== 5 || fields[3] !== "*") return null;
+    const [minute, hour, day, , weekday] = fields;
+    const numeric = (value) => /^\d+$/.test(value);
+    if (hour === "*" && day === "*" && weekday === "*") {
+      if (minute === "*") return t("每分钟");
+      const step = /^\*\/(\d+)$/.exec(minute);
+      if (step) return t`每 ${step[1]} 分钟`;
+      if (numeric(minute)) return minute === "0" ? t("每小时整点") : t`每小时第 ${minute} 分`;
+      return null;
+    }
+    if (!numeric(minute)) return null;
+    const step = /^\*\/(\d+)$/.exec(hour);
+    if (step && day === "*" && weekday === "*") return minute === "0" ? t`每 ${step[1]} 小时整点` : t`每 ${step[1]} 小时，第 ${minute} 分`;
+    const list = (value, format) => {
+      const values = value.split(",");
+      const out = [];
+      for (const item of values) {
+        const range = /^(\d+)-(\d+)$/.exec(item);
+        if (range) out.push(t`${format(range[1])}至${format(range[2])}`);
+        else if (numeric(item)) out.push(format(item));
+        else return null;
+      }
+      return out.join(locale === "en" ? ", " : "、");
+    };
+    const times = list(hour, (value) => `${value.padStart(2, "0")}:${minute.padStart(2, "0")}`);
+    if (!times) return null;
+    if (day === "*" && weekday === "*") return t`每天 ${times}`;
+    if (day === "*") {
+      const names = [t("周日"), t("周一"), t("周二"), t("周三"), t("周四"), t("周五"), t("周六")];
+      const days = list(weekday, (value) => names[Number(value)] || value);
+      return days ? t`每${days} ${times}` : null;
+    }
+    if (weekday === "*") {
+      const days = list(day, (value) => t`${value} 日`);
+      return days ? t`每月 ${days} ${times}` : null;
+    }
+    return null;
+  }
+
+  // formatTaskSchedule describes the rule while retaining its exact expression and time zone.
   function formatTaskSchedule(task) {
     if (!task.schedule_type || task.schedule_type === "interval") return formatDurationSeconds(task.interval_seconds);
-    const labels = { hourly: t("每小时"), daily: t("每天"), weekly: t("每周"), monthly: t("每月"), cron: t("自定义 Cron") };
-    return `${labels[task.schedule_type] || task.schedule_type} · ${task.cron_expression} · ${task.timezone}`;
+    return `${describeTaskCron(task.cron_expression) || task.cron_expression} · ${task.cron_expression} · ${task.timezone}`;
   }
 
   function formatIntervalInput(seconds) {
@@ -3195,6 +3288,7 @@
       if (!chip) return;
       const input = $(group.dataset.target);
       if (input) input.value = chip.dataset.value || "";
+      if (input && group.dataset.target === "sched-cfg-interval") schedulePreviewChanged();
     });
   });
 
@@ -3369,6 +3463,11 @@
         openSchedulerConfigModal(cfgBtn.dataset.name);
         return;
       }
+      const historyBtn = e.target.closest(".btn-sched-history");
+      if (historyBtn) {
+        await openSchedulerHistory(historyBtn.dataset.name);
+        return;
+      }
       const runBtn = e.target.closest(".btn-sched-run");
       if (!runBtn) return;
       const taskName = runBtn.dataset.name;
@@ -3400,18 +3499,27 @@
   }
 
   if ($("sched-cfg-schedule-type")) $("sched-cfg-schedule-type").addEventListener("change", updateScheduleFields);
+  if ($("sched-cfg-schedule-type")) $("sched-cfg-schedule-type").addEventListener("change", schedulePreviewChanged);
+  ["sched-cfg-cron", "sched-cfg-timezone", "sched-cfg-interval"].forEach((id) => {
+    if ($(id)) $(id).addEventListener("input", schedulePreviewChanged);
+  });
 
-  if ($("btn-close-scheduler-config")) $("btn-close-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
-  if ($("btn-cancel-scheduler-config")) $("btn-cancel-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
-  if ($("scheduler-config-modal")) $("scheduler-config-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-config-modal")) $("scheduler-config-modal").classList.add("hidden"); });
+  if ($("btn-close-scheduler-config")) $("btn-close-scheduler-config").addEventListener("click", () => closeSchedulerConfig());
+  if ($("btn-cancel-scheduler-config")) $("btn-cancel-scheduler-config").addEventListener("click", () => closeSchedulerConfig());
+  if ($("scheduler-config-modal")) $("scheduler-config-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-config-modal")) closeSchedulerConfig(); });
+  if ($("btn-close-scheduler-history")) $("btn-close-scheduler-history").addEventListener("click", () => closeSchedulerHistory());
+  if ($("scheduler-history-modal")) $("scheduler-history-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-history-modal")) closeSchedulerHistory(); });
 
   if ($("scheduler-config-form")) {
     onSubmit("scheduler-config-form", async (e) => {
       e.preventDefault();
+      if (!state.schedulerPreviewValid) throw new Error(t("请先确认执行计划有效。"));
       const name = $("sched-cfg-name").value;
+      const previewRequest = state.schedulerPreviewRequest;
       const payload = {
         name,
         enabled: $("sched-cfg-enabled").checked,
+        timeout_seconds: Number($("sched-cfg-timeout").value),
         ...calendarSchedulePayload(),
       };
       if (name === "audit_log_cleanup") {
@@ -3432,10 +3540,10 @@
         method: "PATCH",
         body: JSON.stringify(payload),
       });
-      $("scheduler-config-modal").classList.add("hidden");
+      if (name === $("sched-cfg-name").value && previewRequest === state.schedulerPreviewRequest) closeSchedulerConfig();
       showToast(t("定时任务配置已保存"));
       await loadSchedulerCenter();
-    });
+    }, () => state.schedulerPreviewValid);
   }
 
   // SafeKeep Integration Settings & Backup
@@ -3630,12 +3738,7 @@
     });
   }
 
-  if ($("scheduler-runs-filter")) {
-    $("scheduler-runs-filter").addEventListener("change", async () => {
-      state.schedulerRunsPage = 1;
-      try { await loadSchedulerRuns(); } catch (err) { showToast(err.message, true); }
-    });
-  }
+  // Scheduler history pagination remains scoped to the open task drawer.
   if ($("btn-sched-runs-prev")) {
     $("btn-sched-runs-prev").addEventListener("click", async () => {
       if (state.schedulerRunsPage <= 1) return;

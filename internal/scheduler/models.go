@@ -17,6 +17,7 @@ const (
 	StatusRunning = "running"
 	StatusSuccess = "success"
 	StatusFailed  = "failed"
+	StatusTimeout = "timeout"
 )
 
 // TaskResult captures the outcome of a single scheduled task execution.
@@ -51,6 +52,7 @@ type TaskView struct {
 	ScheduleType    string         `json:"schedule_type"`
 	CronExpression  string         `json:"cron_expression"`
 	Timezone        string         `json:"timezone"`
+	TimeoutSeconds  int64          `json:"timeout_seconds"`
 	Config          map[string]any `json:"config"`
 	LastRunAt       *time.Time     `json:"last_run_at,omitempty"`
 	NextRunAt       *time.Time     `json:"next_run_at,omitempty"`
@@ -86,5 +88,6 @@ type UpdateTaskRequest struct {
 	ScheduleType    *string        `json:"schedule_type,omitempty"`
 	CronExpression  *string        `json:"cron_expression,omitempty"`
 	Timezone        *string        `json:"timezone,omitempty"`
+	TimeoutSeconds  *int64         `json:"timeout_seconds,omitempty"`
 	Config          map[string]any `json:"config,omitempty"`
 }
