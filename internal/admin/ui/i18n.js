@@ -815,7 +815,19 @@
     "{0} 天": "{0}d",
     "{0} 小时": "{0}h",
     "{0} 分钟": "{0}m",
-    "{0} 秒": "{0}s"
+    "{0} 秒": "{0}s",
+    "共享记忆管理平台": "Shared Memory Console",
+    "记忆工作空间": "Workspace",
+    "管理与维护": "Administration",
+    "工作空间": "Workspace",
+    "管理员": "Administrator",
+    "打开导航菜单": "Open navigation menu",
+    "关闭导航菜单": "Close navigation menu",
+    "收起导航": "Collapse navigation",
+    "主侧边栏": "Primary sidebar",
+    "主导航": "Primary navigation",
+    "Engram · 让每一次协作都有共享记忆": "Engram · Shared memory for every collaboration",
+    "MCP 共享记忆 · 统一管理控制台": "MCP Shared Memory · Unified Console"
   };
 
   const languageKey = "engram.language";

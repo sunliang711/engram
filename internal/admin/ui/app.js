@@ -170,7 +170,10 @@
       return;
     }
 
-    $("current-admin-user").textContent = sessionState.username || "admin";
+    const username = sessionState.username || "admin";
+    $("current-admin-user").textContent = username;
+    if ($("sidebar-admin-user")) $("sidebar-admin-user").textContent = username;
+    if ($("sidebar-user-avatar")) $("sidebar-user-avatar").textContent = username.slice(0, 1).toUpperCase();
     $("app-view").classList.remove("hidden");
     refreshAllData();
   }
@@ -1131,18 +1134,34 @@
     $("memory-filter-count").classList.toggle("hidden", count === 0);
   }
 
+  function setSidebarOpen(open) {
+    const sidebar = $("app-navigation");
+    const backdrop = $("sidebar-backdrop");
+    const btn = $("btn-mobile-menu");
+    if (sidebar) sidebar.classList.toggle("open", !!open);
+    if (backdrop) backdrop.classList.toggle("hidden", !open);
+    if (btn) btn.setAttribute("aria-expanded", String(!!open));
+  }
+
   // switchMainTab maintains navigation state without carrying an unrelated detail panel.
   function switchMainTab(tabId, updateURL = true) {
     if (tabId === "tab-tokens") tabId = "tab-tenants";
-    if (!document.querySelector(`.tab-btn[data-tab="${tabId}"]`)) tabId = "tab-overview";
+    const activeBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    if (!activeBtn) tabId = "tab-overview";
     if (updateURL && tabId === "tab-tenants") { state.memberTenant = ""; state.selectedPrincipal = ""; }
     if (updateURL && tabId === "tab-projects") state.selectedProject = "";
+    setSidebarOpen(false);
     closeClientGuides(false);
     closeMemoryDetail(false, false);
     document.querySelectorAll(".tab-btn").forEach((b) => {
       b.classList.toggle("active", b.dataset.tab === tabId);
       b.setAttribute("aria-current", b.dataset.tab === tabId ? "page" : "false");
     });
+    const currentBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+    if ($("topbar-current-page") && currentBtn) {
+      const labelEl = currentBtn.querySelector("span:not(.nav-chevron)");
+      $("topbar-current-page").textContent = (labelEl ? labelEl.textContent : currentBtn.textContent).trim();
+    }
     document.querySelectorAll(".tab-pane").forEach((p) => p.classList.toggle("hidden", p.id !== tabId));
     renderManagementViews();
     if (tabId === "tab-audit" && state.locationReady) loadAuditCenter().catch((err) => showToast(err.message, true));
@@ -2070,6 +2089,7 @@
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (clientConfigOpen) closeClientGuides();
       else if (detailOpen) closeMemoryDetail();
+      else if ($("app-navigation") && $("app-navigation").classList.contains("open")) setSidebarOpen(false);
       else if (document.querySelector(".account-menu").open) {
         document.querySelector(".account-menu").open = false;
         document.querySelector(".account-menu summary").focus();
@@ -3200,6 +3220,13 @@
       state.schedulerRunsPage++;
       try { await loadSchedulerRuns(); } catch (err) { showToast(err.message, true); }
     });
+  }
+
+  if ($("btn-mobile-menu")) $("btn-mobile-menu").addEventListener("click", () => setSidebarOpen(true));
+  if ($("btn-close-sidebar")) $("btn-close-sidebar").addEventListener("click", () => setSidebarOpen(false));
+  if ($("sidebar-backdrop")) $("sidebar-backdrop").addEventListener("click", () => setSidebarOpen(false));
+  if ($("btn-sidebar-logout") && $("btn-logout")) {
+    $("btn-sidebar-logout").addEventListener("click", () => $("btn-logout").click());
   }
 
   renderClientGuides();

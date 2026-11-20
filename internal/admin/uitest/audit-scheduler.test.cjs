@@ -9,6 +9,14 @@ const appSource = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
 const i18nSource = fs.readFileSync(path.join(__dirname, '../ui/i18n.js'), 'utf8');
 
 test('navigation and panes include Audit Center and Scheduled Tasks tabs', () => {
+  assert.match(html, /class="hidden app-shell"/);
+  assert.match(html, /<aside id="app-navigation" class="app-sidebar"/);
+  assert.match(html, /class="nav-tabs sidebar-nav"/);
+  assert.match(html, /class="nav-group-label"/);
+  assert.match(html, /class="sidebar-user"/);
+  assert.match(html, /<div class="app-main">/);
+  assert.match(html, /id="btn-mobile-menu"/);
+  assert.match(html, /id="topbar-current-page"/);
   assert.match(html, /data-tab="tab-audit"/);
   assert.match(html, /data-tab="tab-scheduler"/);
   assert.match(html, /<section id="tab-audit" class="tab-pane hidden">/);
