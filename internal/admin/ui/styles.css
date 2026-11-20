@@ -665,6 +665,7 @@ label {
 input[type="url"],
 input[type="text"],
 input[type="password"],
+input[type="time"],
 input[type="number"],
 input[type="search"],
 select,
@@ -677,6 +678,24 @@ textarea {
   border-radius: 8px;
   font-size: 13.5px;
   transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.secret-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.secret-input input {
+  min-width: 0;
+  flex: 1;
+}
+
+.secret-input button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 select {

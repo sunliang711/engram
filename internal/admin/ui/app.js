@@ -17,6 +17,7 @@
     clientConfigTokenID: "",
     clientConfigRequest: 0,
     revealedTokens: {},
+    visibleTokens: {},
     memoryPage: 1,
     memoryPageSize: 20,
     memoryTotal: 0,
@@ -49,6 +50,89 @@
 
   function $(id) {
     return document.getElementById(id);
+  }
+
+  // Secret fields keep saved masks separate from editable values and cancel stale reveals.
+  function setSecretVisibility(input, visible) {
+    input.type = visible ? "text" : "password";
+    const button = $("btn-secret-" + input.id);
+    if (button) {
+      button.textContent = visible ? t("隐藏明文") : t("显示明文");
+      button.setAttribute("aria-pressed", String(visible));
+      button.removeAttribute("aria-busy");
+    }
+  }
+
+  // resetSecretField removes revealed saved values while preserving unsaved edits.
+  function resetSecretField(input, clear = false) {
+    input.dataset.secretRequest = String(Number(input.dataset.secretRequest || 0) + 1);
+    if (clear || input.dataset.secretSource === "saved") input.value = "";
+    input.dataset.secretSource = "";
+    setSecretVisibility(input, false);
+  }
+
+  // resetSecretVisibility hides credentials when a page or authentication context changes.
+  function resetSecretVisibility(clear = false) {
+    document.querySelectorAll("[data-secret-input]").forEach((input) => resetSecretField(input, clear));
+  }
+
+  // secretDraft excludes values fetched for viewing from settings and test requests.
+  function secretDraft(id) {
+    const input = $(id);
+    return input.dataset.secretSource === "saved" ? "" : input.value;
+  }
+
+  // renderStoredSecret shows a fixed mask without putting a fake value in the form.
+  function renderStoredSecret(id, hasValue) {
+    const input = $(id);
+    if (!input.dataset.emptyPlaceholder) input.dataset.emptyPlaceholder = input.placeholder || "";
+    resetSecretField(input, true);
+    input.dataset.secretConfigured = String(!!hasValue);
+    input.placeholder = hasValue ? "********" : input.dataset.emptyPlaceholder;
+    $("btn-secret-" + id).disabled = !hasValue;
+  }
+
+  // toggleSecretField reveals drafts locally or fetches one stored value on explicit demand.
+  async function toggleSecretField(input) {
+    const button = $("btn-secret-" + input.id);
+    if (input.type === "text" || button.getAttribute("aria-busy") === "true") {
+      resetSecretField(input);
+    } else if (input.value || !input.dataset.secretStored || input.dataset.secretConfigured !== "true") {
+      setSecretVisibility(input, true);
+    } else {
+      const request = input.dataset.secretRequest = String(Number(input.dataset.secretRequest || 0) + 1);
+      button.setAttribute("aria-busy", "true");
+      button.textContent = t("取消显示");
+      try {
+        const result = await api("/api/admin/integrations/safekeep/reveal", {
+          method: "POST",
+          body: JSON.stringify({ field: input.dataset.secretStored }),
+        });
+        if (input.dataset.secretRequest !== request) return;
+        input.value = result.value;
+        input.dataset.secretSource = "saved";
+        setSecretVisibility(input, true);
+      } catch (err) {
+        if (input.dataset.secretRequest !== request) return;
+        setSecretVisibility(input, false);
+        showToast(err.message, true);
+      }
+    }
+    if (input.id === "guide-token-input") renderClientGuides();
+  }
+
+  // bindSecretFields invalidates pending requests before accepting a replacement value.
+  function bindSecretFields() {
+    document.querySelectorAll("[data-secret-input]").forEach((input) => {
+      input.addEventListener("input", () => {
+        input.dataset.secretRequest = String(Number(input.dataset.secretRequest || 0) + 1);
+        input.dataset.secretSource = "";
+        const button = $("btn-secret-" + input.id);
+        button.disabled = !input.value && input.dataset.secretStored && input.dataset.secretConfigured !== "true";
+        setSecretVisibility(input, input.type === "text");
+      });
+      $("btn-secret-" + input.id).addEventListener("click", () => toggleSecretField(input));
+    });
   }
 
   // showToast keeps the latest message visible for its complete display interval.
@@ -110,6 +194,10 @@
     [/^invalid (tenant_id|principal_id|project_id)/i, t("请先选择租户、成员或项目。")],
     [/^invalid (json body|tenant role|principal mode|identity provider)/i, t("提交的内容不正确，请刷新页面后重试。")],
     [/admin password change required/i, t("请先修改管理员密码。")],
+    [/^invalid schedule timezone/i, t("请填写有效的 IANA 时区，例如 Asia/Singapore 或 UTC。")],
+    [/^(invalid cron expression|cron expression must contain)/i, t("请填写有效的五字段 Cron 表达式（分 时 日 月 周）。")],
+    [/^cron expression does not match schedule_type/i, t("执行规则与所选时间粒度不匹配，请重新配置。")],
+    [/^cron expression has no occurrence/i, t("该执行规则在未来五年内没有有效日期，请修改。")],
   ];
 
   function translateError(message) {
@@ -135,6 +223,8 @@
 
   // renderView separates first activation from an authenticated administration session.
   function renderView(sessionState) {
+    resetSecretVisibility(!sessionState || !sessionState.authenticated);
+    if (!sessionState || !sessionState.authenticated) state.visibleTokens = {};
     if (sessionState && sessionState.version) {
       state.appVersion = String(sessionState.version).trim();
     }
@@ -572,15 +662,15 @@
     tbody.innerHTML = tokens
       .map((tk) => {
         const active = !tk.revoked_at;
-        const revealed = state.revealedTokens[tk.id];
+        const revealed = state.visibleTokens?.[tk.id] && state.revealedTokens[tk.id];
         const tokenCell = revealed
           ? `<code>${escapeHtml(revealed)}</code>`
-          : `<code>${escapeHtml(tk.token_prefix)}…</code>${
+          : `<code>********</code>${
               tk.can_reveal ? "" : t(' <small class="muted" title="无法还原此密钥明文；可在配置客户端时手动粘贴原密钥。">（无法查看明文）</small>')
             }`;
         const revealBtns = tk.can_reveal
           ? t`
-            <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? t("隐藏") : t("查看")}</button>
+            <button type="button" class="secondary small btn-toggle-token" data-id="${tk.id}">${revealed ? t("隐藏明文") : t("显示明文")}</button>
             <button type="button" class="secondary small btn-copy-token" data-id="${tk.id}">复制</button>
           `
           : "";
@@ -608,13 +698,17 @@
     tbody.querySelectorAll(".btn-toggle-token").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.dataset.id;
-        if (state.revealedTokens[id]) {
+        if (state.visibleTokens?.[id]) {
+          delete state.visibleTokens[id];
           delete state.revealedTokens[id];
           renderTokensTable();
           return;
         }
         try {
           await resolveTokenSecret(id);
+          if (!currentMemberToken(id)) return;
+          state.visibleTokens = state.visibleTokens || {};
+          state.visibleTokens[id] = true;
           renderTokensTable();
         } catch (err) {
           showToast(err.message, true);
@@ -952,9 +1046,11 @@
   }
 
   // renderClientGuides previews credentials only in memory and uses a client-reachable origin.
-  function renderClientGuides() {
+  // clientGuideContents keeps hidden previews masked while copying complete configurations.
+  function clientGuideContents(revealSecret = false) {
     const tokenInput = $("guide-token-input");
-    const rawToken = (tokenInput ? tokenInput.value.trim() : state.latestToken) || "<YOUR_API_TOKEN>";
+    const token = (tokenInput ? tokenInput.value.trim() : state.latestToken) || "";
+    const rawToken = token ? (revealSecret || tokenInput?.type === "text" ? token : "********") : "<YOUR_API_TOKEN>";
     const serverInput = $("guide-server-input");
     const address = serverInput.value.trim() || window.location.origin;
     let serverURL;
@@ -1029,14 +1125,23 @@
     );
 
     const instructions = getMemoryInstructionSnippet();
-    if ($("guide-codex-mcp")) $("guide-codex-mcp").textContent = codexToml;
-    if ($("guide-codex-rules")) $("guide-codex-rules").textContent = instructions;
-    if ($("guide-claude-mcp")) $("guide-claude-mcp").textContent = claudeJson;
-    if ($("guide-claude-cli")) $("guide-claude-cli").textContent = claudeCli;
-    if ($("guide-claude-rules")) $("guide-claude-rules").textContent = instructions;
-    if ($("guide-gemini-cli-mcp")) $("guide-gemini-cli-mcp").textContent = geminiCliJson;
-    if ($("guide-gemini-agy-mcp")) $("guide-gemini-agy-mcp").textContent = geminiAgyJson;
-    if ($("guide-gemini-rules")) $("guide-gemini-rules").textContent = instructions;
+    return {
+      "guide-codex-mcp": codexToml,
+      "guide-codex-rules": instructions,
+      "guide-claude-mcp": claudeJson,
+      "guide-claude-cli": claudeCli,
+      "guide-claude-rules": instructions,
+      "guide-gemini-cli-mcp": geminiCliJson,
+      "guide-gemini-agy-mcp": geminiAgyJson,
+      "guide-gemini-rules": instructions,
+    };
+  }
+
+  // renderClientGuides refreshes previews without revealing a hidden credential.
+  function renderClientGuides() {
+    Object.entries(clientGuideContents()).forEach(([id, content]) => {
+      if ($(id)) $(id).textContent = content;
+    });
   }
 
   // currentMemberToken rejects credentials outside the visible tenant and member detail.
@@ -1068,7 +1173,7 @@
   async function loadClientTokenSecret(tokenID) {
     const request = state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
     const token = currentMemberToken(tokenID);
-    $("guide-token-input").value = "";
+    resetSecretField($("guide-token-input"), true);
     $("mcp-check-result").textContent = "";
     $("guide-token-hint").textContent = t("正在获取已有密钥…");
     renderClientGuides();
@@ -1117,6 +1222,8 @@
     const wasOpen = !modal.classList.contains("hidden");
     modal.classList.add("hidden");
     document.body.classList.remove("client-config-open");
+    resetSecretField($("guide-token-input"), true);
+    renderClientGuides();
     if (wasOpen && restoreFocus) {
       // A background refresh may replace the original row while configuration is open.
       const opener = state.clientConfigOpener && state.clientConfigOpener.isConnected ? state.clientConfigOpener : currentMemberToken(state.clientConfigTokenID) && $("member-tokens-table").querySelector(`.btn-apply-token[data-id="${state.clientConfigTokenID}"]`);
@@ -1148,6 +1255,9 @@
 
   // switchMainTab maintains navigation state without carrying an unrelated detail panel.
   function switchMainTab(tabId, updateURL = true) {
+    resetSecretVisibility();
+    state.visibleTokens = {};
+    state.revealedTokens = {};
     if (tabId === "tab-tokens") tabId = "tab-tenants";
     const activeBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
     if (!activeBtn) tabId = "tab-overview";
@@ -1539,7 +1649,8 @@
     btn.addEventListener("click", () => {
       const target = $(btn.dataset.copyTarget);
       if (target) {
-        copyText(target.textContent || "");
+        const contents = clientGuideContents(true);
+        copyText(contents[btn.dataset.copyTarget] || target.textContent || "");
       }
     });
   });
@@ -1589,6 +1700,7 @@
   });
 
   $("btn-open-change-pwd").addEventListener("click", () => {
+    resetSecretVisibility();
     document.querySelector(".account-menu").open = false;
     $("pwd-view-title").textContent = t("修改管理员密码");
     $("pwd-view-subtitle").textContent = t("请输入当前密码，再设置新的管理员密码。修改后其他会话需要重新登录。");
@@ -1600,6 +1712,7 @@
   });
 
   $("btn-cancel-change-pwd").addEventListener("click", () => {
+    resetSecretVisibility();
     $("current-admin-password").value = "";
     $("new-admin-password").value = "";
     $("confirm-admin-password").value = "";
@@ -1608,6 +1721,7 @@
   });
 
   $("btn-logout").addEventListener("click", async () => {
+    resetSecretVisibility(true);
     state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
     await api("/api/admin/logout", { method: "POST" });
     state.latestToken = "";
@@ -2014,7 +2128,7 @@
   $("btn-detail-preview").addEventListener("click", () => setDetailMode(false));
   $("btn-detail-source").addEventListener("click", () => setDetailMode(true));
   $("btn-copy-memory").addEventListener("click", () => { if (state.selectedMemory) copyText(state.selectedMemory.content_md); });
-  $("show-admin-passwords").addEventListener("change", (event) => { ["current-admin-password", "new-admin-password", "confirm-admin-password"].forEach((id) => { $(id).type = event.target.checked ? "text" : "password"; }); });
+  bindSecretFields();
   $("guide-server-input").value = window.location.origin;
   $("guide-server-input").addEventListener("input", renderClientGuides);
   document.addEventListener("click", (event) => {
@@ -2915,7 +3029,7 @@
           <span class="badge ${task.enabled ? "success" : "danger"}">${task.enabled ? t("已启用") : t("已停用")}</span>
           <div style="margin-top:4px;">${lastOutcome}</div>
         </td>
-        <td>${escapeHtml(formatDurationSeconds(task.interval_seconds))}</td>
+        <td>${escapeHtml(formatTaskSchedule(task))}</td>
         <td><div class="sched-config-pills">${cfgPills.join("") || "—"}</div></td>
         <td>
           <div style="font-size:12.5px;">${t("上次")}: ${escapeHtml(lastAt)}</div>
@@ -2978,6 +3092,7 @@
     }).join("");
   }
 
+  // openSchedulerConfigModal restores both calendar rules and legacy intervals.
   function openSchedulerConfigModal(taskName) {
     const task = state.schedulerTasks.find((item) => item.name === taskName);
     if (!task || !$("scheduler-config-modal")) return;
@@ -2986,6 +3101,15 @@
     $("sched-cfg-desc").textContent = t(task.description) || "";
     $("sched-cfg-enabled").checked = !!task.enabled;
     $("sched-cfg-interval").value = formatIntervalInput(task.interval_seconds);
+    $("sched-cfg-schedule-type").value = task.schedule_type || "interval";
+    $("sched-cfg-timezone").value = task.timezone || "Asia/Singapore";
+    $("sched-cfg-cron").value = task.cron_expression || "0 2 * * *";
+    const fields = (task.cron_expression || "0 2 1 * 1").split(/\s+/);
+    $("sched-cfg-minute").value = /^\d+$/.test(fields[0]) ? fields[0] : "0";
+    $("sched-cfg-time").value = `${String(/^\d+$/.test(fields[1]) ? fields[1] : "2").padStart(2, "0")}:${String(/^\d+$/.test(fields[0]) ? fields[0] : "0").padStart(2, "0")}`;
+    $("sched-cfg-weekday").value = /^[0-6]$/.test(fields[4]) ? fields[4] : "1";
+    $("sched-cfg-monthday").value = /^\d+$/.test(fields[2]) ? fields[2] : "1";
+    updateScheduleFields();
     const cfg = task.config || {};
     const isCleanup = task.name === "audit_log_cleanup";
     const isSafekeep = task.name === "safekeep_migration_backup";
@@ -3010,6 +3134,51 @@
       }
     }
     $("scheduler-config-modal").classList.remove("hidden");
+  }
+
+  // updateScheduleFields enables validation only for the selected scheduling mode.
+  function updateScheduleFields() {
+    const type = $("sched-cfg-schedule-type").value;
+    const calendar = type !== "interval";
+    const modes = {
+      "sched-cfg-calendar-fields": calendar && type !== "cron",
+      "sched-cfg-minute-group": type === "hourly",
+      "sched-cfg-time-group": ["daily", "weekly", "monthly"].includes(type),
+      "sched-cfg-weekday-group": type === "weekly",
+      "sched-cfg-monthday-group": type === "monthly",
+      "sched-cfg-cron-group": type === "cron",
+      "sched-cfg-timezone-group": calendar,
+      "sched-cfg-interval-group": !calendar,
+    };
+    Object.entries(modes).forEach(([id, visible]) => {
+      $(id).classList.toggle("hidden", !visible);
+      $(id).querySelectorAll("input, select").forEach((input) => {
+        input.disabled = !visible;
+        input.required = visible;
+      });
+    });
+  }
+
+  // calendarSchedulePayload turns preset controls into standard five-field Cron rules.
+  function calendarSchedulePayload() {
+    const type = $("sched-cfg-schedule-type").value;
+    if (type === "interval") return { schedule_type: type, interval: $("sched-cfg-interval").value.trim() };
+    const [hour, minute] = $("sched-cfg-time").value.split(":").map(Number);
+    const presets = {
+      hourly: `${Number($("sched-cfg-minute").value)} * * * *`,
+      daily: `${minute} ${hour} * * *`,
+      weekly: `${minute} ${hour} * * ${$("sched-cfg-weekday").value}`,
+      monthly: `${minute} ${hour} ${Number($("sched-cfg-monthday").value)} * *`,
+      cron: $("sched-cfg-cron").value.trim(),
+    };
+    return { schedule_type: type, cron_expression: presets[type], timezone: $("sched-cfg-timezone").value.trim() };
+  }
+
+  // formatTaskSchedule identifies the calendar rule and zone alongside its next run.
+  function formatTaskSchedule(task) {
+    if (!task.schedule_type || task.schedule_type === "interval") return formatDurationSeconds(task.interval_seconds);
+    const labels = { hourly: t("每小时"), daily: t("每天"), weekly: t("每周"), monthly: t("每月"), cron: t("自定义 Cron") };
+    return `${labels[task.schedule_type] || task.schedule_type} · ${task.cron_expression} · ${task.timezone}`;
   }
 
   function formatIntervalInput(seconds) {
@@ -3230,6 +3399,8 @@
     });
   }
 
+  if ($("sched-cfg-schedule-type")) $("sched-cfg-schedule-type").addEventListener("change", updateScheduleFields);
+
   if ($("btn-close-scheduler-config")) $("btn-close-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
   if ($("btn-cancel-scheduler-config")) $("btn-cancel-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
   if ($("scheduler-config-modal")) $("scheduler-config-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-config-modal")) $("scheduler-config-modal").classList.add("hidden"); });
@@ -3241,7 +3412,7 @@
       const payload = {
         name,
         enabled: $("sched-cfg-enabled").checked,
-        interval: $("sched-cfg-interval").value.trim(),
+        ...calendarSchedulePayload(),
       };
       if (name === "audit_log_cleanup") {
         payload.config = {
@@ -3278,8 +3449,8 @@
   function renderSafekeepSettings(data) {
     if (!data || !$("safekeep-settings-form")) return;
     $("sk-base-url").value = data.base_url || "";
-    $("sk-api-key").value = "";
-    $("sk-backup-passphrase").value = "";
+    renderStoredSecret("sk-api-key", data.has_api_key);
+    renderStoredSecret("sk-backup-passphrase", data.has_backup_passphrase);
     $("sk-default-mode").value = data.default_mode || "sync";
     $("sk-default-path").value = data.default_path || "engram";
     $("sk-default-targets").value = data.default_targets || "";
@@ -3292,7 +3463,7 @@
     }
     if ($("sk-api-key-hint")) {
       $("sk-api-key-hint").textContent = data.has_api_key
-        ? t`已保存 API Key（${data.api_key_masked || "****"}），留空则保持不变。`
+        ? t("已保存 API Key，输入新值可替换。")
         : t("尚未配置 API Key。");
     }
     if ($("btn-sk-clear-key")) $("btn-sk-clear-key").classList.toggle("hidden", !data.has_api_key);
@@ -3324,9 +3495,9 @@
         default_path: $("sk-default-path").value.trim(),
         default_targets: $("sk-default-targets").value.trim(),
       };
-      const apiKey = $("sk-api-key").value.trim();
+      const apiKey = secretDraft("sk-api-key").trim();
       if (apiKey) payload.api_key = apiKey;
-      const passphrase = $("sk-backup-passphrase").value;
+      const passphrase = secretDraft("sk-backup-passphrase");
       if (passphrase) payload.backup_passphrase = passphrase;
 
       const updated = await api("/api/admin/integrations/safekeep", {
@@ -3386,7 +3557,7 @@
           method: "POST",
           body: JSON.stringify({
             base_url: $("sk-base-url").value.trim(),
-            api_key: $("sk-api-key").value.trim(),
+            api_key: secretDraft("sk-api-key").trim(),
           }),
         });
         if (resultEl) {

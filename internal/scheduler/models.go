@@ -48,6 +48,9 @@ type TaskView struct {
 	Enabled         bool           `json:"enabled"`
 	IntervalSeconds int64          `json:"interval_seconds"`
 	Interval        string         `json:"interval"`
+	ScheduleType    string         `json:"schedule_type"`
+	CronExpression  string         `json:"cron_expression"`
+	Timezone        string         `json:"timezone"`
 	Config          map[string]any `json:"config"`
 	LastRunAt       *time.Time     `json:"last_run_at,omitempty"`
 	NextRunAt       *time.Time     `json:"next_run_at,omitempty"`
@@ -80,5 +83,8 @@ type UpdateTaskRequest struct {
 	Enabled         *bool          `json:"enabled,omitempty"`
 	Interval        string         `json:"interval,omitempty"`
 	IntervalSeconds *int64         `json:"interval_seconds,omitempty"`
+	ScheduleType    *string        `json:"schedule_type,omitempty"`
+	CronExpression  *string        `json:"cron_expression,omitempty"`
+	Timezone        *string        `json:"timezone,omitempty"`
 	Config          map[string]any `json:"config,omitempty"`
 }

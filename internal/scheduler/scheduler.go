@@ -267,16 +267,24 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 		enabled         bool
 		intervalSeconds int64
 		cfgRaw          []byte
+		scheduleType    string
+		cronExpression  string
+		timezone        string
+		nextRunAt       *time.Time
 	)
 	if err := s.pool.QueryRow(ctx, `
-		SELECT enabled, interval_seconds, config_json
+		SELECT enabled, interval_seconds, config_json, schedule_type, cron_expression, timezone, next_run_at
 		FROM scheduled_tasks
 		WHERE name = $1
-	`, name).Scan(&enabled, &intervalSeconds, &cfgRaw); err != nil {
+	`, name).Scan(&enabled, &intervalSeconds, &cfgRaw, &scheduleType, &cronExpression, &timezone, &nextRunAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeNotFound, "scheduled task not found: "+name)
 		}
 		return nil, apperror.Wrap(apperror.CodeInternalError, "load scheduled task config", err)
+	}
+	// Another instance may have completed this occurrence while we waited for the lock.
+	if triggerType == TriggerScheduled && (!enabled || (nextRunAt != nil && nextRunAt.After(time.Now().UTC()))) {
+		return nil, nil
 	}
 
 	cfgMap := maps.Clone(spec.DefaultConfig)
@@ -334,7 +342,10 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 
 	var nextRun *time.Time
 	if enabled && intervalSeconds > 0 {
-		t := finishedAt.Add(time.Duration(intervalSeconds) * time.Second)
+		t, err := nextScheduledRun(scheduleType, cronExpression, timezone, intervalSeconds, finishedAt)
+		if err != nil {
+			return nil, apperror.Wrap(apperror.CodeInvalidArgument, "calculate next scheduled run", err)
+		}
 		nextRun = &t
 	}
 
@@ -355,10 +366,12 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 		s.log.Warn().Err(err).Str("task", name).Msg("failed to finalize scheduled_task_runs")
 	}
 
+	// Preserve any schedule or enable-state change saved while this run was in progress.
 	if _, err := s.pool.Exec(dbCtx, `
 		UPDATE scheduled_tasks
 		SET last_run_at = $2,
-		    next_run_at = $3,
+		    next_run_at = CASE WHEN schedule_type = $8 AND cron_expression = $9 AND timezone = $10
+		                          AND enabled = $11 AND interval_seconds = $12 THEN $3 ELSE next_run_at END,
 		    last_status = $4,
 		    last_duration_ms = $5,
 		    last_summary = $6,
@@ -366,7 +379,7 @@ func (s *Scheduler) executeTask(ctx context.Context, name, triggerType, actorNam
 		    run_count = run_count + 1,
 		    updated_at = $2
 		WHERE name = $1
-	`, name, finishedAt, nextRun, status, durationMS, res.Summary, errMsg); err != nil {
+	`, name, finishedAt, nextRun, status, durationMS, res.Summary, errMsg, scheduleType, cronExpression, timezone, enabled, intervalSeconds); err != nil {
 		s.log.Warn().Err(err).Str("task", name).Msg("failed to update scheduled_tasks")
 	}
 
@@ -437,7 +450,7 @@ func (s *Scheduler) ListTasks(ctx context.Context) ([]TaskView, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT name, display_name, description, task_type, enabled, interval_seconds, config_json,
 		       last_run_at, next_run_at, last_status, last_duration_ms, last_summary, last_error,
-		       run_count, updated_at
+		       run_count, updated_at, schedule_type, cron_expression, timezone
 		FROM scheduled_tasks
 		ORDER BY name ASC
 	`)
@@ -468,7 +481,7 @@ func (s *Scheduler) GetTask(ctx context.Context, name string) (*TaskView, error)
 	row := s.pool.QueryRow(ctx, `
 		SELECT name, display_name, description, task_type, enabled, interval_seconds, config_json,
 		       last_run_at, next_run_at, last_status, last_duration_ms, last_summary, last_error,
-		       run_count, updated_at
+		       run_count, updated_at, schedule_type, cron_expression, timezone
 		FROM scheduled_tasks
 		WHERE name = $1
 	`, strings.TrimSpace(name))
@@ -516,12 +529,35 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 		intervalSeconds = int64(d.Seconds())
 		intervalChanged = true
 	} else if req.IntervalSeconds != nil {
-		d := time.Duration(*req.IntervalSeconds) * time.Second
-		if d < minTaskInterval || d > maxTaskInterval {
+		if *req.IntervalSeconds < int64(minTaskInterval.Seconds()) || *req.IntervalSeconds > int64(maxTaskInterval.Seconds()) {
 			return nil, apperror.New(apperror.CodeInvalidArgument, fmt.Sprintf("interval_seconds must be between %d and %d", int64(minTaskInterval.Seconds()), int64(maxTaskInterval.Seconds())))
 		}
 		intervalSeconds = *req.IntervalSeconds
 		intervalChanged = true
+	}
+	scheduleType, expression, timezone := current.ScheduleType, current.CronExpression, current.Timezone
+	if req.ScheduleType != nil {
+		scheduleType = strings.TrimSpace(*req.ScheduleType)
+	} else if intervalChanged {
+		// Older clients can still select interval scheduling by updating the interval.
+		scheduleType = "interval"
+	}
+	if req.CronExpression != nil {
+		expression = strings.Join(strings.Fields(*req.CronExpression), " ")
+	}
+	if req.Timezone != nil {
+		timezone = strings.TrimSpace(*req.Timezone)
+	}
+	if scheduleType == "interval" {
+		expression = ""
+	}
+	if timezone == "" {
+		timezone = defaultScheduleTimezone
+	}
+	scheduleChanged := intervalChanged || scheduleType != current.ScheduleType || expression != current.CronExpression || timezone != current.Timezone
+	validatedNext, err := nextScheduledRun(scheduleType, expression, timezone, intervalSeconds, time.Now().UTC())
+	if err != nil {
+		return nil, apperror.New(apperror.CodeInvalidArgument, err.Error())
 	}
 
 	mergedCfg := maps.Clone(current.Config)
@@ -545,9 +581,8 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 	now := time.Now().UTC()
 	var nextRun *time.Time
 	if enabled {
-		if !current.Enabled || intervalChanged || current.NextRunAt == nil {
-			t := now.Add(time.Duration(intervalSeconds) * time.Second)
-			nextRun = &t
+		if !current.Enabled || scheduleChanged || current.NextRunAt == nil {
+			nextRun = &validatedNext
 		} else {
 			nextRun = current.NextRunAt
 		}
@@ -559,9 +594,12 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 		    interval_seconds = $3,
 		    config_json = $4,
 		    next_run_at = $5,
-		    updated_at = $6
+		    updated_at = $6,
+		    schedule_type = $7,
+		    cron_expression = $8,
+		    timezone = $9
 		WHERE name = $1
-	`, name, enabled, intervalSeconds, cfgJSON, nextRun, now); err != nil {
+	`, name, enabled, intervalSeconds, cfgJSON, nextRun, now, scheduleType, expression, timezone); err != nil {
 		return nil, apperror.Wrap(apperror.CodeInternalError, "update scheduled task", err)
 	}
 
@@ -579,6 +617,9 @@ func (s *Scheduler) UpdateTask(ctx context.Context, req UpdateTaskRequest, actor
 			Details: map[string]any{
 				"enabled":          enabled,
 				"interval_seconds": intervalSeconds,
+				"schedule_type":    scheduleType,
+				"cron_expression":  expression,
+				"timezone":         timezone,
 				"config":           mergedCfg,
 			},
 		})
@@ -664,13 +705,14 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// scanTaskView decodes both legacy intervals and calendar schedules for the admin API.
 func scanTaskView(row rowScanner) (TaskView, error) {
 	var t TaskView
 	var cfgRaw []byte
 	err := row.Scan(
 		&t.Name, &t.DisplayName, &t.Description, &t.TaskType, &t.Enabled, &t.IntervalSeconds, &cfgRaw,
 		&t.LastRunAt, &t.NextRunAt, &t.LastStatus, &t.LastDurationMS, &t.LastSummary, &t.LastError,
-		&t.RunCount, &t.UpdatedAt,
+		&t.RunCount, &t.UpdatedAt, &t.ScheduleType, &t.CronExpression, &t.Timezone,
 	)
 	if err != nil {
 		return TaskView{}, err

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"engram/internal/audit"
@@ -35,7 +36,7 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(database.Close)
 
 	var uploadedFilename string
 	var uploadedZip []byte
@@ -114,6 +115,30 @@ func TestAdminSafekeepSettingsAndScheduledMigrationBackup(t *testing.T) {
 	}
 	if !view.HasAPIKey || !view.HasBackupPassphrase {
 		t.Fatalf("unexpected saved settings view: %+v", view)
+	}
+	if strings.Contains(rec.Body.String(), "sk_integration_key") || strings.Contains(rec.Body.String(), "backup-secret-passphrase") {
+		t.Fatal("settings response leaked a saved secret")
+	}
+	for field, want := range map[string]string{"api_key": "sk_integration_key", "backup_passphrase": "backup-secret-passphrase"} {
+		body, _ := json.Marshal(map[string]string{"field": field})
+		rec = httptest.NewRecorder()
+		h.handleSafekeepReveal(rec, httptest.NewRequest(http.MethodPost, "/api/admin/integrations/safekeep/reveal", bytes.NewReader(body)))
+		var revealed map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &revealed); err != nil || rec.Code != http.StatusOK || revealed["value"] != want {
+			t.Fatalf("reveal %s failed: status=%d err=%v", field, rec.Code, err)
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("revealed secrets must not be cached")
+		}
+	}
+	var revealAudits int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE action = 'integration.safekeep_reveal' AND details::text NOT LIKE '%sk_integration_key%' AND details::text NOT LIKE '%backup-secret-passphrase%'`).Scan(&revealAudits); err != nil || revealAudits != 2 {
+		t.Fatalf("expected two reveal audits without plaintext: count=%d err=%v", revealAudits, err)
+	}
+	rec = httptest.NewRecorder()
+	h.handleSafekeepReveal(rec, httptest.NewRequest(http.MethodPost, "/api/admin/integrations/safekeep/reveal", strings.NewReader(`{"field":"password"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid secret field status=%d", rec.Code)
 	}
 
 	// 2. Test connectivity via saved credentials

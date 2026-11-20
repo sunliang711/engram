@@ -14,13 +14,14 @@ function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id })
     const classes = new Set(), children = new Map();
     let previousHTML, buttons = [];
     return {
-      value: '', dataset: {}, textContent: '', innerHTML: '', isConnected: true,
+      value: '', type: 'password', dataset: {}, textContent: '', innerHTML: '', isConnected: true,
       classList: {
         add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name),
         toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); },
       },
       focus() { document.activeElement = this; },
       setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; },
+      getAttribute(name) { return this[name]; },
       querySelector(selector) {
         const id = selector.match(/^\.btn-apply-token\[data-id="([^"]+)"\]$/)?.[1];
         if (id) return this.querySelector('tbody').querySelectorAll('.btn-apply-token').find(button => button.dataset.id === id) || null;
@@ -39,7 +40,7 @@ function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id })
   };
   document.body = node();
   const $ = id => {
-    if (!elements.has(id)) elements.set(id, node());
+    if (!elements.has(id)) elements.set(id, Object.assign(node(), { id }));
     return elements.get(id);
   };
   $('client-config-modal').classList.add('hidden');
@@ -73,6 +74,7 @@ function harness({ tokens = [], reveal = async id => ({ token: 'secret-' + id })
     assert.ok(from >= 0 && to > from, `Missing app block ${start}`);
     vm.runInContext(source.slice(from, to), context);
   };
+  load('  // Secret fields', '  // showToast');
   load('  // isSystemPrincipal', '  // actorName');
   load('  function tenantMembership(', '  // renderTenantContext');
   load('  async function resolveTokenSecret(', '  // memoryFilters');
@@ -100,7 +102,11 @@ const defer = () => {
 
 // Every client template must use the fixed member-key input or a placeholder, never the previous key.
 function assertGuides(h, expected) {
-  for (const id of ['guide-codex-mcp', 'guide-claude-mcp', 'guide-claude-cli', 'guide-gemini-cli-mcp', 'guide-gemini-agy-mcp']) assert.ok(h.$(id).textContent.includes(expected), `${id} does not contain expected credential`);
+  const copied = h.context.clientGuideContents(true);
+  for (const id of ['guide-codex-mcp', 'guide-claude-mcp', 'guide-claude-cli', 'guide-gemini-cli-mcp', 'guide-gemini-agy-mcp']) {
+    assert.ok(copied[id].includes(expected), `${id} does not contain expected copied credential`);
+    assert.ok(h.$(id).textContent.includes(expected === '<YOUR_API_TOKEN>' ? expected : '********'), `${id} does not mask the preview`);
+  }
 }
 
 async function openRow(h, id) {
@@ -132,6 +138,34 @@ test('member key row opens its exact secret and closing returns focus without cr
   await openRow(h, 'B');
   assert.equal(h.requests.length, 1);
   assertGuides(h, 'secret-B');
+});
+
+test('client configuration previews mask secrets while copy contents retain the actual key', async () => {
+  const h = harness({ tokens: [token('A')] });
+  await openRow(h, 'A');
+  assert.equal(h.$('guide-token-input').type, 'password');
+  assertGuides(h, 'secret-A');
+  await h.context.toggleSecretField(h.$('guide-token-input'));
+  assert.equal(h.$('guide-token-input').type, 'text');
+  assert.ok(h.$('guide-codex-mcp').textContent.includes('secret-A'));
+  await h.context.toggleSecretField(h.$('guide-token-input'));
+  assertGuides(h, 'secret-A');
+  h.context.closeClientGuides();
+  assert.equal(h.$('guide-token-input').value, '');
+  assertGuides(h, '<YOUR_API_TOKEN>');
+});
+
+test('copy and configuration caches do not implicitly reveal member key rows', async () => {
+  const h = harness({ tokens: [token('A')] });
+  await h.context.resolveTokenSecret('A');
+  h.context.renderTokensTable();
+  const body = h.$('member-tokens-table').querySelector('tbody');
+  assert.ok(body.innerHTML.includes('********'));
+  assert.ok(!body.innerHTML.includes('secret-A'));
+  await body.querySelectorAll('.btn-toggle-token')[0].click();
+  assert.ok(body.innerHTML.includes('secret-A'));
+  await body.querySelectorAll('.btn-toggle-token')[0].click();
+  assert.ok(!body.innerHTML.includes('secret-A'));
 });
 
 test('configuration rejects another tenant, member, revoked key, missing token, or non-member page', async () => {

@@ -309,6 +309,32 @@ func (s *Service) BackupPassphrase(ctx context.Context) (string, error) {
 	return pass, nil
 }
 
+// RevealSecret decrypts one saved credential only after an explicit admin request.
+func (s *Service) RevealSecret(ctx context.Context, field string) (string, error) {
+	if field != "api_key" && field != "backup_passphrase" {
+		return "", apperror.New(apperror.CodeInvalidArgument, "invalid secret field")
+	}
+	st, err := s.loadSettings(ctx)
+	if err != nil {
+		return "", err
+	}
+	ciphertext := st.apiKeyCipher
+	if field == "backup_passphrase" {
+		ciphertext = st.passphraseCipher
+	}
+	if ciphertext == "" {
+		return "", apperror.New(apperror.CodeInvalidArgument, "该敏感信息尚未配置")
+	}
+	if s.sealer == nil {
+		return "", apperror.New(apperror.CodeInternalError, "credential sealer not initialized")
+	}
+	value, err := s.sealer.UnsealToken(ciphertext)
+	if err != nil {
+		return "", apperror.New(apperror.CodeInvalidArgument, "无法解密已保存的敏感信息，请重新配置")
+	}
+	return value, nil
+}
+
 // UploadArchive uploads a migration archive byte slice using the persisted SafeKeep settings.
 func (s *Service) UploadArchive(ctx context.Context, filename string, data []byte, opts UploadOptions) (*UploadResult, error) {
 	st, err := s.loadSettings(ctx)

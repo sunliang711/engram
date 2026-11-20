@@ -131,7 +131,7 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(database.Close)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/upstreams" {
@@ -148,6 +148,9 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 	})
 
 	// Seed connection defaults without requiring an integration enable flag.
+	if _, err := database.Pool.Exec(ctx, `DELETE FROM safekeep_settings`); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.SeedDefaults(ctx, config.SafekeepConfig{BaseURL: srv.URL, APIKey: "seed-key"}); err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +182,15 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 	if err != nil || gotPass != pass {
 		t.Fatalf("BackupPassphrase = %q, %v", gotPass, err)
 	}
+	for field, want := range map[string]string{"api_key": key, "backup_passphrase": pass} {
+		got, err := svc.RevealSecret(ctx, field)
+		if err != nil || got != want {
+			t.Fatalf("RevealSecret(%q) failed: %v", field, err)
+		}
+	}
+	if _, err := svc.RevealSecret(ctx, "password"); err == nil {
+		t.Fatal("expected invalid secret field to fail")
+	}
 	for _, legacyEnabled := range []bool{false, true} {
 		// Existing databases may retain either value; neither may block uploads.
 		if _, err := database.Pool.Exec(ctx, `UPDATE safekeep_settings SET enabled = $1`, legacyEnabled); err != nil {
@@ -193,6 +205,9 @@ func TestServicePersistAndMaskCredentials(t *testing.T) {
 	view, err = svc.UpdateSettings(ctx, UpdateSettingsRequest{ClearAPIKey: true})
 	if err != nil || view.HasAPIKey {
 		t.Fatalf("clear API key failed: %+v, err=%v", view, err)
+	}
+	if _, err := svc.RevealSecret(ctx, "api_key"); err == nil {
+		t.Fatal("cleared credentials must not be revealed")
 	}
 	if _, err := svc.UploadArchive(ctx, "snap.zip", []byte("zipdata"), UploadOptions{}); err == nil || !strings.Contains(err.Error(), "URL 或 API Key 未配置") {
 		t.Fatalf("expected missing configuration error after clearing key, got %v", err)

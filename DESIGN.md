@@ -911,7 +911,11 @@ V1 稳定后再评估：
 2. **定时任务模块（`internal/scheduler`）**：
    - 基于 PostgreSQL `scheduled_tasks` 持久化调度配置与状态，通过 `pg_try_advisory_lock` 实现多实例互斥执行，并将每次自动/手动运行记录写入 `scheduled_task_runs` 与 `audit_logs`。
    - 内置任务 `audit_log_cleanup`（定时清理过期审计日志）与 `safekeep_migration_backup`（定时导出系统或知识库迁移包并上传至 SafeKeep），每个任务均可独立配置启用/禁用、执行间隔及任务参数，并支持立即手动触发。
+   - 迁移 `010_calendar_schedules.sql` 增加 `schedule_type`、`cron_expression` 与 `timezone`。支持每小时指定分钟、每天指定时间、每周指定星期、每月指定日期及五字段自定义 Cron；使用 `robfig/cron/v3` 解析和计算真实日历时间，时区默认 `Asia/Singapore`，原有任务默认保留 `interval` 模式。月份缺少指定日期时跳过该月。
+   - 调度仍使用数据库下一次执行时间与 PostgreSQL advisory lock。获取锁后重新检查到期状态，避免多个实例重复执行同一时点；任务运行期间保存的新执行计划不会被旧运行结果覆盖。
 3. **SafeKeep 远程备份集成（`internal/safekeep`，迁移 `009_safekeep_integration.sql`）**：
    - 在 `safekeep_settings` 表持久化 SafeKeep 服务 URL、使用服务端签名密钥 AES-256-GCM 加密的 API Key 与可选迁移包加密口令，以及默认上传模式（`sync`/`async`）、子路径与目标上游。
    - 在「系统设置」（`/settings`）提供地址/API Key 配置、`/api/v1/upstreams` 连通性测试与一键手动备份，在「系统迁移」（`/migration`）支持导出后直接上传 SafeKeep。
    - 系统设置不提供独立集成开关；地址与 API Key 配置完整即可手动备份，自动备份仅由定时任务的启用状态控制。旧数据库的 `safekeep_settings.enabled` 字段保留但不再读写，旧 `[safekeep].enabled` 与 `ENGRAM_SAFEKEEP_ENABLED` 配置不再生效。
+   - 已保存 API Key 与口令在界面显示固定星号，普通设置响应不含明文；管理员点击显示时通过 `POST /api/admin/integrations/safekeep/reveal` 按字段解密，沿用管理会话及同源校验，返回禁止缓存头并记录不含明文的审计事件。查看值与编辑草稿分开处理，保存或连接测试不会误提交星号或未编辑的查看值。隐藏、切页和退出登录会取消迟到的显示请求并清除已读取的 SafeKeep 明文。
+   - 登录、修改密码、迁移口令与客户端配置输入提供独立显示/隐藏按钮；客户端配置预览默认遮挡密钥，复制操作仍生成可用的完整配置。管理员旧密码只有 BCrypt 哈希，不能还原。

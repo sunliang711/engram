@@ -33,7 +33,10 @@
         </div>
         <div class="form-group">
           <label for="login-password">密码</label>
-          <input type="password" id="login-password" autocomplete="current-password" placeholder="输入临时密码或管理员密码" required autofocus />
+          <div class="secret-input">
+            <input type="password" id="login-password" autocomplete="current-password" placeholder="输入临时密码或管理员密码" required autofocus data-secret-input />
+            <button type="button" id="btn-secret-login-password" class="secondary small" data-secret-toggle="login-password" aria-controls="login-password" aria-pressed="false">显示明文</button>
+          </div>
         </div>
         <button type="submit" style="width:100%; margin-top:8px;">登 录</button>
       </form>
@@ -56,17 +59,25 @@
       <form id="force-password-form">
         <div class="form-group hidden" id="current-admin-password-group">
           <label for="current-admin-password">当前密码</label>
-          <input type="password" id="current-admin-password" autocomplete="current-password" placeholder="请输入当前管理员密码" />
+          <div class="secret-input">
+            <input type="password" id="current-admin-password" autocomplete="current-password" placeholder="请输入当前管理员密码" data-secret-input />
+            <button type="button" id="btn-secret-current-admin-password" class="secondary small" data-secret-toggle="current-admin-password" aria-controls="current-admin-password" aria-pressed="false">显示明文</button>
+          </div>
         </div>
         <div class="form-group">
           <label for="new-admin-password">新密码（8 ~ 72 位）</label>
-          <input type="password" id="new-admin-password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="请输入新密码" required />
+          <div class="secret-input">
+            <input type="password" id="new-admin-password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="请输入新密码" required data-secret-input />
+            <button type="button" id="btn-secret-new-admin-password" class="secondary small" data-secret-toggle="new-admin-password" aria-controls="new-admin-password" aria-pressed="false">显示明文</button>
+          </div>
         </div>
         <div class="form-group">
           <label for="confirm-admin-password">确认新密码</label>
-          <input type="password" id="confirm-admin-password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="请再次输入新密码" required />
+          <div class="secret-input">
+            <input type="password" id="confirm-admin-password" autocomplete="new-password" minlength="8" maxlength="72" placeholder="请再次输入新密码" required data-secret-input />
+            <button type="button" id="btn-secret-confirm-admin-password" class="secondary small" data-secret-toggle="confirm-admin-password" aria-controls="confirm-admin-password" aria-pressed="false">显示明文</button>
+          </div>
         </div>
-        <label class="checkbox-label"><input type="checkbox" id="show-admin-passwords" /> 显示密码</label>
         <div style="display:flex; gap:10px; margin-top:8px;">
           <button type="submit" style="flex:1;">保存新密码</button>
           <button type="button" id="btn-cancel-change-pwd" class="secondary hidden">取消返回</button>
@@ -414,7 +425,10 @@
             </div>
             <div class="guide-credentials">
               <label for="guide-token-input" style="margin-bottom:4px;">用于生成配置的客户端密钥（签发后自动填入，也可粘贴）</label>
-              <input type="text" id="guide-token-input" placeholder="aim_…，留空则显示占位符" />
+              <div class="secret-input">
+                <input type="password" id="guide-token-input" placeholder="aim_…，留空则显示占位符" data-secret-input />
+                <button type="button" id="btn-secret-guide-token-input" class="secondary small" data-secret-toggle="guide-token-input" aria-controls="guide-token-input" aria-pressed="false">显示明文</button>
+              </div>
               <small class="field-hint" id="guide-token-hint" role="status" aria-live="polite"></small>
             </div>
           </div>
@@ -643,7 +657,10 @@
 
               <div class="form-group">
                 <label for="mig-export-passphrase">可选：导出加密口令</label>
-                <input type="password" id="mig-export-passphrase" placeholder="留空则不加密" autocomplete="new-password" />
+                <div class="secret-input">
+                  <input type="password" id="mig-export-passphrase" placeholder="留空则不加密" autocomplete="new-password" data-secret-input />
+                  <button type="button" id="btn-secret-mig-export-passphrase" class="secondary small" data-secret-toggle="mig-export-passphrase" aria-controls="mig-export-passphrase" aria-pressed="false">显示明文</button>
+                </div>
                 <small class="field-hint" id="mig-export-passphrase-hint-knowledge">
                   可选使用 AES-256-GCM 整包加密保护知识内容；留空则以明文 JSON 打包。
                 </small>
@@ -670,7 +687,10 @@
               <div class="form-group">
                 <label for="mig-import-passphrase">解密口令（导出时设置过口令才需要填写）</label>
                 <div class="filter-search">
-                  <input type="password" id="mig-import-passphrase" placeholder="未加密包留空即可" autocomplete="off" />
+                  <div class="secret-input">
+                    <input type="password" id="mig-import-passphrase" placeholder="未加密包留空即可" autocomplete="off" data-secret-input />
+                    <button type="button" id="btn-secret-mig-import-passphrase" class="secondary small" data-secret-toggle="mig-import-passphrase" aria-controls="mig-import-passphrase" aria-pressed="false">显示明文</button>
+                  </div>
                   <button type="button" class="secondary" id="btn-mig-inspect">解析迁移包</button>
                 </div>
               </div>
@@ -874,7 +894,7 @@
           <div>
             <p class="eyebrow">自动化运维</p>
             <h1>定时任务</h1>
-            <p class="desc">管理后台内置定时任务的启用状态、执行间隔与任务参数，支持立即手动触发并查看执行历史。</p>
+            <p class="desc">管理后台内置定时任务的启用状态、执行计划与任务参数，支持立即手动触发并查看执行历史。</p>
           </div>
           <button type="button" id="btn-refresh-scheduler" class="secondary">刷新任务状态</button>
         </div>
@@ -887,7 +907,7 @@
                 <tr>
                   <th>任务名称</th>
                   <th>状态</th>
-                  <th>执行间隔</th>
+                  <th>执行计划</th>
                   <th>参数配置</th>
                   <th>上次执行 / 下次执行</th>
                   <th>最近结果</th>
@@ -956,7 +976,10 @@
               </div>
               <div class="form-group">
                 <label for="sk-api-key">SafeKeep API Key</label>
-                <input type="password" id="sk-api-key" placeholder="输入新的 API Key（如 sk_...）" autocomplete="new-password" />
+                <div class="secret-input">
+                  <input type="password" id="sk-api-key" placeholder="输入新的 API Key（如 sk_...）" autocomplete="new-password" data-secret-input data-secret-stored="api_key" />
+                  <button type="button" id="btn-secret-sk-api-key" class="secondary small" data-secret-toggle="sk-api-key" aria-controls="sk-api-key" aria-pressed="false">显示明文</button>
+                </div>
                 <div class="section-heading" style="margin-top:6px;margin-bottom:0;">
                   <small class="field-hint" id="sk-api-key-hint">尚未配置 API Key。</small>
                   <button type="button" id="btn-sk-clear-key" class="secondary small hidden">清除已保存密钥</button>
@@ -964,7 +987,10 @@
               </div>
               <div class="form-group">
                 <label for="sk-backup-passphrase">可选：定时备份加密口令</label>
-                <input type="password" id="sk-backup-passphrase" placeholder="留空则保持当前设置；设置后迁移包将使用 AES-256-GCM 加密" autocomplete="new-password" />
+                <div class="secret-input">
+                  <input type="password" id="sk-backup-passphrase" placeholder="留空则保持当前设置；设置后迁移包将使用 AES-256-GCM 加密" autocomplete="new-password" data-secret-input data-secret-stored="backup_passphrase" />
+                  <button type="button" id="btn-secret-sk-backup-passphrase" class="secondary small" data-secret-toggle="sk-backup-passphrase" aria-controls="sk-backup-passphrase" aria-pressed="false">显示明文</button>
+                </div>
                 <div class="section-heading" style="margin-top:6px;margin-bottom:0;">
                   <small class="field-hint" id="sk-passphrase-hint">未设置加密口令（全量系统快照建议设置口令以保留客户端密钥明文）。</small>
                   <button type="button" id="btn-sk-clear-passphrase" class="secondary small hidden">清除口令</button>
@@ -1204,6 +1230,60 @@
           </label>
         </div>
         <div class="form-group">
+          <label for="sched-cfg-schedule-type">时间粒度</label>
+          <select id="sched-cfg-schedule-type">
+            <option value="hourly">每小时</option>
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+            <option value="cron">自定义 Cron</option>
+            <option value="interval">固定间隔（兼容已有任务）</option>
+          </select>
+        </div>
+        <div class="form-row" id="sched-cfg-calendar-fields">
+          <div class="form-group" id="sched-cfg-minute-group">
+            <label for="sched-cfg-minute">每小时的第几分钟</label>
+            <input type="number" id="sched-cfg-minute" min="0" max="59" value="0" />
+          </div>
+          <div class="form-group" id="sched-cfg-time-group">
+            <label for="sched-cfg-time">执行时间</label>
+            <input type="time" id="sched-cfg-time" value="02:00" />
+          </div>
+          <div class="form-group" id="sched-cfg-weekday-group">
+            <label for="sched-cfg-weekday">星期</label>
+            <select id="sched-cfg-weekday">
+              <option value="1">星期一</option>
+              <option value="2">星期二</option>
+              <option value="3">星期三</option>
+              <option value="4">星期四</option>
+              <option value="5">星期五</option>
+              <option value="6">星期六</option>
+              <option value="0">星期日</option>
+            </select>
+          </div>
+          <div class="form-group" id="sched-cfg-monthday-group">
+            <label for="sched-cfg-monthday">每月几号</label>
+            <input type="number" id="sched-cfg-monthday" min="1" max="31" value="1" />
+            <small class="field-hint">当月没有该日期时跳过该月。</small>
+          </div>
+        </div>
+        <div class="form-group" id="sched-cfg-cron-group">
+          <label for="sched-cfg-cron">Cron 表达式（分 时 日 月 周）</label>
+          <input type="text" id="sched-cfg-cron" placeholder="例如 0 2 * * 1（每周一 02:00）" />
+          <small class="field-hint">支持五字段 Cron、列表、范围和步长；星期 0 表示周日。</small>
+        </div>
+        <div class="form-group" id="sched-cfg-timezone-group">
+          <label for="sched-cfg-timezone">执行时区</label>
+          <input type="text" id="sched-cfg-timezone" list="scheduler-timezones" value="Asia/Singapore" />
+          <datalist id="scheduler-timezones">
+            <option value="Asia/Singapore"></option>
+            <option value="Asia/Shanghai"></option>
+            <option value="UTC"></option>
+            <option value="America/New_York"></option>
+            <option value="Europe/London"></option>
+          </datalist>
+        </div>
+        <div class="form-group" id="sched-cfg-interval-group">
           <label for="sched-cfg-interval">执行间隔</label>
           <input type="text" id="sched-cfg-interval" placeholder="例如 1h、30m、6h、24h" required />
           <div class="preset-chips" data-target="sched-cfg-interval">

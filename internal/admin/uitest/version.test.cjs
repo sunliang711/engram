@@ -47,6 +47,7 @@ function renderHarness(language = 'zh-CN') {
   });
   vm.runInContext(i18nSource, context);
   context.t = context.window.EngramI18n.t;
+  vm.runInContext(appSource.slice(appSource.indexOf('  // Secret fields'), appSource.indexOf('  // showToast')), context);
 
   const from = appSource.indexOf('  // renderView');
   const to = appSource.indexOf('  async function checkSession(', from);

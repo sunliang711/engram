@@ -144,6 +144,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/scheduler/tasks/run", h.requireActiveAdmin(h.handleSchedulerTaskRun))
 	mux.HandleFunc("/api/admin/scheduler/runs", h.requireActiveAdmin(h.handleSchedulerRuns))
 	mux.HandleFunc("/api/admin/integrations/safekeep", h.requireActiveAdmin(h.handleSafekeepSettings))
+	mux.HandleFunc("/api/admin/integrations/safekeep/reveal", h.requireActiveAdmin(h.handleSafekeepReveal))
 	mux.HandleFunc("/api/admin/integrations/safekeep/test", h.requireActiveAdmin(h.handleSafekeepTest))
 	mux.HandleFunc("/api/admin/integrations/safekeep/backup", h.requireActiveAdmin(h.handleSafekeepBackupNow))
 }
@@ -1839,7 +1840,9 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleRevealToken returns an existing client key only for an explicit admin action.
 func (h *Handler) handleRevealToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return

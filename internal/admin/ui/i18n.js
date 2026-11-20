@@ -760,7 +760,35 @@
     "低风险": "Low",
     "提示": "Info",
     "自动化运维": "Automation",
-    "管理后台内置定时任务的启用状态、执行间隔与任务参数，支持立即手动触发并查看执行历史。": "Configure built-in background scheduled tasks, intervals, and parameters, or trigger runs manually.",
+    "管理后台内置定时任务的启用状态、执行计划与任务参数，支持立即手动触发并查看执行历史。": "Configure built-in scheduled tasks, schedules, and parameters, or trigger runs manually.",
+    "执行计划": "Schedule",
+    "时间粒度": "Frequency",
+    "每小时": "Hourly",
+    "每天": "Daily",
+    "每周": "Weekly",
+    "每月": "Monthly",
+    "自定义 Cron": "Custom Cron",
+    "固定间隔（兼容已有任务）": "Fixed interval (existing tasks)",
+    "每小时的第几分钟": "Minute of each hour",
+    "执行时间": "Run time",
+    "星期": "Weekday",
+    "星期一": "Monday",
+    "星期二": "Tuesday",
+    "星期三": "Wednesday",
+    "星期四": "Thursday",
+    "星期五": "Friday",
+    "星期六": "Saturday",
+    "星期日": "Sunday",
+    "每月几号": "Day of month",
+    "当月没有该日期时跳过该月。": "Skip months that do not contain this date.",
+    "Cron 表达式（分 时 日 月 周）": "Cron expression (minute hour day month weekday)",
+    "例如 0 2 * * 1（每周一 02:00）": "e.g. 0 2 * * 1 (Mondays at 02:00)",
+    "支持五字段 Cron、列表、范围和步长；星期 0 表示周日。": "Supports five-field Cron, lists, ranges, and steps; weekday 0 is Sunday.",
+    "执行时区": "Schedule time zone",
+    "请填写有效的 IANA 时区，例如 Asia/Singapore 或 UTC。": "Enter a valid IANA time zone, such as Asia/Singapore or UTC.",
+    "请填写有效的五字段 Cron 表达式（分 时 日 月 周）。": "Enter a valid five-field Cron expression (minute hour day month weekday).",
+    "执行规则与所选时间粒度不匹配，请重新配置。": "The schedule rule does not match the selected frequency. Configure it again.",
+    "该执行规则在未来五年内没有有效日期，请修改。": "This schedule has no valid occurrence in the next five years. Change the rule.",
     "刷新任务状态": "Refresh tasks",
     "已注册定时任务": "Registered scheduled tasks",
     "任务名称": "Task",
@@ -832,6 +860,12 @@
     "外部集成与系统设置": "Integrations & system settings",
     "配置 SafeKeep 备份网关的接入地址与 API Key，用于定时导出或手动上传 Engram 迁移包。": "Configure SafeKeep backup gateway URL and API key for scheduled or manual Engram migration backups.",
     "SafeKeep 备份网关配置": "SafeKeep Backup Gateway",
+    "显示明文": "Show plaintext",
+    "隐藏明文": "Hide plaintext",
+    "取消显示": "Cancel reveal",
+    "已保存 API Key，输入新值可替换。": "API key saved. Enter a new value to replace it.",
+    "该敏感信息尚未配置": "This secret has not been configured.",
+    "无法解密已保存的敏感信息，请重新配置": "Unable to decrypt the saved secret. Configure it again.",
     "已配置": "Configured",
     "未配置": "Not configured",
     "未启用": "Disabled",
@@ -898,6 +932,7 @@
   const themeKey = "engram.theme";
   const languages = ["zh-CN", "en"];
   const themes = ["light", "dark"];
+  const boundThemeControls = new WeakSet();
 
   // Preference access remains optional when browser storage is unavailable.
   function readPreference(key) {
@@ -945,6 +980,7 @@
     }
   }
 
+  // renderThemeControl shows the target theme as a direct, single-click action.
   function renderThemeControl(control) {
     if (!control) return;
     if (control.tagName === "SELECT" || typeof control.setAttribute !== "function") {
@@ -957,10 +993,10 @@
     control.setAttribute("aria-label", tip);
     control.setAttribute("aria-pressed", String(isDark));
     control.setAttribute("data-theme-current", theme);
-    const icon = isDark
+    const icon = !isDark
       ? '<svg class="pref-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M16.2 12.6A6.5 6.5 0 0 1 7.4 3.8a6.8 6.8 0 1 0 8.8 8.8Z"/></svg>'
       : '<svg class="pref-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10" cy="10" r="3.6"/><path d="M10 2.5v1.8M10 15.7v1.8M2.5 10h1.8M15.7 10h1.8M4.7 4.7l1.3 1.3M14 14l1.3 1.3M15.3 4.7 14 6M6 14l-1.3 1.3"/></svg>';
-    control.innerHTML = icon + `<span>${isDark ? t("暗色") : t("亮色")}</span>`;
+    control.innerHTML = icon + `<span>${tip}</span>`;
   }
 
   function setTheme(value) {
@@ -1014,6 +1050,9 @@
     });
     document.querySelectorAll("[data-ui-theme]").forEach((control) => {
       renderThemeControl(control);
+      // Reinitializing the UI must not toggle twice from duplicate listeners.
+      if (boundThemeControls.has(control)) return;
+      boundThemeControls.add(control);
       if (control.tagName === "SELECT") {
         control.addEventListener("change", () => setTheme(control.value));
       } else {

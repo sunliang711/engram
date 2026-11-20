@@ -154,10 +154,13 @@ test('SafeKeep settings use credentials for status and save without an integrati
   const elements = new Map();
   const handlers = new Map();
   const calls = [];
-  for (const id of ['safekeep-settings-form', 'sk-base-url', 'sk-api-key', 'sk-backup-passphrase', 'sk-default-mode', 'sk-default-path', 'sk-default-targets', 'sk-status-badge', 'btn-sk-clear-key']) {
+  for (const id of ['safekeep-settings-form', 'sk-base-url', 'sk-api-key', 'sk-backup-passphrase', 'sk-default-mode', 'sk-default-path', 'sk-default-targets', 'sk-status-badge', 'btn-sk-clear-key', 'btn-secret-sk-api-key', 'btn-secret-sk-backup-passphrase']) {
     elements.set(id, {
+      id, dataset: {}, placeholder: '',
       value: '', textContent: '', className: '',
       classList: { toggle() {} },
+      setAttribute(name, value) { this[name] = value; },
+      removeAttribute(name) { delete this[name]; },
       addEventListener: (event, handler) => handlers.set(`${id}:${event}`, handler),
     });
   }
@@ -181,6 +184,7 @@ test('SafeKeep settings use credentials for status and save without an integrati
   });
   vm.runInContext(i18nSource, context);
   context.t = context.window.EngramI18n.t;
+  vm.runInContext(appSource.slice(appSource.indexOf('  // Secret fields'), appSource.indexOf('  // showToast')), context);
   const start = appSource.indexOf('  // SafeKeep Integration Settings & Backup');
   const end = appSource.indexOf('  if ($("scheduler-runs-filter"))', start);
   assert.ok(start >= 0 && end > start, 'Missing SafeKeep UI block');

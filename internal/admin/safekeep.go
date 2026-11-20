@@ -123,6 +123,38 @@ func (h *Handler) handleSafekeepSettings(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// handleSafekeepReveal returns one saved secret with cache prevention and an audit trail.
+func (h *Handler) handleSafekeepReveal(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if h.safekeepSvc == nil {
+		writeJSONError(w, apperror.New(apperror.CodeInternalError, "safekeep service not initialized"))
+		return
+	}
+	var req struct {
+		Field string `json:"field"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	value, err := h.safekeepSvc.RevealSecret(r.Context(), req.Field)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	h.recordAdminAudit(r, audit.Entry{
+		Action:       "integration.safekeep_reveal",
+		ResourceType: "integration",
+		ResourceID:   "safekeep",
+		Details:      map[string]any{"field": req.Field},
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"value": value})
+}
+
 func (h *Handler) handleSafekeepTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)

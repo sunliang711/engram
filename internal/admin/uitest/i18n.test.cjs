@@ -91,12 +91,14 @@ test('button preference controls toggle theme and language on a single click', (
       setAttribute(k, v) { attrs[k] = v; },
       hasAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k); },
       getAttribute(k) { return attrs[k]; },
-      addEventListener(type, fn) { listeners[type] = fn; },
-      click() { listeners.click && listeners.click(); },
+      addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+      click() { (listeners.click || []).forEach(fn => fn()); },
     };
   };
   const langBtn = makeButton();
   const themeBtn = makeButton();
+  const otherThemeButtons = [makeButton(), makeButton()];
+  const themeButtons = [themeBtn, ...otherThemeButtons];
   const storage = new Map();
   const location = { search: '', href: 'http://localhost/tenants', assign(value) { this.assigned = value; } };
   const context = vm.createContext({
@@ -105,7 +107,7 @@ test('button preference controls toggle theme and language on a single click', (
     document: {
       documentElement: { dataset: {} },
       createTreeWalker: () => ({ nextNode: () => false }),
-      querySelectorAll: (sel) => sel === '[data-ui-language]' ? [langBtn] : sel === '[data-ui-theme]' ? [themeBtn] : [],
+      querySelectorAll: (sel) => sel === '[data-ui-language]' ? [langBtn] : sel === '[data-ui-theme]' ? themeButtons : [],
     },
     navigator: { language: 'zh-CN' }, location, URL, URLSearchParams,
     localStorage: {
@@ -115,11 +117,20 @@ test('button preference controls toggle theme and language on a single click', (
   });
   vm.runInContext(source, context);
   context.window.EngramI18n.initialize();
+  context.window.EngramI18n.initialize();
 
   assert.equal(themeBtn.attrs['data-theme-current'], 'dark');
+  assert.match(themeBtn.innerHTML, /切换为亮色模式/);
   themeBtn.click();
   assert.equal(context.document.documentElement.dataset.theme, 'light');
-  assert.equal(themeBtn.attrs['data-theme-current'], 'light');
+  assert.ok(themeButtons.every(button => button.attrs['data-theme-current'] === 'light'));
+  assert.ok(themeButtons.every(button => button.attrs['aria-label'] === '切换为暗色模式'));
+  assert.equal(storage.get('engram.theme'), 'light');
+  assert.equal(location.assigned, undefined);
+  otherThemeButtons[0].click();
+  assert.equal(context.document.documentElement.dataset.theme, 'dark');
+  assert.ok(themeButtons.every(button => button.attrs['data-theme-current'] === 'dark'));
+  assert.equal(storage.get('engram.theme'), 'dark');
 
   assert.equal(langBtn.attrs['data-lang-current'], 'zh-CN');
   langBtn.click();
