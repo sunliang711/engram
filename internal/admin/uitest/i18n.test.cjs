@@ -120,7 +120,8 @@ test('button preference controls toggle theme and language on a single click', (
   context.window.EngramI18n.initialize();
 
   assert.equal(themeBtn.attrs['data-theme-current'], 'dark');
-  assert.match(themeBtn.innerHTML, /切换为亮色模式/);
+  assert.match(themeBtn.innerHTML, /^<svg[\s\S]*<\/svg>$/);
+  assert.equal(themeBtn.attrs['aria-label'], '切换为亮色模式');
   themeBtn.click();
   assert.equal(context.document.documentElement.dataset.theme, 'light');
   assert.ok(themeButtons.every(button => button.attrs['data-theme-current'] === 'light'));
