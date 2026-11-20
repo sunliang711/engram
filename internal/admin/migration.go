@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"engram/internal/apperror"
+	"engram/internal/audit"
 	"engram/internal/project"
 
 	"github.com/google/uuid"
@@ -366,6 +367,17 @@ func (h *Handler) handleMigrationExport(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	h.recordAdminAudit(r, audit.Entry{
+		Action:       "migration.export",
+		ResourceType: "migration",
+		Details: map[string]any{
+			"mode":      mode,
+			"format":    manifest.Format,
+			"encrypted": manifest.Encrypted,
+			"tenants":   manifest.Counts.Tenants,
+			"memories":  manifest.Counts.Memories,
+		},
+	})
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	w.Header().Set("X-Snapshot-Format", manifest.Format)
@@ -488,6 +500,18 @@ func (h *Handler) handleMigrationImport(w http.ResponseWriter, r *http.Request) 
 			Bool("encrypted", decoded.Manifest.Encrypted).
 			Msg("imported full system migration snapshot")
 
+		h.recordAdminAudit(r, audit.Entry{
+			Action:       "migration.import",
+			ResourceType: "migration",
+			Details: map[string]any{
+				"format":          decoded.Manifest.Format,
+				"encrypted":       decoded.Manifest.Encrypted,
+				"tenants":         counts.Tenants,
+				"projects":        counts.Projects,
+				"memories":        counts.Memories,
+				"tokens_resealed": counts.TokensResealed,
+			},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "restored",
 			"format":           decoded.Manifest.Format,
@@ -532,6 +556,18 @@ func (h *Handler) handleMigrationImport(w http.ResponseWriter, r *http.Request) 
 			Bool("encrypted", decoded.Manifest.Encrypted).
 			Msg("imported knowledge base migration bundle")
 
+		h.recordAdminAudit(r, audit.Entry{
+			Action:       "migration.import",
+			ResourceType: "migration",
+			Details: map[string]any{
+				"format":            decoded.Manifest.Format,
+				"encrypted":         decoded.Manifest.Encrypted,
+				"tenants_created":   counts.TenantsCreated,
+				"tenants_matched":   counts.TenantsMatched,
+				"memories_imported": counts.MemoriesImported,
+				"memories_skipped":  counts.MemoriesSkipped,
+			},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "imported",
 			"format":           decoded.Manifest.Format,

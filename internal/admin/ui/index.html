@@ -107,6 +107,8 @@
       <button class="tab-btn" data-tab="tab-tenants"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="7.5" cy="7" r="2.5"/><path d="M3 16c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><circle cx="14" cy="7.5" r="2"/><path d="M14 12.2c1.8.3 3 1.5 3 3.8"/></svg>租户管理</button>
       <button class="tab-btn" data-tab="tab-projects"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 5.5A1.5 1.5 0 0 1 4.5 4h3.8l1.7 2h5.5A1.5 1.5 0 0 1 17 7.5v7A1.5 1.5 0 0 1 15.5 16h-11A1.5 1.5 0 0 1 3 14.5v-9Z"/></svg>项目</button>
       <button class="tab-btn" data-tab="tab-memories"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H16v14H6.5A2.5 2.5 0 0 0 4 18V4.5Z"/><path d="M4 15.5A2.5 2.5 0 0 1 6.5 13H16"/></svg>知识库</button>
+      <button class="tab-btn" data-tab="tab-audit"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M10 2.5 4 5v4.5c0 4 2.5 7 6 8 3.5-1 6-4 6-8V5l-6-2.5Z"/><path d="m7.5 10 1.8 1.8 3.5-3.6"/></svg>审计中心</button>
+      <button class="tab-btn" data-tab="tab-scheduler"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10" cy="10.5" r="6.5"/><path d="M10 7v3.8l2.5 1.5M7.5 2.5h5"/></svg>定时任务</button>
       <button class="tab-btn" data-tab="tab-migration"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 13v3h8v-3M10 3v9m0 0-3-3m3 3 3-3"/></svg>系统迁移</button>
     </nav>
 
@@ -683,6 +685,220 @@
           </div>
         </div>
       </section>
+
+      <!-- TAB 7: Audit Logs & Audit Tasks -->
+      <section id="tab-audit" class="tab-pane hidden">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">安全与合规</p>
+            <h1>审计中心</h1>
+            <p class="desc">追踪 MCP 工具调用与控制台管理操作，执行安全合规与数据完整性巡检任务。</p>
+          </div>
+          <div class="button-row">
+            <button type="button" id="btn-audit-export" class="secondary">导出日志 JSON</button>
+            <button type="button" id="btn-open-audit-cleanup" class="danger-outline">清理过期日志…</button>
+          </div>
+        </div>
+
+        <div class="compact-stats audit-stats-bar">
+          <span>日志总数 <strong id="audit-stat-total">0</strong></span>
+          <span>近 24 小时 <strong id="audit-stat-24h">0</strong></span>
+          <span>近 24 小时异常/拒绝 <strong id="audit-stat-failed">0</strong></span>
+          <span>默认保留 <strong id="audit-stat-retention">30d</strong></span>
+          <span>最早记录 <strong id="audit-stat-oldest">—</strong></span>
+        </div>
+
+        <div class="client-tabs" style="margin-bottom:16px;" role="tablist" aria-label="审计视图切换">
+          <button type="button" id="btn-audit-sub-logs" class="client-tab-btn active" role="tab" aria-selected="true">审计日志</button>
+          <button type="button" id="btn-audit-sub-tasks" class="client-tab-btn" role="tab" aria-selected="false">审计任务</button>
+        </div>
+
+        <div id="audit-logs-panel">
+          <div class="card">
+            <form id="filter-audit-form" class="filter-bar">
+              <div class="filter-search">
+                <label for="audit-filter-q" class="sr-only">搜索审计日志</label>
+                <input type="search" id="audit-filter-q" placeholder="搜索操作、执行者、Agent、资源 ID 或错误信息" />
+                <button type="submit">搜索</button>
+              </div>
+              <div class="filter-row">
+                <label>来源
+                  <select id="audit-filter-source">
+                    <option value="">全部</option>
+                    <option value="mcp">MCP 客户端</option>
+                    <option value="admin_ui">管理控制台</option>
+                    <option value="scheduler">定时任务</option>
+                    <option value="system">系统</option>
+                  </select>
+                </label>
+                <label>状态
+                  <select id="audit-filter-status">
+                    <option value="">全部</option>
+                    <option value="success">成功</option>
+                    <option value="failed">失败</option>
+                    <option value="denied">拒绝</option>
+                  </select>
+                </label>
+                <label>租户
+                  <select id="audit-filter-tenant"><option value="">全部</option></select>
+                </label>
+                <label>操作类型
+                  <input type="text" id="audit-filter-action" placeholder="如 memory.create" />
+                </label>
+                <button type="button" class="secondary small" id="btn-clear-audit-filters">清除筛选</button>
+              </div>
+            </form>
+
+            <div class="table-toolbar">
+              <p id="audit-list-status" role="status">正在加载审计日志…</p>
+              <label for="audit-page-size">每页
+                <select id="audit-page-size">
+                  <option value="20">20 条</option>
+                  <option value="50">50 条</option>
+                  <option value="100">100 条</option>
+                </select>
+              </label>
+            </div>
+            <div class="table-scroll">
+              <table id="audit-logs-table">
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>来源</th>
+                    <th>操作</th>
+                    <th>执行者 / Agent</th>
+                    <th>资源</th>
+                    <th>状态</th>
+                    <th>耗时</th>
+                    <th><span class="sr-only">详情</span></th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="pagination">
+              <span id="audit-page-info"></span>
+              <div>
+                <button type="button" class="secondary small" id="btn-audit-prev">上一页</button>
+                <button type="button" class="secondary small" id="btn-audit-next">下一页</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="audit-tasks-panel" class="hidden">
+          <div class="card">
+            <div class="section-heading">
+              <div>
+                <h2>内置审计巡检任务</h2>
+                <p class="desc">按需对凭据合规、安全事件及知识库数据完整性执行即时审计核查。</p>
+              </div>
+              <label style="display:flex;align-items:center;gap:8px;font-size:13px;">
+                <span>作用域租户</span>
+                <select id="audit-task-tenant" style="width:auto;min-width:160px;">
+                  <option value="">全部租户</option>
+                </select>
+              </label>
+            </div>
+            <div id="audit-task-definitions" class="audit-task-grid"></div>
+          </div>
+
+          <div id="audit-task-latest-findings" class="card hidden">
+            <div class="section-heading">
+              <h2 id="audit-findings-title">审计发现详情</h2>
+              <span id="audit-findings-summary" class="field-hint"></span>
+            </div>
+            <div id="audit-findings-list" class="audit-findings-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="section-heading">
+              <h2>审计任务执行记录</h2>
+              <button type="button" class="secondary small" id="btn-refresh-audit-tasks">刷新记录</button>
+            </div>
+            <div class="table-scroll">
+              <table id="audit-task-runs-table">
+                <thead>
+                  <tr>
+                    <th>开始时间</th>
+                    <th>审计任务</th>
+                    <th>状态</th>
+                    <th>发现项</th>
+                    <th>耗时</th>
+                    <th>摘要</th>
+                    <th><span class="sr-only">操作</span></th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 8: Scheduled Tasks -->
+      <section id="tab-scheduler" class="tab-pane hidden">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">自动化运维</p>
+            <h1>定时任务</h1>
+            <p class="desc">管理后台内置定时任务的启用状态、执行间隔与任务参数，支持立即手动触发并查看执行历史。</p>
+          </div>
+          <button type="button" id="btn-refresh-scheduler" class="secondary">刷新任务状态</button>
+        </div>
+
+        <div class="card">
+          <h2>已注册定时任务</h2>
+          <div class="table-scroll">
+            <table id="scheduler-tasks-table">
+              <thead>
+                <tr>
+                  <th>任务名称</th>
+                  <th>状态</th>
+                  <th>执行间隔</th>
+                  <th>参数配置</th>
+                  <th>上次执行 / 下次执行</th>
+                  <th>最近结果</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-heading">
+            <h2>任务执行历史</h2>
+            <select id="scheduler-runs-filter" style="width:auto;min-width:180px;">
+              <option value="">全部任务</option>
+            </select>
+          </div>
+          <div class="table-scroll">
+            <table id="scheduler-runs-table">
+              <thead>
+                <tr>
+                  <th>开始时间</th>
+                  <th>任务</th>
+                  <th>触发方式</th>
+                  <th>状态</th>
+                  <th>耗时</th>
+                  <th>处理条数</th>
+                  <th>结果摘要</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <span id="scheduler-runs-page-info"></span>
+            <div>
+              <button type="button" class="secondary small" id="btn-sched-runs-prev">上一页</button>
+              <button type="button" class="secondary small" id="btn-sched-runs-next">下一页</button>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -807,6 +1023,97 @@
         <button type="button" class="secondary" id="btn-confirm-cancel">取消</button>
         <button type="button" class="danger" id="btn-confirm-ok">确认</button>
       </div>
+    </div>
+  </div>
+
+  <div id="audit-detail-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="audit-detail-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="audit-detail-title">审计日志详情</h2>
+        <button type="button" class="secondary small" id="btn-close-audit-detail">关闭</button>
+      </div>
+      <div id="audit-detail-meta" class="detail-meta"></div>
+      <pre class="code-box" id="audit-detail-json"></pre>
+    </div>
+  </div>
+
+  <div id="audit-cleanup-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="audit-cleanup-title">
+    <div class="modal-card confirm-card">
+      <div class="modal-header">
+        <h2 id="audit-cleanup-title">手动清理过期审计日志</h2>
+        <button type="button" class="secondary small" id="btn-close-audit-cleanup">关闭</button>
+      </div>
+      <form id="audit-cleanup-form">
+        <div class="form-group">
+          <label for="audit-cleanup-retention">保留时长（清理早于该时长的审计日志）</label>
+          <input type="text" id="audit-cleanup-retention" placeholder="例如 30d、720h、7d、24h" required />
+          <div class="preset-chips" data-target="audit-cleanup-retention">
+            <button type="button" class="secondary small preset-chip" data-value="24h">1 天 (24h)</button>
+            <button type="button" class="secondary small preset-chip" data-value="7d">7 天</button>
+            <button type="button" class="secondary small preset-chip" data-value="30d">30 天</button>
+            <button type="button" class="secondary small preset-chip" data-value="90d">90 天</button>
+          </div>
+          <small class="field-hint">支持天（如 <code>30d</code>）或小时/分钟（如 <code>720h</code>、<code>30m</code>）。</small>
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-cancel-audit-cleanup">取消</button>
+          <button type="submit" class="danger" id="btn-run-audit-cleanup">立即清理</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="scheduler-config-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="scheduler-config-title">
+    <div class="modal-card confirm-card">
+      <div class="modal-header">
+        <h2 id="scheduler-config-title">配置定时任务</h2>
+        <button type="button" class="secondary small" id="btn-close-scheduler-config">关闭</button>
+      </div>
+      <form id="scheduler-config-form">
+        <input type="hidden" id="sched-cfg-name" />
+        <p class="desc" id="sched-cfg-desc"></p>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="sched-cfg-enabled" />
+            <span>启用此定时任务</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label for="sched-cfg-interval">执行间隔</label>
+          <input type="text" id="sched-cfg-interval" placeholder="例如 1h、30m、6h、24h" required />
+          <div class="preset-chips" data-target="sched-cfg-interval">
+            <button type="button" class="secondary small preset-chip" data-value="5m">5 分钟</button>
+            <button type="button" class="secondary small preset-chip" data-value="15m">15 分钟</button>
+            <button type="button" class="secondary small preset-chip" data-value="1h">1 小时</button>
+            <button type="button" class="secondary small preset-chip" data-value="6h">6 小时</button>
+            <button type="button" class="secondary small preset-chip" data-value="24h">24 小时</button>
+          </div>
+          <small class="field-hint">最小支持 <code>10s</code>，可使用 <code>m</code>、<code>h</code>、<code>d</code> 等时长格式。</small>
+        </div>
+        <div id="sched-cfg-audit-cleanup-fields">
+          <div class="form-group">
+            <label for="sched-cfg-retention">审计日志保留时长</label>
+            <input type="text" id="sched-cfg-retention" placeholder="例如 30d、720h、7d" required />
+            <div class="preset-chips" data-target="sched-cfg-retention">
+              <button type="button" class="secondary small preset-chip" data-value="24h">1 天</button>
+              <button type="button" class="secondary small preset-chip" data-value="7d">7 天</button>
+              <button type="button" class="secondary small preset-chip" data-value="30d">30 天</button>
+              <button type="button" class="secondary small preset-chip" data-value="90d">90 天</button>
+              <button type="button" class="secondary small preset-chip" data-value="180d">180 天</button>
+            </div>
+            <small class="field-hint">清理早于该保留时长的历史审计日志（最小 <code>1m</code>）。</small>
+          </div>
+          <div class="form-group">
+            <label for="sched-cfg-batch-size">单批清理条数上限</label>
+            <input type="number" id="sched-cfg-batch-size" min="100" max="10000" step="100" value="1000" required />
+            <small class="field-hint">每次数据库事务最多删除的条数（100 ~ 10000），防止长锁阻塞。</small>
+          </div>
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-cancel-scheduler-config">取消</button>
+          <button type="submit" id="btn-save-scheduler-config">保存配置</button>
+        </div>
+      </form>
     </div>
   </div>
 

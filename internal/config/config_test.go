@@ -40,6 +40,12 @@ func TestLoadExampleConfig(t *testing.T) {
 	if cfg.Export.Interval != 5*time.Minute {
 		t.Errorf("Export.Interval = %v, want 5m", cfg.Export.Interval)
 	}
+	if !cfg.Audit.Enabled || cfg.Audit.Retention != 30*24*time.Hour || !cfg.Audit.LogReads {
+		t.Errorf("Audit defaults mismatch: %+v", cfg.Audit)
+	}
+	if !cfg.Scheduler.Enabled || !cfg.Scheduler.AuditCleanupEnabled || cfg.Scheduler.AuditCleanupInterval != time.Hour || cfg.Scheduler.AuditCleanupBatchSize != 1000 {
+		t.Errorf("Scheduler defaults mismatch: %+v", cfg.Scheduler)
+	}
 }
 
 func TestLoadTOMLDurationsAndDefaults(t *testing.T) {
@@ -167,5 +173,36 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if !cfg.Auth.CookieSecure {
 		t.Errorf("CookieSecure = false, want true")
+	}
+}
+
+func TestParseDurationAndAuditSchedulerOverrides(t *testing.T) {
+	if d, err := ParseDuration("30d"); err != nil || d != 30*24*time.Hour {
+		t.Fatalf("ParseDuration(30d) = %v, %v", d, err)
+	}
+	if d, err := ParseDuration("7d12h"); err != nil || d != 7*24*time.Hour+12*time.Hour {
+		t.Fatalf("ParseDuration(7d12h) = %v, %v", d, err)
+	}
+	if _, err := ParseDuration("bad"); err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+
+	t.Setenv("ENGRAM_AUDIT_ENABLED", "false")
+	t.Setenv("ENGRAM_AUDIT_RETENTION", "14d")
+	t.Setenv("ENGRAM_AUDIT_LOG_READS", "false")
+	t.Setenv("ENGRAM_SCHEDULER_ENABLED", "false")
+	t.Setenv("ENGRAM_AUDIT_CLEANUP_ENABLED", "false")
+	t.Setenv("ENGRAM_AUDIT_CLEANUP_INTERVAL", "15m")
+	t.Setenv("ENGRAM_AUDIT_CLEANUP_BATCH_SIZE", "500")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load(\"\") failed: %v", err)
+	}
+	if cfg.Audit.Enabled || cfg.Audit.Retention != 14*24*time.Hour || cfg.Audit.LogReads {
+		t.Errorf("Audit env override mismatch: %+v", cfg.Audit)
+	}
+	if cfg.Scheduler.Enabled || cfg.Scheduler.AuditCleanupEnabled || cfg.Scheduler.AuditCleanupInterval != 15*time.Minute || cfg.Scheduler.AuditCleanupBatchSize != 500 {
+		t.Errorf("Scheduler env override mismatch: %+v", cfg.Scheduler)
 	}
 }

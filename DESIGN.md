@@ -900,3 +900,14 @@ V1 稳定后再评估：
 - 标准 MCP Resource 和订阅能力。
 - 基于来源可信度和时效性的检索排序。
 - 跨项目知识引用，而不是复制正文。
+
+## 20. 审计与定时任务模块
+
+迁移 `008_audit_and_scheduler.sql` 新增 `audit_logs`、`audit_task_runs`、`scheduled_tasks` 与 `scheduled_task_runs` 四张独立运维/审计表（不设置业务外键，确保租户/成员/项目删除后审计记录仍可追溯，且系统快照导入不清空历史审计轨迹）：
+
+1. **审计任务模块（`internal/audit`）**：
+   - 自动记录 MCP `/mcp` 工具调用及鉴权失败事件、管理控制台 `/api/admin/*` 敏感操作及后台定时任务执行记录，并对口令、密钥明文、Session/Context Token 等敏感字段执行脱敏拦截。
+   - 提供多维检索、统计概览、JSON 导出、按保留时长分批清理，以及三项内置审计巡检任务：凭据与访问合规审计（`credential_hygiene`）、安全事件与异常操作审计（`security_events`）与知识库数据与治理完整性审计（`data_integrity`）。
+2. **定时任务模块（`internal/scheduler`）**：
+   - 基于 PostgreSQL `scheduled_tasks` 持久化调度配置与状态，通过 `pg_try_advisory_lock` 实现多实例互斥执行，并将每次自动/手动运行记录写入 `scheduled_task_runs`。
+   - 先置内置任务 `audit_log_cleanup`（定时清理过期审计日志），支持在配置文件 `[audit]` / `[scheduler]`、环境变量及管理后台 `/scheduler` 实时调整启用状态、执行间隔（如 `1h`、`15m`）、日志保留时长（如 `30d`、`720h`、`24h`）及单批清理条数上限，并支持立即手动触发。

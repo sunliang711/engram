@@ -22,6 +22,7 @@ const (
 	CodeIdempotencyConflict   Code = "IDEMPOTENCY_CONFLICT"
 	CodeIdempotencyInProgress Code = "IDEMPOTENCY_IN_PROGRESS"
 	CodeInvalidArgument       Code = "INVALID_ARGUMENT"
+	CodeNotFound              Code = "NOT_FOUND"
 	CodeRateLimited           Code = "RATE_LIMITED"
 	CodeLockTimeout           Code = "LOCK_TIMEOUT"
 	CodeInternalError         Code = "INTERNAL_ERROR"
@@ -106,7 +107,7 @@ func (e *Error) HTTPStatus() int {
 		return http.StatusUnauthorized
 	case CodeUnauthorized:
 		return http.StatusForbidden
-	case CodeProjectNotRegistered, CodeMemoryNotFound:
+	case CodeProjectNotRegistered, CodeMemoryNotFound, CodeNotFound:
 		return http.StatusNotFound
 	case CodeProjectExists, CodeVersionConflict, CodeDuplicateMemory, CodeIdempotencyConflict, CodeIdempotencyInProgress, CodeProjectAmbiguous:
 		return http.StatusConflict

@@ -22,12 +22,14 @@ type StaticTokenConfig struct {
 
 // Config holds the full configuration for the Engram Server.
 type Config struct {
-	Server   ServerConfig   `toml:"server" json:"server"`
-	Database DatabaseConfig `toml:"database" json:"database"`
-	Auth     AuthConfig     `toml:"auth" json:"auth"`
-	Limits   LimitsConfig   `toml:"limits" json:"limits"`
-	Export   ExportConfig   `toml:"export" json:"export"`
-	Log      LogConfig      `toml:"log" json:"log"`
+	Server    ServerConfig    `toml:"server" json:"server"`
+	Database  DatabaseConfig  `toml:"database" json:"database"`
+	Auth      AuthConfig      `toml:"auth" json:"auth"`
+	Limits    LimitsConfig    `toml:"limits" json:"limits"`
+	Export    ExportConfig    `toml:"export" json:"export"`
+	Audit     AuditConfig     `toml:"audit" json:"audit"`
+	Scheduler SchedulerConfig `toml:"scheduler" json:"scheduler"`
+	Log       LogConfig       `toml:"log" json:"log"`
 }
 
 type ServerConfig struct {
@@ -73,6 +75,19 @@ type ExportConfig struct {
 	OutputDir string        `toml:"output_dir" json:"output_dir"`
 	Interval  time.Duration `toml:"interval" json:"interval"`
 	GitCommit bool          `toml:"git_commit" json:"git_commit"`
+}
+
+type AuditConfig struct {
+	Enabled   bool          `toml:"enabled" json:"enabled"`
+	Retention time.Duration `toml:"retention" json:"retention"`
+	LogReads  bool          `toml:"log_reads" json:"log_reads"`
+}
+
+type SchedulerConfig struct {
+	Enabled               bool          `toml:"enabled" json:"enabled"`
+	AuditCleanupEnabled   bool          `toml:"audit_cleanup_enabled" json:"audit_cleanup_enabled"`
+	AuditCleanupInterval  time.Duration `toml:"audit_cleanup_interval" json:"audit_cleanup_interval"`
+	AuditCleanupBatchSize int           `toml:"audit_cleanup_batch_size" json:"audit_cleanup_batch_size"`
 }
 
 type LogConfig struct {
@@ -126,6 +141,17 @@ func Default() Config {
 			OutputDir: "./export",
 			Interval:  5 * time.Minute,
 			GitCommit: false,
+		},
+		Audit: AuditConfig{
+			Enabled:   true,
+			Retention: 30 * 24 * time.Hour,
+			LogReads:  true,
+		},
+		Scheduler: SchedulerConfig{
+			Enabled:               true,
+			AuditCleanupEnabled:   true,
+			AuditCleanupInterval:  1 * time.Hour,
+			AuditCleanupBatchSize: 1000,
 		},
 		Log: LogConfig{
 			Level: "info",
@@ -207,7 +233,7 @@ func normalizeDurationFields(raw map[string]any, structType reflect.Type, prefix
 			if !ok {
 				continue
 			}
-			d, err := time.ParseDuration(strings.TrimSpace(s))
+			d, err := ParseDuration(s)
 			if err != nil {
 				return fmt.Errorf("invalid duration for %s (%q): %w", fieldPath, s, err)
 			}
@@ -271,6 +297,71 @@ func applyEnvOverrides(cfg *Config) {
 	} else if v := os.Getenv("reset_admin"); v != "" {
 		cfg.Auth.ResetAdmin = !strings.EqualFold(v, "false") && v != "0"
 	}
+	if v := os.Getenv("ENGRAM_AUDIT_ENABLED"); v != "" {
+		cfg.Audit.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ENGRAM_AUDIT_RETENTION"); v != "" {
+		if d, err := ParseDuration(v); err == nil && d > 0 {
+			cfg.Audit.Retention = d
+		}
+	}
+	if v := os.Getenv("ENGRAM_AUDIT_LOG_READS"); v != "" {
+		cfg.Audit.LogReads = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ENGRAM_SCHEDULER_ENABLED"); v != "" {
+		cfg.Scheduler.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ENGRAM_AUDIT_CLEANUP_ENABLED"); v != "" {
+		cfg.Scheduler.AuditCleanupEnabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("ENGRAM_AUDIT_CLEANUP_INTERVAL"); v != "" {
+		if d, err := ParseDuration(v); err == nil && d > 0 {
+			cfg.Scheduler.AuditCleanupInterval = d
+		}
+	}
+	if v := os.Getenv("ENGRAM_AUDIT_CLEANUP_BATCH_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Scheduler.AuditCleanupBatchSize = n
+		}
+	}
+}
+
+// ParseDuration parses a Go duration string and additionally supports day units ("d" = 24h),
+// such as "30d" or "7d12h".
+func ParseDuration(raw string) (time.Duration, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		return d, nil
+	}
+	sign := time.Duration(1)
+	rest := s
+	if strings.HasPrefix(rest, "-") {
+		sign = -1
+		rest = rest[1:]
+	} else if strings.HasPrefix(rest, "+") {
+		rest = rest[1:]
+	}
+	idx := strings.IndexByte(rest, 'd')
+	if idx <= 0 {
+		return 0, fmt.Errorf("invalid duration %q", raw)
+	}
+	days, err := strconv.ParseInt(rest[:idx], 10, 64)
+	if err != nil || days < 0 || days > 36500 {
+		return 0, fmt.Errorf("invalid duration %q", raw)
+	}
+	total := time.Duration(days) * 24 * time.Hour
+	rem := strings.TrimSpace(rest[idx+1:])
+	if rem != "" {
+		sub, err := time.ParseDuration(rem)
+		if err != nil || sub < 0 {
+			return 0, fmt.Errorf("invalid duration %q", raw)
+		}
+		total += sub
+	}
+	return sign * total, nil
 }
 
 // Validate checks that required configuration fields are valid and rejects placeholder signing keys.
@@ -288,6 +379,15 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.MaxTitleBytes <= 0 || c.Limits.MaxContentBytes <= 0 {
 		return fmt.Errorf("limits.max_title_bytes and limits.max_content_bytes must be positive")
+	}
+	if c.Audit.Retention <= 0 {
+		return fmt.Errorf("audit.retention must be positive")
+	}
+	if c.Scheduler.AuditCleanupInterval <= 0 {
+		return fmt.Errorf("scheduler.audit_cleanup_interval must be positive")
+	}
+	if c.Scheduler.AuditCleanupBatchSize <= 0 {
+		return fmt.Errorf("scheduler.audit_cleanup_batch_size must be positive")
 	}
 	return nil
 }

@@ -29,6 +29,21 @@
     toastTimer: null,
     migInspect: null,
     migExportTenantsInitialized: false,
+    auditSubTab: "logs",
+    auditLogs: [],
+    auditPage: 1,
+    auditPageSize: 20,
+    auditTotal: 0,
+    auditRequest: 0,
+    auditStats: null,
+    auditTaskDefs: [],
+    auditTaskRuns: [],
+    auditSelectedRun: null,
+    schedulerTasks: [],
+    schedulerRuns: [],
+    schedulerRunsPage: 1,
+    schedulerRunsPageSize: 20,
+    schedulerRunsTotal: 0,
   };
 
   function $(id) {
@@ -203,8 +218,15 @@
       if (!state.locationReady) {
         state.locationReady = true;
         await restoreLocation();
-      } else if (!(options.quiet && detailIsOpen())) {
-        await loadMemories({ quiet: options.quiet });
+      } else {
+        if (!(options.quiet && detailIsOpen())) {
+          await loadMemories({ quiet: options.quiet });
+        }
+        if (activeTab() === "tab-audit") {
+          await loadAuditCenter();
+        } else if (activeTab() === "tab-scheduler") {
+          await loadSchedulerCenter();
+        }
       }
       await loadRecentMemories();
       $("last-refresh").textContent = t("已更新 ") + new Date().toLocaleTimeString(locale, { hour12: false });
@@ -238,6 +260,8 @@
     renderMemoryProjectFilter();
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
+    if ($("audit-filter-tenant")) fillSelect("audit-filter-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
+    if ($("audit-task-tenant")) fillSelect("audit-task-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
     renderMigrationSelectors();
   }
 
@@ -1121,6 +1145,8 @@
     });
     document.querySelectorAll(".tab-pane").forEach((p) => p.classList.toggle("hidden", p.id !== tabId));
     renderManagementViews();
+    if (tabId === "tab-audit" && state.locationReady) loadAuditCenter().catch((err) => showToast(err.message, true));
+    if (tabId === "tab-scheduler" && state.locationReady) loadSchedulerCenter().catch((err) => showToast(err.message, true));
     if (updateURL) syncLocation(true);
   }
 
@@ -1129,6 +1155,8 @@
     "tab-memories": "/memories",
     "tab-projects": "/projects",
     "tab-tenants": "/tenants",
+    "tab-audit": "/audit",
+    "tab-scheduler": "/scheduler",
     "tab-migration": "/migration",
   };
 
@@ -1197,6 +1225,10 @@
       out.tab = "tab-tenants";
       if (parts[1]) out.tenantID = parts[1];
       if (parts[2] === "members" && parts[3]) out.memberID = parts[3];
+    } else if (parts[0] === "audit") {
+      out.tab = "tab-audit";
+    } else if (parts[0] === "scheduler") {
+      out.tab = "tab-scheduler";
     } else if (parts[0] === "migration") {
       out.tab = "tab-migration";
     }
@@ -2022,6 +2054,9 @@
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
     const renameOpen = $("rename-modal") && !$("rename-modal").classList.contains("hidden");
     const purgeOpen = !$("purge-modal").classList.contains("hidden");
+    const auditDetailOpen = $("audit-detail-modal") && !$("audit-detail-modal").classList.contains("hidden");
+    const auditCleanupOpen = $("audit-cleanup-modal") && !$("audit-cleanup-modal").classList.contains("hidden");
+    const schedConfigOpen = $("scheduler-config-modal") && !$("scheduler-config-modal").classList.contains("hidden");
     const glossaryOpen = !$("glossary-modal").classList.contains("hidden");
     const clientConfigOpen = !$("client-config-modal").classList.contains("hidden");
     const detailOpen = !$("memory-detail-card").classList.contains("hidden");
@@ -2029,6 +2064,9 @@
       if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
       else if (renameOpen) closeRenameModal();
       else if (purgeOpen) closePurgeModal();
+      else if (auditDetailOpen) $("audit-detail-modal").classList.add("hidden");
+      else if (auditCleanupOpen) $("audit-cleanup-modal").classList.add("hidden");
+      else if (schedConfigOpen) $("scheduler-config-modal").classList.add("hidden");
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (clientConfigOpen) closeClientGuides();
       else if (detailOpen) closeMemoryDetail();
@@ -2565,6 +2603,602 @@
       if ($("mig-import-passphrase")) $("mig-import-passphrase").value = "";
       showToast(data.format === "engram-knowledge-bundle" ? t("知识库导入成功！") : t("系统快照还原成功！"));
       await refreshAllData();
+    });
+  }
+
+  // Audit Center & Scheduled Tasks
+  const AUDIT_SOURCES = {
+    mcp: t("MCP 客户端"),
+    admin_ui: t("管理控制台"),
+    scheduler: t("定时任务"),
+    system: t("系统"),
+  };
+  const AUDIT_STATUSES = {
+    success: t("成功"),
+    failed: t("失败"),
+    denied: t("拒绝"),
+  };
+  const SCHED_STATUSES = {
+    idle: t("待运行"),
+    running: t("执行中"),
+    success: t("成功"),
+    failed: t("失败"),
+  };
+  const SEVERITY_LABELS = {
+    high: t("高风险"),
+    medium: t("中风险"),
+    low: t("低风险"),
+    info: t("提示"),
+  };
+
+  function auditStatusBadgeClass(status) {
+    if (status === "success") return "success";
+    if (status === "denied") return "warning";
+    return "danger";
+  }
+
+  function schedStatusBadgeClass(status) {
+    if (status === "success") return "success";
+    if (status === "failed") return "danger";
+    if (status === "running") return "warning";
+    return "";
+  }
+
+  function formatDurationSeconds(sec) {
+    if (!Number.isFinite(sec) || sec <= 0) return "—";
+    if (sec % 86400 === 0) return t`${sec / 86400} 天`;
+    if (sec % 3600 === 0) return t`${sec / 3600} 小时`;
+    if (sec % 60 === 0) return t`${sec / 60} 分钟`;
+    return t`${sec} 秒`;
+  }
+
+  function switchAuditSubTab(sub) {
+    state.auditSubTab = sub === "tasks" ? "tasks" : "logs";
+    const isLogs = state.auditSubTab === "logs";
+    if ($("btn-audit-sub-logs")) {
+      $("btn-audit-sub-logs").classList.toggle("active", isLogs);
+      $("btn-audit-sub-logs").setAttribute("aria-selected", String(isLogs));
+    }
+    if ($("btn-audit-sub-tasks")) {
+      $("btn-audit-sub-tasks").classList.toggle("active", !isLogs);
+      $("btn-audit-sub-tasks").setAttribute("aria-selected", String(!isLogs));
+    }
+    if ($("audit-logs-panel")) $("audit-logs-panel").classList.toggle("hidden", !isLogs);
+    if ($("audit-tasks-panel")) $("audit-tasks-panel").classList.toggle("hidden", isLogs);
+  }
+
+  function buildAuditFilterParams(includePaging = true) {
+    const p = new URLSearchParams();
+    const q = $("audit-filter-q") ? $("audit-filter-q").value.trim() : "";
+    const src = $("audit-filter-source") ? $("audit-filter-source").value : "";
+    const status = $("audit-filter-status") ? $("audit-filter-status").value : "";
+    const tenant = $("audit-filter-tenant") ? $("audit-filter-tenant").value : "";
+    const action = $("audit-filter-action") ? $("audit-filter-action").value.trim() : "";
+    if (q) p.set("q", q);
+    if (src) p.set("source", src);
+    if (status) p.set("status", status);
+    if (tenant) p.set("tenant_id", tenant);
+    if (action) p.set("action", action);
+    if (includePaging) {
+      p.set("page", state.auditPage);
+      p.set("page_size", state.auditPageSize);
+    }
+    return p;
+  }
+
+  async function loadAuditStats() {
+    if (!$("audit-stat-total")) return;
+    const stats = await api("/api/admin/audit/stats");
+    state.auditStats = stats;
+    $("audit-stat-total").textContent = stats.total_count || 0;
+    $("audit-stat-24h").textContent = stats.last_24h_count || 0;
+    $("audit-stat-failed").textContent = stats.last_24h_failed || 0;
+    $("audit-stat-retention").textContent = stats.default_retention || "30d";
+    $("audit-stat-oldest").textContent = stats.oldest_at ? formatDate(stats.oldest_at) : "—";
+  }
+
+  async function loadAuditLogs() {
+    if (!$("audit-logs-table")) return;
+    const reqId = ++state.auditRequest;
+    const data = await api("/api/admin/audit/logs?" + buildAuditFilterParams(true).toString());
+    if (reqId !== state.auditRequest) return;
+    state.auditLogs = data.items || [];
+    state.auditTotal = data.total || 0;
+    state.auditPage = data.page || 1;
+    state.auditPageSize = data.page_size || 20;
+    renderAuditLogsTable();
+  }
+
+  function renderAuditLogsTable() {
+    const tbody = $("audit-logs-table") && $("audit-logs-table").querySelector("tbody");
+    if (!tbody) return;
+    const totalPages = Math.max(1, Math.ceil(state.auditTotal / state.auditPageSize));
+    if ($("audit-list-status")) {
+      $("audit-list-status").textContent = state.auditTotal
+        ? t`共 ${state.auditTotal} 条审计日志`
+        : t("暂无匹配的审计日志");
+    }
+    if ($("audit-page-info")) $("audit-page-info").textContent = t`第 ${state.auditPage} / ${totalPages} 页`;
+    if ($("btn-audit-prev")) $("btn-audit-prev").disabled = state.auditPage <= 1;
+    if ($("btn-audit-next")) $("btn-audit-next").disabled = state.auditPage >= totalPages;
+
+    if (!state.auditLogs.length) {
+      tbody.innerHTML = `<tr><td colspan="8" class="empty-state">${t("暂无匹配的审计日志。")}</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = state.auditLogs.map((entry) => {
+      const actor = entry.actor_name || entry.actor_id || entry.actor_type || "—";
+      const actorSub = entry.agent_name ? `<div class="muted" style="font-size:12px;">${escapeHtml(entry.agent_name)}</div>` : "";
+      const resLabel = entry.resource_type
+        ? `${escapeHtml(entry.resource_type)}${entry.resource_id ? ` · <code>${escapeHtml(entry.resource_id.slice(0, 12))}</code>` : ""}`
+        : "—";
+      return `<tr>
+        <td><time title="${escapeHtml(formatDate(entry.created_at))}">${escapeHtml(formatDate(entry.created_at))}</time></td>
+        <td><span class="badge">${escapeHtml(AUDIT_SOURCES[entry.source] || entry.source || "—")}</span></td>
+        <td><code>${escapeHtml(entry.action)}</code></td>
+        <td><div>${escapeHtml(actor)}</div>${actorSub}</td>
+        <td>${resLabel}</td>
+        <td><span class="badge ${auditStatusBadgeClass(entry.status)}">${escapeHtml(AUDIT_STATUSES[entry.status] || entry.status)}</span></td>
+        <td>${entry.duration_ms || 0} ms</td>
+        <td><button type="button" class="secondary small btn-audit-detail" data-id="${entry.id}">${t("详情")}</button></td>
+      </tr>`;
+    }).join("");
+  }
+
+  function openAuditDetail(entry) {
+    if (!entry || !$("audit-detail-modal")) return;
+    const meta = [
+      `<span class="badge ${auditStatusBadgeClass(entry.status)}">${escapeHtml(AUDIT_STATUSES[entry.status] || entry.status)}</span>`,
+      `<span class="badge">${escapeHtml(AUDIT_SOURCES[entry.source] || entry.source)}</span>`,
+      `<code>${escapeHtml(entry.action)}</code>`,
+      `<span class="meta-text">${escapeHtml(formatDate(entry.created_at))}</span>`,
+    ];
+    if (entry.request_id) meta.push(`<span class="meta-text">Request: <code>${escapeHtml(entry.request_id)}</code></span>`);
+    if (entry.client_ip) meta.push(`<span class="meta-text">IP: <code>${escapeHtml(entry.client_ip)}</code></span>`);
+    $("audit-detail-meta").innerHTML = meta.join("");
+    $("audit-detail-json").textContent = JSON.stringify(entry, null, 2);
+    $("audit-detail-modal").classList.remove("hidden");
+  }
+
+  async function loadAuditTasks() {
+    if (!$("audit-task-definitions")) return;
+    const data = await api("/api/admin/audit/tasks?page=1&page_size=20");
+    state.auditTaskDefs = data.definitions || [];
+    state.auditTaskRuns = data.runs || [];
+    renderAuditTaskDefinitions();
+    renderAuditTaskRuns();
+  }
+
+  function renderAuditTaskDefinitions() {
+    const container = $("audit-task-definitions");
+    if (!container) return;
+    container.innerHTML = state.auditTaskDefs.map((def) => `
+      <article class="audit-task-card">
+        <div>
+          <h3>${escapeHtml(t(def.name))}</h3>
+          <p>${escapeHtml(t(def.description))}</p>
+        </div>
+        <div>
+          <button type="button" class="secondary small btn-run-audit-task" data-type="${escapeHtml(def.task_type)}">${t("执行审计任务")}</button>
+        </div>
+      </article>
+    `).join("");
+  }
+
+  function renderAuditTaskFindings(run) {
+    const card = $("audit-task-latest-findings");
+    const list = $("audit-findings-list");
+    if (!card || !list) return;
+    if (!run) {
+      card.classList.add("hidden");
+      return;
+    }
+    const def = state.auditTaskDefs.find((d) => d.task_type === run.task_type);
+    $("audit-findings-title").textContent = def ? t(def.name) : run.task_type;
+    $("audit-findings-summary").textContent = `${run.summary || ""} · ${formatDate(run.started_at)}`;
+    const findings = run.findings || [];
+    if (!findings.length) {
+      list.innerHTML = `<div class="audit-finding-item"><p>${escapeHtml(run.summary || t("未发现异常风险项。"))}</p></div>`;
+    } else {
+      list.innerHTML = findings.map((f) => `
+        <div class="audit-finding-item">
+          <div class="audit-finding-header">
+            <span class="badge sev-${escapeHtml(f.severity || "info")}">${escapeHtml(SEVERITY_LABELS[f.severity] || f.severity || "info")}</span>
+            <strong>${escapeHtml(f.title)}</strong>
+            <code>${escapeHtml(f.code)}</code>
+          </div>
+          <p>${escapeHtml(f.description)}</p>
+        </div>
+      `).join("");
+    }
+    card.classList.remove("hidden");
+  }
+
+  function renderAuditTaskRuns() {
+    const tbody = $("audit-task-runs-table") && $("audit-task-runs-table").querySelector("tbody");
+    if (!tbody) return;
+    if (!state.auditTaskRuns.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("尚无审计任务执行记录。")}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = state.auditTaskRuns.map((run) => {
+      const def = state.auditTaskDefs.find((d) => d.task_type === run.task_type);
+      const label = def ? t(def.name) : run.task_type;
+      return `<tr>
+        <td>${escapeHtml(formatDate(run.started_at))}</td>
+        <td><strong>${escapeHtml(label)}</strong></td>
+        <td><span class="badge ${schedStatusBadgeClass(run.status)}">${escapeHtml(SCHED_STATUSES[run.status] || run.status)}</span></td>
+        <td>${run.findings_count || 0}</td>
+        <td>${run.duration_ms || 0} ms</td>
+        <td>${escapeHtml(run.summary || run.error_message || "—")}</td>
+        <td><button type="button" class="secondary small btn-view-audit-run" data-id="${run.id}">${t("查看发现")}</button></td>
+      </tr>`;
+    }).join("");
+  }
+
+  async function loadAuditCenter() {
+    await Promise.all([loadAuditStats(), loadAuditLogs(), loadAuditTasks()]);
+  }
+
+  async function loadSchedulerCenter() {
+    await Promise.all([loadSchedulerTasks(), loadSchedulerRuns()]);
+  }
+
+  async function loadSchedulerTasks() {
+    if (!$("scheduler-tasks-table")) return;
+    const data = await api("/api/admin/scheduler/tasks");
+    state.schedulerTasks = data.items || [];
+    renderSchedulerTasks();
+    const filterSel = $("scheduler-runs-filter");
+    if (filterSel) {
+      fillSelect("scheduler-runs-filter", state.schedulerTasks.map((task) => [task.name, t(task.display_name) || task.name]));
+    }
+  }
+
+  function renderSchedulerTasks() {
+    const tbody = $("scheduler-tasks-table") && $("scheduler-tasks-table").querySelector("tbody");
+    if (!tbody) return;
+    if (!state.schedulerTasks.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("暂无已注册的定时任务。")}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = state.schedulerTasks.map((task) => {
+      const cfg = task.config || {};
+      const cfgPills = [];
+      if (cfg.retention) cfgPills.push(`<span class="badge">${t`保留 ${escapeHtml(String(cfg.retention))}`}</span>`);
+      if (cfg.batch_size) cfgPills.push(`<span class="badge">${t`每批 ${escapeHtml(String(cfg.batch_size))} 条`}</span>`);
+      const lastAt = task.last_run_at ? formatDate(task.last_run_at) : t("尚未执行");
+      const nextAt = task.enabled && task.next_run_at ? formatDate(task.next_run_at) : t("已暂停");
+      const lastOutcome = task.last_status && task.last_status !== "idle"
+        ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span>`
+        : `<span class="badge">${t("待运行")}</span>`;
+      return `<tr>
+        <td>
+          <strong>${escapeHtml(t(task.display_name) || task.name)}</strong>
+          <div class="muted" style="font-size:12px;"><code>${escapeHtml(task.name)}</code> · ${escapeHtml(t(task.description))}</div>
+        </td>
+        <td>
+          <span class="badge ${task.enabled ? "success" : "danger"}">${task.enabled ? t("已启用") : t("已停用")}</span>
+          <div style="margin-top:4px;">${lastOutcome}</div>
+        </td>
+        <td>${escapeHtml(formatDurationSeconds(task.interval_seconds))}</td>
+        <td><div class="sched-config-pills">${cfgPills.join("") || "—"}</div></td>
+        <td>
+          <div style="font-size:12.5px;">${t("上次")}: ${escapeHtml(lastAt)}</div>
+          <div class="muted" style="font-size:12px;">${t("下次")}: ${escapeHtml(nextAt)}</div>
+        </td>
+        <td>
+          <div style="font-size:12.5px;">${escapeHtml(task.last_summary || task.last_error || "—")}</div>
+          <div class="muted" style="font-size:12px;">${t`累计 ${task.run_count || 0} 次`}</div>
+        </td>
+        <td>
+          <div class="row-actions">
+            <button type="button" class="secondary small btn-sched-config" data-name="${escapeHtml(task.name)}">${t("配置")}</button>
+            <button type="button" class="small btn-sched-run" data-name="${escapeHtml(task.name)}">${t("立即执行")}</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join("");
+  }
+
+  async function loadSchedulerRuns() {
+    if (!$("scheduler-runs-table")) return;
+    const p = new URLSearchParams();
+    p.set("page", state.schedulerRunsPage);
+    p.set("page_size", state.schedulerRunsPageSize);
+    const taskFilter = $("scheduler-runs-filter") ? $("scheduler-runs-filter").value : "";
+    if (taskFilter) p.set("task_name", taskFilter);
+    const data = await api("/api/admin/scheduler/runs?" + p.toString());
+    state.schedulerRuns = data.items || [];
+    state.schedulerRunsTotal = data.total || 0;
+    state.schedulerRunsPage = data.page || 1;
+    renderSchedulerRuns();
+  }
+
+  function renderSchedulerRuns() {
+    const tbody = $("scheduler-runs-table") && $("scheduler-runs-table").querySelector("tbody");
+    if (!tbody) return;
+    const totalPages = Math.max(1, Math.ceil(state.schedulerRunsTotal / state.schedulerRunsPageSize));
+    if ($("scheduler-runs-page-info")) $("scheduler-runs-page-info").textContent = t`第 ${state.schedulerRunsPage} / ${totalPages} 页`;
+    if ($("btn-sched-runs-prev")) $("btn-sched-runs-prev").disabled = state.schedulerRunsPage <= 1;
+    if ($("btn-sched-runs-next")) $("btn-sched-runs-next").disabled = state.schedulerRunsPage >= totalPages;
+
+    if (!state.schedulerRuns.length) {
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-state">${t("暂无定时任务执行历史。")}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = state.schedulerRuns.map((run) => {
+      const task = state.schedulerTasks.find((item) => item.name === run.task_name);
+      const taskTitle = task ? t(task.display_name) : run.task_name;
+      const triggerLabel = run.trigger_type === "manual" ? t("手动触发") : t("自动调度");
+      return `<tr>
+        <td>${escapeHtml(formatDate(run.started_at))}</td>
+        <td><strong>${escapeHtml(taskTitle)}</strong></td>
+        <td><span class="badge">${escapeHtml(triggerLabel)}</span></td>
+        <td><span class="badge ${schedStatusBadgeClass(run.status)}">${escapeHtml(SCHED_STATUSES[run.status] || run.status)}</span></td>
+        <td>${run.duration_ms || 0} ms</td>
+        <td>${run.affected_rows || 0}</td>
+        <td>${escapeHtml(run.summary || run.error_message || "—")}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  function openSchedulerConfigModal(taskName) {
+    const task = state.schedulerTasks.find((item) => item.name === taskName);
+    if (!task || !$("scheduler-config-modal")) return;
+    $("sched-cfg-name").value = task.name;
+    $("scheduler-config-title").textContent = `${t("配置定时任务")} · ${t(task.display_name) || task.name}`;
+    $("sched-cfg-desc").textContent = t(task.description) || "";
+    $("sched-cfg-enabled").checked = !!task.enabled;
+    $("sched-cfg-interval").value = formatIntervalInput(task.interval_seconds);
+    const cfg = task.config || {};
+    const isCleanup = task.name === "audit_log_cleanup";
+    $("sched-cfg-audit-cleanup-fields").classList.toggle("hidden", !isCleanup);
+    if (isCleanup) {
+      $("sched-cfg-retention").value = cfg.retention || "30d";
+      $("sched-cfg-batch-size").value = cfg.batch_size || 1000;
+    }
+    $("scheduler-config-modal").classList.remove("hidden");
+  }
+
+  function formatIntervalInput(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return "1h";
+    if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+    if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+    if (seconds % 60 === 0) return `${seconds / 60}m`;
+    return `${seconds}s`;
+  }
+
+  document.querySelectorAll(".preset-chips").forEach((group) => {
+    group.addEventListener("click", (e) => {
+      const chip = e.target.closest(".preset-chip");
+      if (!chip) return;
+      const input = $(group.dataset.target);
+      if (input) input.value = chip.dataset.value || "";
+    });
+  });
+
+  if ($("btn-audit-sub-logs")) $("btn-audit-sub-logs").addEventListener("click", () => switchAuditSubTab("logs"));
+  if ($("btn-audit-sub-tasks")) $("btn-audit-sub-tasks").addEventListener("click", () => switchAuditSubTab("tasks"));
+
+  if ($("filter-audit-form")) {
+    $("filter-audit-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      state.auditPage = 1;
+      try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  ["audit-filter-source", "audit-filter-status", "audit-filter-tenant"].forEach((id) => {
+    if ($(id)) {
+      $(id).addEventListener("change", async () => {
+        state.auditPage = 1;
+        try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+      });
+    }
+  });
+  if ($("audit-page-size")) {
+    $("audit-page-size").addEventListener("change", async () => {
+      state.auditPageSize = Number($("audit-page-size").value) || 20;
+      state.auditPage = 1;
+      try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  if ($("btn-clear-audit-filters")) {
+    $("btn-clear-audit-filters").addEventListener("click", async () => {
+      ["audit-filter-q", "audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-action"].forEach((id) => {
+        if ($(id)) $(id).value = "";
+      });
+      state.auditPage = 1;
+      try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  if ($("btn-audit-prev")) {
+    $("btn-audit-prev").addEventListener("click", async () => {
+      if (state.auditPage <= 1) return;
+      state.auditPage--;
+      try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  if ($("btn-audit-next")) {
+    $("btn-audit-next").addEventListener("click", async () => {
+      state.auditPage++;
+      try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+
+  if ($("audit-logs-table")) {
+    $("audit-logs-table").addEventListener("click", (e) => {
+      const btn = e.target.closest(".btn-audit-detail");
+      if (!btn) return;
+      const entry = state.auditLogs.find((item) => item.id === btn.dataset.id);
+      if (entry) openAuditDetail(entry);
+    });
+  }
+  if ($("btn-close-audit-detail")) $("btn-close-audit-detail").addEventListener("click", () => $("audit-detail-modal").classList.add("hidden"));
+  if ($("audit-detail-modal")) $("audit-detail-modal").addEventListener("click", (e) => { if (e.target === $("audit-detail-modal")) $("audit-detail-modal").classList.add("hidden"); });
+
+  if ($("btn-audit-export")) {
+    $("btn-audit-export").addEventListener("click", async () => {
+      try {
+        const resp = await fetch("/api/admin/audit/logs/export?" + buildAuditFilterParams(false).toString(), { credentials: "same-origin" });
+        if (!resp.ok) throw new Error(t`请求失败（${resp.status}），请重试。`);
+        const blob = await resp.blob();
+        const filename = parseDownloadFilename(resp, "engram-audit-logs.json");
+        if (await saveBlobToLocal(blob, filename)) {
+          showToast(t`审计日志已导出为 ${filename}`);
+        }
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
+  if ($("btn-open-audit-cleanup")) {
+    $("btn-open-audit-cleanup").addEventListener("click", () => {
+      const cleanupTask = state.schedulerTasks.find((item) => item.name === "audit_log_cleanup");
+      const defaultRet = (cleanupTask && cleanupTask.config && cleanupTask.config.retention) || (state.auditStats && state.auditStats.default_retention) || "30d";
+      $("audit-cleanup-retention").value = defaultRet;
+      $("audit-cleanup-modal").classList.remove("hidden");
+    });
+  }
+  if ($("btn-close-audit-cleanup")) $("btn-close-audit-cleanup").addEventListener("click", () => $("audit-cleanup-modal").classList.add("hidden"));
+  if ($("btn-cancel-audit-cleanup")) $("btn-cancel-audit-cleanup").addEventListener("click", () => $("audit-cleanup-modal").classList.add("hidden"));
+  if ($("audit-cleanup-modal")) $("audit-cleanup-modal").addEventListener("click", (e) => { if (e.target === $("audit-cleanup-modal")) $("audit-cleanup-modal").classList.add("hidden"); });
+
+  if ($("audit-cleanup-form")) {
+    onSubmit("audit-cleanup-form", async (e) => {
+      e.preventDefault();
+      const retention = $("audit-cleanup-retention").value.trim();
+      const res = await api("/api/admin/audit/cleanup", {
+        method: "POST",
+        body: JSON.stringify({ retention }),
+      });
+      $("audit-cleanup-modal").classList.add("hidden");
+      showToast(t`已清理 ${res.deleted_count || 0} 条过期审计日志`);
+      await loadAuditCenter();
+    });
+  }
+
+  if ($("audit-task-definitions")) {
+    $("audit-task-definitions").addEventListener("click", async (e) => {
+      const btn = e.target.closest(".btn-run-audit-task");
+      if (!btn) return;
+      const taskType = btn.dataset.type;
+      const tenantID = $("audit-task-tenant") ? $("audit-task-tenant").value : "";
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      try {
+        const run = await api("/api/admin/audit/tasks/run", {
+          method: "POST",
+          body: JSON.stringify({ task_type: taskType, tenant_id: tenantID }),
+        });
+        renderAuditTaskFindings(run);
+        showToast(run.summary || t("审计任务执行完成"));
+        await Promise.all([loadAuditTasks(), loadAuditStats(), loadAuditLogs()]);
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+      }
+    });
+  }
+
+  if ($("audit-task-runs-table")) {
+    $("audit-task-runs-table").addEventListener("click", (e) => {
+      const btn = e.target.closest(".btn-view-audit-run");
+      if (!btn) return;
+      const run = state.auditTaskRuns.find((item) => item.id === btn.dataset.id);
+      if (run) renderAuditTaskFindings(run);
+    });
+  }
+  if ($("btn-refresh-audit-tasks")) {
+    $("btn-refresh-audit-tasks").addEventListener("click", async () => {
+      try { await loadAuditTasks(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+
+  if ($("btn-refresh-scheduler")) {
+    $("btn-refresh-scheduler").addEventListener("click", async () => {
+      try { await loadSchedulerCenter(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  if ($("scheduler-tasks-table")) {
+    $("scheduler-tasks-table").addEventListener("click", async (e) => {
+      const cfgBtn = e.target.closest(".btn-sched-config");
+      if (cfgBtn) {
+        openSchedulerConfigModal(cfgBtn.dataset.name);
+        return;
+      }
+      const runBtn = e.target.closest(".btn-sched-run");
+      if (!runBtn) return;
+      const taskName = runBtn.dataset.name;
+      runBtn.disabled = true;
+      runBtn.setAttribute("aria-busy", "true");
+      try {
+        const res = await api("/api/admin/scheduler/tasks/run", {
+          method: "POST",
+          body: JSON.stringify({ name: taskName }),
+        });
+        showToast((res.run && res.run.summary) || t("定时任务已执行完成"));
+        await loadSchedulerCenter();
+        if (activeTab() === "tab-audit") await loadAuditCenter();
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        runBtn.disabled = false;
+        runBtn.removeAttribute("aria-busy");
+      }
+    });
+  }
+
+  if ($("btn-close-scheduler-config")) $("btn-close-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
+  if ($("btn-cancel-scheduler-config")) $("btn-cancel-scheduler-config").addEventListener("click", () => $("scheduler-config-modal").classList.add("hidden"));
+  if ($("scheduler-config-modal")) $("scheduler-config-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-config-modal")) $("scheduler-config-modal").classList.add("hidden"); });
+
+  if ($("scheduler-config-form")) {
+    onSubmit("scheduler-config-form", async (e) => {
+      e.preventDefault();
+      const name = $("sched-cfg-name").value;
+      const payload = {
+        name,
+        enabled: $("sched-cfg-enabled").checked,
+        interval: $("sched-cfg-interval").value.trim(),
+      };
+      if (name === "audit_log_cleanup") {
+        payload.config = {
+          retention: $("sched-cfg-retention").value.trim(),
+          batch_size: Number($("sched-cfg-batch-size").value) || 1000,
+        };
+      }
+      await api("/api/admin/scheduler/tasks", {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      $("scheduler-config-modal").classList.add("hidden");
+      showToast(t("定时任务配置已保存"));
+      await loadSchedulerCenter();
+    });
+  }
+
+  if ($("scheduler-runs-filter")) {
+    $("scheduler-runs-filter").addEventListener("change", async () => {
+      state.schedulerRunsPage = 1;
+      try { await loadSchedulerRuns(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  if ($("btn-sched-runs-prev")) {
+    $("btn-sched-runs-prev").addEventListener("click", async () => {
+      if (state.schedulerRunsPage <= 1) return;
+      state.schedulerRunsPage--;
+      try { await loadSchedulerRuns(); } catch (err) { showToast(err.message, true); }
+    });
+  }
+  if ($("btn-sched-runs-next")) {
+    $("btn-sched-runs-next").addEventListener("click", async () => {
+      state.schedulerRunsPage++;
+      try { await loadSchedulerRuns(); } catch (err) { showToast(err.message, true); }
     });
   }
 

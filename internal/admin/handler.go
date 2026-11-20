@@ -18,10 +18,13 @@ import (
 	"time"
 
 	"engram/internal/apperror"
+	"engram/internal/audit"
 	"engram/internal/auth"
 	"engram/internal/exporter"
 	"engram/internal/memory"
+	"engram/internal/observability"
 	"engram/internal/project"
+	"engram/internal/scheduler"
 	"engram/internal/version"
 
 	"github.com/google/uuid"
@@ -39,8 +42,20 @@ type Handler struct {
 	authMgr      *AuthManager
 	memSvc       *memory.Service
 	exporter     *exporter.Exporter
+	auditSvc     *audit.Service
+	scheduler    *scheduler.Scheduler
 	loginLimiter *auth.RateLimiter
 	log          zerolog.Logger
+}
+
+// SetAuditService attaches the audit module to record and query console audit logs and tasks.
+func (h *Handler) SetAuditService(svc *audit.Service) {
+	h.auditSvc = svc
+}
+
+// SetScheduler attaches the scheduled task module to manage and trigger background jobs.
+func (h *Handler) SetScheduler(sched *scheduler.Scheduler) {
+	h.scheduler = sched
 }
 
 func NewHandler(
@@ -110,12 +125,23 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/migration/export", h.requireActiveAdmin(h.handleMigrationExport))
 	mux.HandleFunc("/api/admin/migration/inspect", h.requireActiveAdminMultipart(maxImportBytes, h.handleMigrationInspect))
 	mux.HandleFunc("/api/admin/migration/import", h.requireActiveAdminMultipart(maxImportBytes, h.handleMigrationImport))
+
+	// Audit & Scheduled Tasks APIs
+	mux.HandleFunc("/api/admin/audit/logs", h.requireActiveAdmin(h.handleAuditLogs))
+	mux.HandleFunc("/api/admin/audit/logs/export", h.requireActiveAdmin(h.handleAuditLogsExport))
+	mux.HandleFunc("/api/admin/audit/stats", h.requireActiveAdmin(h.handleAuditStats))
+	mux.HandleFunc("/api/admin/audit/cleanup", h.requireActiveAdmin(h.handleAuditCleanup))
+	mux.HandleFunc("/api/admin/audit/tasks", h.requireActiveAdmin(h.handleAuditTasks))
+	mux.HandleFunc("/api/admin/audit/tasks/run", h.requireActiveAdmin(h.handleAuditTaskRun))
+	mux.HandleFunc("/api/admin/scheduler/tasks", h.requireActiveAdmin(h.handleSchedulerTasks))
+	mux.HandleFunc("/api/admin/scheduler/tasks/run", h.requireActiveAdmin(h.handleSchedulerTaskRun))
+	mux.HandleFunc("/api/admin/scheduler/runs", h.requireActiveAdmin(h.handleSchedulerRuns))
 }
 
 // isUIRoutePath matches Web UI SPA paths so browser refreshes and deep links serve index.html
 // without shadowing unknown API or asset paths.
 func isUIRoutePath(p string) bool {
-	if p == "/" || p == "/overview" || p == "/memories" || p == "/projects" || p == "/tenants" || p == "/migration" {
+	if p == "/" || p == "/overview" || p == "/memories" || p == "/projects" || p == "/tenants" || p == "/migration" || p == "/audit" || p == "/scheduler" {
 		return true
 	}
 	trimmed := strings.Trim(p, "/")
@@ -218,6 +244,50 @@ func (h *Handler) requireActiveAdminMultipart(maxBytes int64, next http.HandlerF
 	return h.withSafetyOpts(maxBytes, true, h.requireActiveAdminCore(next))
 }
 
+type adminUserCtxKey struct{}
+
+func adminActorFromRequest(r *http.Request) string {
+	if r == nil {
+		return "admin"
+	}
+	if name, ok := r.Context().Value(adminUserCtxKey{}).(string); ok && strings.TrimSpace(name) != "" {
+		return name
+	}
+	return "admin"
+}
+
+func requestClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr)); err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
+}
+
+func (h *Handler) recordAdminAudit(r *http.Request, entry audit.Entry) {
+	if h == nil || h.auditSvc == nil {
+		return
+	}
+	if entry.ActorType == "" {
+		entry.ActorType = audit.ActorAdmin
+	}
+	if entry.ActorName == "" {
+		entry.ActorName = adminActorFromRequest(r)
+	}
+	if entry.Source == "" {
+		entry.Source = audit.SourceAdminUI
+	}
+	if entry.ClientIP == "" {
+		entry.ClientIP = requestClientIP(r)
+	}
+	if entry.Status == "" {
+		entry.Status = audit.StatusSuccess
+	}
+	h.auditSvc.Record(r.Context(), entry)
+}
+
 func (h *Handler) requireActiveAdminCore(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := h.extractSessionToken(r)
@@ -230,7 +300,8 @@ func (h *Handler) requireActiveAdminCore(next http.HandlerFunc) http.HandlerFunc
 			writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "admin password change required before accessing management console"))
 			return
 		}
-		next(w, r)
+		ctx := context.WithValue(r.Context(), adminUserCtxKey{}, state.Username)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -266,6 +337,14 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		clientIP = host
 	}
 	if err := h.loginLimiter.AllowKey("login:" + clientIP); err != nil {
+		h.recordAdminAudit(r, audit.Entry{
+			ActorName:    "admin",
+			Action:       "admin.login",
+			ResourceType: "admin_session",
+			Status:       audit.StatusDenied,
+			ErrorCode:    string(apperror.CodeRateLimited),
+			ErrorMessage: err.Error(),
+		})
 		writeJSONError(w, err)
 		return
 	}
@@ -280,10 +359,25 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	token, state, err := h.authMgr.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
+		appErr := apperror.AsError(err, "")
+		h.recordAdminAudit(r, audit.Entry{
+			ActorName:    strings.TrimSpace(req.Username),
+			Action:       "admin.login",
+			ResourceType: "admin_session",
+			Status:       audit.StatusFailed,
+			ErrorCode:    string(appErr.Code),
+			ErrorMessage: appErr.Message,
+		})
 		writeJSONError(w, err)
 		return
 	}
 	h.setSessionCookie(w, r, token)
+	h.recordAdminAudit(r, audit.Entry{
+		ActorName:    state.Username,
+		Action:       "admin.login",
+		ResourceType: "admin_session",
+		Status:       audit.StatusSuccess,
+	})
 	writeJSON(w, http.StatusOK, withSessionVersion(state))
 }
 
@@ -292,7 +386,17 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	username := "admin"
+	if state, err := h.authMgr.VerifySession(r.Context(), h.extractSessionToken(r)); err == nil && state.Authenticated && state.Username != "" {
+		username = state.Username
+	}
 	h.clearSessionCookie(w, r)
+	h.recordAdminAudit(r, audit.Entry{
+		ActorName:    username,
+		Action:       "admin.logout",
+		ResourceType: "admin_session",
+		Status:       audit.StatusSuccess,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"status": "logged_out"})
 }
 
@@ -319,10 +423,27 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	newToken, newState, err := h.authMgr.ChangePassword(r.Context(), state.Username, req.CurrentPassword, req.NewPassword)
 	if err != nil {
+		appErr := apperror.AsError(err, "")
+		h.recordAdminAudit(r, audit.Entry{
+			ActorName:    state.Username,
+			Action:       "admin.password_change",
+			ResourceType: "admin_account",
+			ResourceID:   state.Username,
+			Status:       audit.StatusFailed,
+			ErrorCode:    string(appErr.Code),
+			ErrorMessage: appErr.Message,
+		})
 		writeJSONError(w, err)
 		return
 	}
 	h.setSessionCookie(w, r, newToken)
+	h.recordAdminAudit(r, audit.Entry{
+		ActorName:    state.Username,
+		Action:       "admin.password_change",
+		ResourceType: "admin_account",
+		ResourceID:   state.Username,
+		Status:       audit.StatusSuccess,
+	})
 	writeJSON(w, http.StatusOK, withSessionVersion(newState))
 }
 
@@ -648,6 +769,13 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "create tenant", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &id,
+			Action:       "tenant.create",
+			ResourceType: "tenant",
+			ResourceID:   id.String(),
+			Details:      map[string]any{"name": strings.TrimSpace(req.Name)},
+		})
 		writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": strings.TrimSpace(req.Name), "status": "active"})
 
 	case http.MethodPatch:
@@ -708,6 +836,13 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit rename tenant tx", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &id,
+			Action:       "tenant.update",
+			ResourceType: "tenant",
+			ResourceID:   id.String(),
+			Details:      map[string]any{"name": newName},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": newName, "status": status, "created_at": createdAt})
 
 	case http.MethodDelete:
@@ -773,6 +908,13 @@ func (h *Handler) handleTenants(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit delete tenant tx", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &id,
+			Action:       "tenant.delete",
+			ResourceType: "tenant",
+			ResourceID:   id.String(),
+			Details:      map[string]any{"name": tenantName},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": id, "name": tenantName})
 
 	default:
@@ -958,6 +1100,21 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 		if req.Mode == "update_role" {
 			status = http.StatusOK
 		}
+		action := "principal." + req.Mode
+		if req.Mode != "create" && req.Mode != "bind" && req.Mode != "update_role" {
+			action = "principal.upsert"
+		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			Action:       action,
+			ResourceType: "principal",
+			ResourceID:   pid.String(),
+			Details: map[string]any{
+				"mode":         req.Mode,
+				"tenant_role":  req.TenantRole,
+				"display_name": strings.TrimSpace(req.DisplayName),
+			},
+		})
 		writeJSON(w, status, map[string]any{"principal_id": pid, "tenant_id": tid, "role": req.TenantRole, "mode": req.Mode})
 
 	case http.MethodPatch:
@@ -1002,6 +1159,12 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "rename principal", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			Action:       "principal.update",
+			ResourceType: "principal",
+			ResourceID:   pid.String(),
+			Details:      map[string]any{"display_name": displayName},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{
 			"id":                pid,
 			"identity_provider": provider,
@@ -1092,6 +1255,13 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit remove principal from tenant tx", err))
 				return
 			}
+			h.recordAdminAudit(r, audit.Entry{
+				TenantID:     &tid,
+				Action:       "principal.remove_from_tenant",
+				ResourceType: "principal",
+				ResourceID:   pid.String(),
+				Details:      map[string]any{"display_name": displayName},
+			})
 			writeJSON(w, http.StatusOK, map[string]any{"status": "removed_from_tenant", "id": pid, "tenant_id": tid})
 			return
 		}
@@ -1132,6 +1302,12 @@ func (h *Handler) handlePrincipals(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit delete principal tx", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			Action:       "principal.delete",
+			ResourceType: "principal",
+			ResourceID:   pid.String(),
+			Details:      map[string]any{"display_name": displayName, "scope": scope},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": pid, "display_name": displayName})
 
 	default:
@@ -1317,6 +1493,19 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			ProjectID:    &projID,
+			Action:       "project.create",
+			ResourceType: "project",
+			ResourceID:   projID.String(),
+			Details: map[string]any{
+				"name":             strings.TrimSpace(req.Name),
+				"canonical_remote": observability.SanitizeRemoteURL(canonRemote),
+				"workspace_path":   wsPath,
+			},
+		})
+
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"project_id":       projID,
 			"tenant_id":        tid,
@@ -1387,6 +1576,13 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "revoke project permission", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			ProjectID:    &pid,
+			Action:       "project.member_revoke",
+			ResourceType: "project_member",
+			ResourceID:   prinID.String(),
+			Details:      map[string]any{"project_id": pid.String(), "role": "none"},
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"project_id": pid, "principal_id": prinID, "role": "none"})
 		return
 	}
@@ -1400,6 +1596,13 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "upsert project member", err))
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		ProjectID:    &pid,
+		Action:       "project.member_upsert",
+		ResourceType: "project_member",
+		ResourceID:   prinID.String(),
+		Details:      map[string]any{"project_id": pid.String(), "role": req.Role},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"project_id": pid, "principal_id": prinID, "role": req.Role})
 }
 
@@ -1472,6 +1675,17 @@ func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit repository registration", err))
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tid,
+		ProjectID:    &pid,
+		Action:       "project.remote_add",
+		ResourceType: "project_repository",
+		ResourceID:   repoID.String(),
+		Details: map[string]any{
+			"canonical_remote": observability.SanitizeRemoteURL(canonRemote),
+			"workspace_path":   wsPath,
+		},
+	})
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":               repoID,
 		"project_id":       pid,
@@ -1589,6 +1803,17 @@ func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "insert api token", err))
 			return
 		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			Action:       "token.issue",
+			ResourceType: "api_token",
+			ResourceID:   tokenID.String(),
+			Details: map[string]any{
+				"principal_id": pid.String(),
+				"token_prefix": prefix,
+				"token_name":   strings.TrimSpace(req.Name),
+			},
+		})
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":           tokenID,
 			"token":        rawToken,
@@ -1643,6 +1868,11 @@ func (h *Handler) handleRevealToken(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "无法解密该 Token（可能服务端 context_sign_key 已变更）；请重新生成"))
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		Action:       "token.reveal",
+		ResourceType: "api_token",
+		ResourceID:   id.String(),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":    id,
 		"token": rawToken,
@@ -1673,6 +1903,11 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "revoke token", err))
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		Action:       "token.revoke",
+		ResourceType: "api_token",
+		ResourceID:   id.String(),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "revoked"})
 }
 
@@ -1949,6 +2184,13 @@ func (h *Handler) handleRestoreMemory(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tid,
+		Action:       "memory.restore",
+		ResourceType: "memory",
+		ResourceID:   memID.String(),
+		Details:      map[string]any{"expected_version": req.ExpectedVersion},
+	})
 	writeJSON(w, http.StatusOK, restored)
 }
 
@@ -2003,6 +2245,13 @@ func (h *Handler) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tid,
+		Action:       "memory.delete",
+		ResourceType: "memory",
+		ResourceID:   memID.String(),
+		Details:      map[string]any{"expected_version": req.ExpectedVersion},
+	})
 	writeJSON(w, http.StatusOK, deleted)
 }
 
@@ -2024,6 +2273,17 @@ func (h *Handler) handlePinMemory(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
+	action := "memory.unpin"
+	if req.IsPinned {
+		action = "memory.pin"
+	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tid,
+		Action:       action,
+		ResourceType: "memory",
+		ResourceID:   memID.String(),
+		Details:      map[string]any{"expected_version": req.ExpectedVersion, "is_pinned": req.IsPinned},
+	})
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -2255,6 +2515,17 @@ func (h *Handler) handlePurge(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, err)
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &ticket.TenantID,
+		ProjectID:    ticket.ProjectID,
+		Action:       "memory.purge",
+		ResourceType: "memory",
+		Details: map[string]any{
+			"scope":  ticket.Scope,
+			"mode":   ticket.Mode,
+			"purged": purged,
+		},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"purged": purged})
 }
 
@@ -2285,6 +2556,11 @@ func (h *Handler) handleExport(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "export markdown failed: "+err.Error(), err))
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		Action:       "export.markdown",
+		ResourceType: "export",
+		Details:      map[string]any{"exported_count": count},
+	})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"exported_count": count,
 		"output_dir":     h.exporter.OutputDir(),
@@ -2302,6 +2578,11 @@ func (h *Handler) handleExportArchive(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "export markdown archive failed: "+err.Error(), err))
 		return
 	}
+	h.recordAdminAudit(r, audit.Entry{
+		Action:       "export.archive",
+		ResourceType: "export",
+		Details:      map[string]any{"exported_count": count},
+	})
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="engram-markdown-export.zip"`)
 	w.Header().Set("X-Exported-Count", fmt.Sprintf("%d", count))

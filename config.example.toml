@@ -39,5 +39,16 @@ output_dir = "./export"
 interval = "5m"
 git_commit = false
 
+[audit]
+enabled = true
+retention = "30d"
+log_reads = true
+
+[scheduler]
+enabled = true
+audit_cleanup_enabled = true
+audit_cleanup_interval = "1h"
+audit_cleanup_batch_size = 1000
+
 [log]
 level = "info"

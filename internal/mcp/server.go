@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"engram/internal/apperror"
+	"engram/internal/audit"
 	"engram/internal/auth"
 	"engram/internal/db"
 	"engram/internal/memory"
@@ -24,14 +26,43 @@ const ProtocolVersion = "2025-03-26"
 
 // Server implements the MCP Streamable HTTP transport and operational endpoints.
 type Server struct {
-	db      *db.Database
-	auth    *auth.Authenticator
-	signer  *auth.TokenSigner
-	service *memory.Service
-	hub     *notify.Hub
-	metrics *observability.Metrics
-	log     zerolog.Logger
-	mux     *http.ServeMux
+	db       *db.Database
+	auth     *auth.Authenticator
+	signer   *auth.TokenSigner
+	service  *memory.Service
+	hub      *notify.Hub
+	metrics  *observability.Metrics
+	auditSvc *audit.Service
+	log      zerolog.Logger
+	mux      *http.ServeMux
+}
+
+// SetAuditService attaches an audit service to record MCP tool calls and auth failures.
+func (s *Server) SetAuditService(svc *audit.Service) {
+	s.auditSvc = svc
+}
+
+type clientIPCtxKey struct{}
+
+func withClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, clientIPCtxKey{}, ip)
+}
+
+func clientIPFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(clientIPCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func extractClientIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr)); err == nil && host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func NewServer(
@@ -139,16 +170,28 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		reqID = "req_" + uuid.NewString()
 	}
 	w.Header().Set("X-Request-Id", reqID)
+	clientIP := extractClientIP(r)
 
 	principal, err := s.auth.AuthenticateRequest(r.Context(), r)
 	if err != nil {
 		appErr := apperror.AsError(err, reqID)
+		s.auditSvc.Record(r.Context(), audit.Entry{
+			ActorType:    audit.ActorAnonymous,
+			Source:       audit.SourceMCP,
+			Action:       "mcp.auth",
+			ResourceType: "mcp",
+			Status:       audit.StatusDenied,
+			ErrorCode:    string(appErr.Code),
+			ErrorMessage: appErr.Message,
+			RequestID:    reqID,
+			ClientIP:     clientIP,
+		})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(appErr.HTTPStatus())
 		_ = json.NewEncoder(w).Encode(appErr)
 		return
 	}
-	ctx := auth.WithPrincipal(r.Context(), principal)
+	ctx := auth.WithPrincipal(withClientIP(r.Context(), clientIP), principal)
 
 	switch r.Method {
 	case http.MethodPost:
@@ -420,6 +463,8 @@ func (s *Server) dispatchToolCall(ctx context.Context, principal auth.Principal,
 		s.metrics.ObserveToolCall(toolName, duration, err != nil)
 	}
 
+	s.recordToolAudit(ctx, principal, toolName, rawArgs, res, err, reqID, duration)
+
 	if err != nil {
 		appErr := apperror.AsError(err, reqID)
 		s.log.Info().
@@ -456,6 +501,145 @@ func (s *Server) dispatchToolCall(ctx context.Context, principal auth.Principal,
 		},
 		IsError: false,
 	}
+}
+
+func isReadOnlyTool(toolName string) bool {
+	switch toolName {
+	case "memory_discover", "memory_query", "memory_read", "memory_changes":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) recordToolAudit(ctx context.Context, principal auth.Principal, toolName string, rawArgs json.RawMessage, res any, callErr error, reqID string, duration time.Duration) {
+	if s.auditSvc == nil || !s.auditSvc.Enabled() {
+		return
+	}
+	if callErr == nil && isReadOnlyTool(toolName) && !s.auditSvc.LogReads() {
+		return
+	}
+
+	var argPeek struct {
+		AgentName string `json:"agent_name"`
+		MemoryID  string `json:"memory_id"`
+		Scope     string `json:"scope"`
+		Category  string `json:"category"`
+		Title     string `json:"title"`
+		Query     string `json:"query"`
+		Name      string `json:"name"`
+	}
+	if len(rawArgs) > 0 {
+		_ = json.Unmarshal(rawArgs, &argPeek)
+	}
+
+	tenantID := principal.TenantID
+	entry := audit.Entry{
+		TenantID:   &tenantID,
+		ActorType:  audit.ActorPrincipal,
+		ActorID:    principal.PrincipalID.String(),
+		ActorName:  principal.DisplayName,
+		AgentName:  strings.TrimSpace(argPeek.AgentName),
+		Source:     audit.SourceMCP,
+		Action:     "mcp." + toolName,
+		Status:     audit.StatusSuccess,
+		RequestID:  reqID,
+		ClientIP:   clientIPFromContext(ctx),
+		DurationMS: duration.Milliseconds(),
+		Details:    map[string]any{},
+	}
+
+	switch toolName {
+	case "project_register":
+		entry.ResourceType = "project"
+		if argPeek.Name != "" {
+			entry.Details["project_name"] = argPeek.Name
+		}
+	case "memory_discover":
+		entry.ResourceType = "project"
+	case "memory_query", "memory_changes":
+		entry.ResourceType = "memory"
+		if argPeek.Query != "" {
+			entry.Details["query"] = argPeek.Query
+		}
+	case "memory_read", "memory_create", "memory_update", "memory_delete", "memory_promote":
+		entry.ResourceType = "memory"
+		if argPeek.MemoryID != "" {
+			entry.ResourceID = argPeek.MemoryID
+		}
+		if argPeek.Scope != "" {
+			entry.Details["scope"] = argPeek.Scope
+		}
+		if argPeek.Category != "" {
+			entry.Details["category"] = argPeek.Category
+		}
+		if argPeek.Title != "" {
+			entry.Details["title"] = argPeek.Title
+		}
+	}
+
+	switch r := res.(type) {
+	case *memory.DiscoverResponse:
+		if r != nil {
+			entry.Details["mode"] = r.Mode
+			if r.Project != nil {
+				pid := r.Project.ID
+				entry.ProjectID = &pid
+				entry.ResourceID = pid.String()
+				entry.Details["project_name"] = r.Project.Name
+			}
+		}
+	case *memory.RegisterProjectResponse:
+		if r != nil {
+			pid := r.Project.ID
+			entry.ProjectID = &pid
+			entry.ResourceID = pid.String()
+			entry.Details["project_name"] = r.Project.Name
+		}
+	case *memory.QueryResponse:
+		if r != nil {
+			entry.Details["result_count"] = len(r.Items)
+		}
+	case *memory.ReadResponse:
+		if r != nil {
+			entry.ResourceID = r.Memory.ID.String()
+			entry.ProjectID = r.Memory.ProjectID
+			entry.Details["scope"] = r.Memory.Scope
+			entry.Details["version"] = r.Memory.Version
+			entry.Details["title"] = r.Memory.Title
+		}
+	case *memory.WriteMemoryResponse:
+		if r != nil {
+			entry.ResourceID = r.Memory.ID.String()
+			entry.ProjectID = r.Memory.ProjectID
+			entry.Details["scope"] = r.Memory.Scope
+			entry.Details["category"] = r.Memory.Category
+			entry.Details["version"] = r.Memory.Version
+			entry.Details["title"] = r.Memory.Title
+		}
+	case *memory.DeleteResponse:
+		if r != nil {
+			entry.ResourceID = r.MemoryID.String()
+			entry.Details["version"] = r.Version
+		}
+	case *memory.ChangesResponse:
+		if r != nil {
+			entry.Details["event_count"] = len(r.Events)
+		}
+	}
+
+	if callErr != nil {
+		appErr := apperror.AsError(callErr, reqID)
+		entry.ErrorCode = string(appErr.Code)
+		entry.ErrorMessage = appErr.Message
+		if appErr.Code == apperror.CodeUnauthorized || appErr.Code == apperror.CodeUnauthenticated || appErr.Code == apperror.CodeRateLimited {
+			entry.Status = audit.StatusDenied
+		} else {
+			entry.Status = audit.StatusFailed
+		}
+	}
+
+	s.auditSvc.Record(ctx, entry)
 }
 
 func writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string, data any) {

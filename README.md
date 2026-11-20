@@ -10,7 +10,8 @@ See [DESIGN.md](./DESIGN.md) for the complete technical design specification.
   - First-boot temporary admin password printed to console output; forced password change on initial login.
   - Password reset flow triggered via `RESET_ADMIN=true` (or `reset_admin=true`) environment variable.
   - Tenant and member management with client keys and ready-to-copy MCP configuration in each member's detail view. The overview shows statistics and recent memories, with a create-tenant guide for first-time use.
-  - Visual management of Tenants, Principals, Projects, Monorepo `workspace_path` mappings, API Tokens, soft-deleted Memory restoration, revision history inspection, and Markdown export.
+  - Visual management of Tenants, Principals, Projects, Monorepo `workspace_path` mappings, API Tokens, soft-deleted Memory restoration, revision history inspection, Markdown export, Audit Center (`/audit`), and Scheduled Tasks (`/scheduler`).
+- **Audit & Scheduled Tasks**: Persistent audit logging for MCP tool calls and console operations, built-in on-demand audit inspection tasks (`credential_hygiene`, `security_events`, `data_integrity`), and a PostgreSQL-backed task scheduler with a built-in expired audit log cleanup job (`audit_log_cleanup`, configurable retention and interval).
 - **Two-Tier Memory Hierarchy**: Tenant Global Memory (`scope = "global"`) and Project Memory (`scope = "project"`).
 - **Streamable HTTP MCP Transport (`/mcp`)**: Exposes 9 MCP tools (`project_register`, `memory_discover`, `memory_query`, `memory_read`, `memory_create`, `memory_update`, `memory_delete`, `memory_changes`, `memory_promote`).
 - **Transactional Concurrency & Idempotency**: Optimistic locking (`expected_version`), full revision snapshots (`memory_revisions`), tenant-serialized commit-ordered change feed (`memory_events`), and `idempotency_requests`.
@@ -138,3 +139,11 @@ Migration 005 also clears **all cached idempotency responses**. A write retried 
 Existing SSE streams reauthenticate their original credentials and member grants before each notice and every 15-second keepalive, and require the verified tenant and member IDs to match the original subscription. Revoked or expired API tokens therefore terminate existing streams on the next check. A `memory_discover` context without any readable scope receives a signed cursor at revision zero instead of the tenant event high-water mark; query and changes requests remain unauthorized.
 
 Knowledge-bundle imports may create or map to disabled tenants without activating them. Import audit records use the console-only identity, while interactive console memory operations still require an active tenant.
+
+### Audit & Scheduled Tasks
+
+Migration `008_audit_and_scheduler.sql` adds `audit_logs`, `audit_task_runs`, `scheduled_tasks`, and `scheduled_task_runs`:
+
+- **Audit Center (`/audit`)**: Records MCP tool invocations (and auth failures) plus Admin Web UI management actions with sensitive fields redacted. Supports multi-criteria filtering, JSON export, manual expiration cleanup, and three built-in audit inspection tasks: `credential_hygiene`, `security_events`, and `data_integrity`.
+- **Scheduled Tasks (`/scheduler`)**: Uses PostgreSQL advisory locks (`pg_try_advisory_lock`) for safe single execution across instances. Built-in task `audit_log_cleanup` periodically deletes audit logs older than the configured retention duration (e.g. `30d`, `720h`, `24h`) in bounded batches.
+- **Configuration**: Configure defaults via `[audit]` and `[scheduler]` in `config.toml` or environment variables (`ENGRAM_AUDIT_ENABLED`, `ENGRAM_AUDIT_RETENTION`, `ENGRAM_AUDIT_LOG_READS`, `ENGRAM_SCHEDULER_ENABLED`, `ENGRAM_AUDIT_CLEANUP_ENABLED`, `ENGRAM_AUDIT_CLEANUP_INTERVAL`, `ENGRAM_AUDIT_CLEANUP_BATCH_SIZE`), and tune interval, retention, batch size, and enabled state live from the console.

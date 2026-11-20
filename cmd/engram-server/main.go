@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"engram/internal/admin"
+	"engram/internal/audit"
 	"engram/internal/auth"
 	"engram/internal/config"
 	"engram/internal/db"
@@ -21,6 +22,7 @@ import (
 	"engram/internal/notify"
 	"engram/internal/observability"
 	"engram/internal/project"
+	"engram/internal/scheduler"
 	"engram/internal/version"
 )
 
@@ -71,9 +73,18 @@ func main() {
 	rateLimiter := auth.NewRateLimiter(cfg.Limits.WriteRatePerMinute, cfg.Limits.WriteBurst)
 	resolver := project.NewResolver(database.Pool)
 	hub := notify.NewHub(database.Pool, signer, log)
+	auditSvc := audit.NewService(database.Pool, cfg.Audit, metrics, log)
+	sched := scheduler.New(database.Pool, cfg.Scheduler, auditSvc, metrics, log)
+	if err := sched.RegisterBuiltinTasks(cfg.Audit); err != nil {
+		log.Fatal().Err(err).Msg("failed to register builtin scheduled tasks")
+	}
+	if err := sched.Sync(ctx); err != nil {
+		log.Fatal().Err(err).Msg("failed to sync scheduled tasks")
+	}
 
 	go hub.RunListenLoop(ctx)
 	go exp.RunPeriodicLoop(ctx)
+	go sched.RunLoop(ctx)
 
 	svc := memory.NewService(
 		database.Pool,
@@ -96,8 +107,11 @@ func main() {
 		metrics,
 		log,
 	)
+	mcpServer.SetAuditService(auditSvc)
 
 	adminHandler := admin.NewHandler(database.Pool, adminAuth, svc, exp, log)
+	adminHandler.SetAuditService(auditSvc)
+	adminHandler.SetScheduler(sched)
 	adminHandler.RegisterRoutes(mcpServer.Mux())
 
 	httpServer := &http.Server{

@@ -29,6 +29,10 @@ type Metrics struct {
 	lastEventLagMillis atomic.Int64
 	exportBacklog      atomic.Int64
 	lastExportUnix     atomic.Int64
+	auditEventsTotal   atomic.Int64
+	auditCleanupTotal  atomic.Int64
+	schedulerRunsTotal atomic.Int64
+	schedulerErrsTotal atomic.Int64
 }
 
 func NewMetrics() *Metrics {
@@ -89,6 +93,23 @@ func (m *Metrics) SetExportBacklog(backlog int64) {
 	m.lastExportUnix.Store(time.Now().UTC().Unix())
 }
 
+func (m *Metrics) IncAuditEvent() {
+	m.auditEventsTotal.Add(1)
+}
+
+func (m *Metrics) AddAuditCleanupDeleted(n int64) {
+	if n > 0 {
+		m.auditCleanupTotal.Add(n)
+	}
+}
+
+func (m *Metrics) ObserveSchedulerRun(isErr bool) {
+	m.schedulerRunsTotal.Add(1)
+	if isErr {
+		m.schedulerErrsTotal.Add(1)
+	}
+}
+
 // RenderPrometheus outputs metrics in Prometheus text exposition format.
 func (m *Metrics) RenderPrometheus(pool *pgxpool.Pool) string {
 	var b strings.Builder
@@ -115,6 +136,10 @@ func (m *Metrics) RenderPrometheus(pool *pgxpool.Pool) string {
 	fmt.Fprintf(&b, "memory_event_lag_milliseconds %d\n", m.lastEventLagMillis.Load())
 	fmt.Fprintf(&b, "memory_export_backlog_count %d\n", m.exportBacklog.Load())
 	fmt.Fprintf(&b, "memory_export_last_timestamp_seconds %d\n", m.lastExportUnix.Load())
+	fmt.Fprintf(&b, "engram_audit_events_total %d\n", m.auditEventsTotal.Load())
+	fmt.Fprintf(&b, "engram_audit_cleanup_deleted_total %d\n", m.auditCleanupTotal.Load())
+	fmt.Fprintf(&b, "engram_scheduler_runs_total %d\n", m.schedulerRunsTotal.Load())
+	fmt.Fprintf(&b, "engram_scheduler_errors_total %d\n", m.schedulerErrsTotal.Load())
 
 	if pool != nil {
 		stat := pool.Stat()

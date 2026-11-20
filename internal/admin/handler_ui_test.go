@@ -449,6 +449,8 @@ func TestUIRoutePathsAndMux(t *testing.T) {
 		{"/tenants", true},
 		{"/tenants/tenant-1", true},
 		{"/tenants/tenant-1/members/member-1", true},
+		{"/audit", true},
+		{"/scheduler", true},
 		{"/migration", true},
 		{"/memories/a/b", false},
 		{"/tenants/tenant-1/members", false},
@@ -465,7 +467,7 @@ func TestUIRoutePathsAndMux(t *testing.T) {
 	mux := http.NewServeMux()
 	(&Handler{}).RegisterRoutes(mux)
 
-	for _, path := range []string{"/overview", "/memories", "/tenants/t1/members/m1", "/migration"} {
+	for _, path := range []string{"/overview", "/memories", "/tenants/t1/members/m1", "/audit", "/scheduler", "/migration"} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<div id="app-view"`) {
