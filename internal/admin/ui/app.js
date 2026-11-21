@@ -3425,19 +3425,21 @@
     tbody.innerHTML = state.schedulerTasks.map((task) => {
       const calendar = task.schedule_type && task.schedule_type !== "interval";
       const nextAt = task.enabled && task.next_run_at ? (calendar ? formatScheduleTime(task.next_run_at, task.timezone) : formatDate(task.next_run_at)) : "—";
+      // 列表仅展示单行摘要，完整执行结果通过任务记录查看。
+      const lastSummary = task.last_summary || task.last_error || "—";
       const lastOutcome = task.last_run_at
-        ? `<span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span><div class="date-cell">${escapeHtml(formatDate(task.last_run_at))}</div><details class="scheduler-outcome"><summary>${escapeHtml(task.last_summary || task.last_error || "—")}</summary></details>`
+        ? `<div class="scheduler-last-run"><span class="badge ${schedStatusBadgeClass(task.last_status)}">${escapeHtml(SCHED_STATUSES[task.last_status] || task.last_status)}</span><time class="date-cell" datetime="${escapeHtml(task.last_run_at)}">${escapeHtml(formatDate(task.last_run_at))}</time></div><p class="scheduler-outcome" title="${escapeHtml(lastSummary)}">${escapeHtml(lastSummary)}</p>`
         : "—";
       const description = calendar ? describeTaskCron(task.cron_expression || "") : formatDurationSeconds(task.interval_seconds);
       const expression = calendar ? task.cron_expression : formatIntervalInput(task.interval_seconds);
       return `<tr>
-        <td><strong>${escapeHtml(t(task.display_name) || task.name)}</strong><div class="scheduler-task-desc">${escapeHtml(t(task.description) || "")}</div></td>
-        <td>${description ? `<div>${escapeHtml(description)}</div>` : ""}<code class="scheduler-plan-code">${escapeHtml(expression)}</code>${calendar ? `<div class="scheduler-plan-zone">${escapeHtml(task.timezone)}</div>` : ""}</td>
+        <td><strong>${escapeHtml(t(task.display_name) || task.name)}</strong><div class="scheduler-task-desc" title="${escapeHtml(t(task.description) || "")}">${escapeHtml(t(task.description) || "")}</div></td>
+        <td>${description ? `<div>${escapeHtml(description)}</div>` : ""}<code class="scheduler-plan-code" title="${escapeHtml(expression)}">${escapeHtml(expression)}</code>${calendar ? `<div class="scheduler-plan-zone">${escapeHtml(task.timezone)}</div>` : ""}</td>
         <td class="date-cell">${escapeHtml(nextAt)}</td>
         <td>${lastOutcome}</td>
         <td><button type="button" role="switch" aria-checked="${!!task.enabled}" aria-label="${escapeHtml(t(task.display_name) || task.name)} · ${task.enabled ? t("停用") : t("启用")}" class="task-switch btn-sched-toggle" data-name="${escapeHtml(task.name)}" data-enabled="${!!task.enabled}"><span aria-hidden="true"></span></button></td>
         <td><div class="row-actions">
-          <button type="button" class="secondary small btn-sched-run" data-name="${escapeHtml(task.name)}">${t("立即执行")}</button>
+          <button type="button" class="small btn-sched-run" data-name="${escapeHtml(task.name)}">${t("立即执行")}</button>
           <button type="button" class="secondary small btn-sched-config" data-name="${escapeHtml(task.name)}">${t("编辑")}</button>
           <button type="button" class="secondary small btn-sched-history" data-name="${escapeHtml(task.name)}">${t("记录")}</button>
         </div></td>
