@@ -176,12 +176,28 @@
             <strong class="value" id="stat-tokens">0</strong>
           </button>
         </div>
-        <details class="secondary-stats" open>
-          <summary>更多统计</summary>
+        <div class="secondary-stats">
           <div class="compact-stats">
-            <span>租户 <strong id="stat-tenants">0</strong></span><span>成员 <strong id="stat-principals">0</strong></span><span>已删除知识 <strong id="stat-deleted">0</strong></span><span>变更事件 <strong id="stat-events">0</strong></span>
+            <span>租户 <strong id="stat-tenants">0</strong></span>
+            <span id="stat-principals-wrap" title="包含系统中全部非内置成员账号">成员 <strong id="stat-principals">0</strong></span>
+            <span>已删除知识 <strong id="stat-deleted">0</strong></span>
+            <span>变更事件 <strong id="stat-events">0</strong></span>
           </div>
-        </details>
+        </div>
+        <div class="overview-health hidden" id="overview-health">
+          <button type="button" class="health-chip" id="btn-overview-health-audit">
+            <span class="health-dot" id="overview-health-audit-dot" aria-hidden="true"></span>
+            <span class="health-label">近 24 小时异常/拒绝</span>
+            <strong id="overview-health-audit-val">0</strong>
+            <span class="health-arrow" aria-hidden="true">→</span>
+          </button>
+          <button type="button" class="health-chip" id="btn-overview-health-backup">
+            <span class="health-dot" id="overview-health-backup-dot" aria-hidden="true"></span>
+            <span class="health-label">SafeKeep 自动备份</span>
+            <strong id="overview-health-backup-val">—</strong>
+            <span class="health-arrow" aria-hidden="true">→</span>
+          </button>
+        </div>
 
         <section class="card hidden" id="overview-setup" aria-labelledby="overview-setup-title">
           <h2 id="overview-setup-title">从创建租户开始</h2>
@@ -204,30 +220,31 @@
           <div class="card">
             <table id="tenants-table"><thead><tr><th>租户名称</th><th>成员数</th><th>有效项目</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
           </div>
-        <div class="card hidden" id="create-tenant-card">
-          <div class="section-heading"><h2>新建租户</h2><button type="button" class="secondary small" id="btn-cancel-tenant">取消</button></div>
-          <form id="create-tenant-form">
-            <div class="form-group"><label for="tenant-name">租户名称</label><input type="text" id="tenant-name" placeholder="例如：engineering" required /></div>
-            <button type="submit">创建租户</button>
-          </form>
+        <div id="create-tenant-card" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="create-tenant-title">
+          <div class="modal-card confirm-card">
+            <div class="modal-header"><h2 id="create-tenant-title">新建租户</h2><button type="button" class="secondary small" id="btn-cancel-tenant">取消</button></div>
+            <form id="create-tenant-form">
+              <div class="form-group"><label for="tenant-name">租户名称</label><input type="text" id="tenant-name" placeholder="例如：engineering" required /></div>
+              <div class="button-row confirm-actions"><button type="submit">创建租户</button></div>
+            </form>
+          </div>
         </div>
         </div>
         <div id="tenant-detail-view" class="hidden">
         <div class="card tenant-context">
           <div class="section-heading">
-            <div><p class="eyebrow">租户详情</p><h2 id="tenant-detail-title" tabindex="-1"></h2></div>
+            <div><p class="eyebrow">租户详情</p><div class="title-with-badge"><h2 id="tenant-detail-title" tabindex="-1"></h2><span id="tenant-status" class="badge"></span></div></div>
             <div class="button-row" style="align-items:center;">
-              <span id="tenant-status" class="badge"></span>
               <button type="button" class="secondary small" id="btn-rename-tenant">改名</button>
               <button type="button" class="danger-outline small" id="btn-delete-tenant">删除</button>
             </div>
           </div>
           <p class="desc">同一租户共享全局记忆，项目记忆按权限访问。不同租户的数据互相隔离。</p>
           <div id="tenant-summary" class="compact-stats" role="status"></div>
-          <details class="identity-details"><summary>租户详情</summary><div id="tenant-identity"></div></details>
+          <details class="identity-details"><summary>技术标识与创建时间</summary><div id="tenant-identity"></div></details>
         </div>
         <div class="card">
-          <div class="section-heading"><div><h2>当前租户的成员</h2><p class="desc">选择“管理”，集中查看全局权限、项目授权和客户端密钥。</p></div><button type="button" id="btn-add-member">添加成员</button></div>
+          <div class="section-heading"><div><h2>当前租户的成员</h2><p class="desc">点击成员行或“管理”，集中查看客户端密钥、全局权限与项目授权。</p></div><button type="button" id="btn-add-member">添加成员</button></div>
           <table id="principals-table">
             <thead>
               <tr><th>成员名称</th><th>全局记忆权限</th><th>创建项目</th><th>项目访问</th><th>未吊销密钥</th><th>状态</th><th>操作</th></tr>
@@ -235,10 +252,11 @@
             <tbody></tbody>
           </table>
         </div>
-        <div class="card hidden" id="tenant-forms-panel">
-          <div class="section-heading"><h2>添加成员</h2><button type="button" class="secondary small" id="btn-cancel-member">取消</button></div>
-          <p class="desc" id="member-form-context"></p>
-          <p class="desc">同一个成员可以加入多个租户，并在不同租户拥有不同角色。每个客户端密钥绑定一个租户和一个成员。</p>
+        <div id="tenant-forms-panel" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="add-member-title">
+          <div class="modal-card">
+            <div class="modal-header"><h2 id="add-member-title">添加成员</h2><button type="button" class="secondary small" id="btn-cancel-member">取消</button></div>
+            <p class="desc" id="member-form-context"></p>
+            <p class="desc">同一个成员可以加入多个租户，并在不同租户拥有不同角色。每个客户端密钥绑定一个租户和一个成员。</p>
             <form id="create-principal-form">
               <input type="hidden" id="prin-tenant" />
               <div class="form-group">
@@ -284,8 +302,9 @@
                 </select>
                 <small class="field-hint">在本控制台签发客户端密钥时选「客户端密钥」。</small>
               </details>
-              <button type="submit" id="btn-save-principal">创建新成员</button>
+              <div class="button-row confirm-actions"><button type="submit" id="btn-save-principal">创建新成员</button></div>
             </form>
+          </div>
         </div>
         </div>
         <article class="card member-detail hidden" id="member-detail-card" aria-labelledby="member-detail-title">
@@ -300,23 +319,30 @@
           </div>
           <p class="desc" id="member-detail-status"></p>
           <section class="member-section">
-            <h3>全局记忆与创建项目权限</h3>
-            <form id="member-role-form">
-              <div class="form-group"><label for="member-role">全局记忆权限</label><select id="member-role"><option value="none">无权限</option><option value="member">只读</option><option value="global_writer">读写</option></select><small class="field-hint" id="member-role-hint"></small></div>
-              <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="member-create-project" /> 允许 Agent 自主创建项目</label><small class="field-hint">独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。</small></div>
-              <button type="submit" class="secondary">保存成员权限</button>
-            </form>
-          </section>
-          <section class="member-section">
-            <h3>项目权限</h3>
-            <p class="desc">全局读写权限不会自动授予项目访问权限。下方展示该成员在当前租户的项目授权。</p>
-            <table id="member-projects-table"><thead><tr><th>项目</th><th>当前权限</th><th>调整授权</th></tr></thead><tbody></tbody></table>
-          </section>
-          <section class="member-section">
             <h3>客户端密钥</h3>
             <p class="desc">这里仅展示该成员在当前租户下的密钥。选择密钥行的“配置客户端”查看接入说明；新密钥沿用成员权限。</p>
             <form id="member-token-form" class="member-token-form"><div class="form-group"><label for="member-token-name">客户端名称</label><input type="text" id="member-token-name" placeholder="例如：macbook-codex 或 macmini-claude" required /></div><button type="submit">签发新密钥</button></form>
             <table id="member-tokens-table"><thead><tr><th>客户端名称</th><th>密钥</th><th>状态</th><th>最近使用</th><th>创建时间</th><th>操作</th></tr></thead><tbody></tbody></table>
+          </section>
+          <section class="member-section">
+            <h3>全局记忆与创建项目权限</h3>
+            <form id="member-role-form" class="member-role-inline">
+              <div class="form-group"><label for="member-role">全局记忆权限</label><select id="member-role"><option value="none">无权限</option><option value="member">只读</option><option value="global_writer">读写</option></select><small class="field-hint" id="member-role-hint"></small></div>
+              <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="member-create-project" /> 允许 Agent 自主创建项目</label><small class="field-hint">独立于全局记忆和已有项目权限；创建者自动获得新项目的读写权限。</small></div>
+              <div class="form-group member-role-submit"><button type="submit" class="secondary">保存成员权限</button></div>
+            </form>
+          </section>
+          <section class="member-section">
+            <div class="section-heading" style="margin-bottom:10px;">
+              <div><h3>项目权限</h3><p class="desc" style="margin-bottom:0;">全局读写权限不会自动授予项目访问权限。支持批量调整后一次保存。</p></div>
+              <div class="button-row" id="member-projects-batch-bar">
+                <button type="button" class="secondary small" id="btn-member-projects-all-writer">全部读写</button>
+                <button type="button" class="secondary small" id="btn-member-projects-all-reader">全部只读</button>
+                <button type="button" class="secondary small" id="btn-member-projects-all-none">全部取消</button>
+                <button type="button" class="small" id="btn-save-all-member-projects" disabled>保存全部改动</button>
+              </div>
+            </div>
+            <table id="member-projects-table"><thead><tr><th>项目</th><th>当前权限</th><th>调整授权</th></tr></thead><tbody></tbody></table>
           </section>
           <details class="identity-details"><summary>身份详情 · 标识与认证方式</summary><div id="member-identity"></div></details>
         </article>
@@ -328,11 +354,19 @@
         <div id="project-list-view">
           <div class="page-heading"><div><p class="eyebrow">项目工作空间</p><h1 id="project-list-title" tabindex="-1">项目列表</h1><p class="desc">选择项目，管理仓库地址和成员权限。</p></div><button type="button" id="btn-new-project">注册项目</button></div>
           <div class="card">
-            <table id="projects-table"><thead><tr><th>项目名称</th><th>所属租户</th><th>仓库数</th><th>项目成员</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
+            <div class="project-list-toolbar">
+              <div class="filter-search">
+                <label for="project-filter-q" class="sr-only">搜索项目</label>
+                <input type="search" id="project-filter-q" placeholder="搜索项目名称或仓库地址…" />
+              </div>
+              <label id="project-filter-tenant-wrap" class="inline-filter-label"><span>租户</span><select id="project-filter-tenant"><option value="">全部</option></select></label>
+            </div>
+            <table id="projects-table"><thead><tr><th>项目名称</th><th>所属租户</th><th>知识条数</th><th>最近更新</th><th>仓库 / 成员</th><th>状态</th><th>操作</th></tr></thead><tbody></tbody></table>
           </div>
-          <div class="card hidden" id="project-forms-panel">
-            <div class="section-heading"><h2>注册项目</h2><button type="button" class="secondary small" id="btn-cancel-project">取消</button></div>
-            <p class="desc">项目通过 Git 仓库地址或仓库里的 <code>.engram-project</code> 标记文件识别；没有仓库地址的项目请勾选生成标记文件。</p>
+          <div id="project-forms-panel" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="register-project-title">
+            <div class="modal-card">
+              <div class="modal-header"><h2 id="register-project-title">注册项目</h2><button type="button" class="secondary small" id="btn-cancel-project">取消</button></div>
+              <p class="desc">项目通过 Git 仓库地址或仓库里的 <code>.engram-project</code> 标记文件识别；没有仓库地址的项目请勾选生成标记文件。</p>
               <form id="create-project-form">
                 <div class="form-row">
                   <div class="form-group">
@@ -357,17 +391,19 @@
                 <div class="form-group">
                   <label class="checkbox-label"><input type="checkbox" id="proj-with-marker" checked /> 同时生成 <code>.engram-project</code> 标记文件 UUID</label>
                 </div>
-                <button type="submit">注册项目</button>
+                <div class="button-row confirm-actions"><button type="submit">注册项目</button></div>
               </form>
+            </div>
           </div>
         </div>
         <div id="project-detail-view" class="hidden">
           <div class="card">
             <div class="section-heading">
-              <div><p class="eyebrow">项目详情</p><h2 id="project-detail-title" tabindex="-1"></h2></div>
+              <div><p class="eyebrow">项目详情</p><div class="title-with-badge"><h2 id="project-detail-title" tabindex="-1"></h2><span id="project-detail-status" class="badge"></span></div></div>
               <div class="button-row" style="align-items:center;">
-                <span id="project-detail-status" class="badge"></span>
                 <button type="button" class="secondary small" id="btn-open-project-memories">查看知识库</button>
+                <button type="button" class="secondary small" id="btn-rename-project">改名</button>
+                <button type="button" class="danger-outline small" id="btn-delete-project">删除</button>
               </div>
             </div>
             <p class="desc" id="project-detail-context"></p>
@@ -375,7 +411,7 @@
           </div>
           <div class="card">
             <h2>仓库地址</h2>
-            <table id="project-remotes-table"><thead><tr><th>Git 仓库地址</th><th>Monorepo 子目录</th></tr></thead><tbody></tbody></table>
+            <table id="project-remotes-table"><thead><tr><th>Git 仓库地址</th><th>Monorepo 子目录</th><th>操作</th></tr></thead><tbody></tbody></table>
               <form id="add-project-remote-form">
                 <div class="form-row">
                   <div class="form-group">
@@ -392,8 +428,8 @@
           </div>
           <div class="card">
             <h2>项目成员与权限</h2>
-            <p class="desc">每个项目独立授权；全局记忆权限不影响项目权限。</p>
-            <table id="project-members-table"><thead><tr><th>成员名称</th><th>当前权限</th><th>状态</th></tr></thead><tbody></tbody></table>
+            <p class="desc">每个项目独立授权；全局记忆权限不影响项目权限。可直接调整下方已有成员权限，或从租户添加新成员。</p>
+            <table id="project-members-table"><thead><tr><th>成员名称</th><th>当前权限</th><th>状态</th><th>调整授权</th></tr></thead><tbody></tbody></table>
               <form id="add-project-member-form" class="form-divided">
                 <div class="form-row">
                   <div class="form-group">
@@ -424,19 +460,13 @@
           <p class="desc" id="client-config-context"></p>
         <details class="setup-panel" id="client-guides-card" open>
           <summary><span>客户端接入配置</span><span class="summary-hint">选择客户端 · 复制配置 · 验证连接</span></summary>
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
-            <div>
-              <h2>为 Codex / Claude Code / Gemini 生成配置</h2>
-              <p class="desc" style="margin-bottom:0;">三步完成：添加 MCP 服务、加入记忆使用说明、检查连接。</p>
+          <div class="guide-credentials" style="margin-bottom:14px;">
+            <label for="guide-token-input" style="margin-bottom:4px;">用于生成配置的客户端密钥（签发后自动填入，也可粘贴）</label>
+            <div class="secret-input">
+              <input type="password" id="guide-token-input" placeholder="aim_…，留空则显示占位符" data-secret-input />
+              <button type="button" id="btn-secret-guide-token-input" class="secondary small" data-secret-toggle="guide-token-input" aria-controls="guide-token-input" aria-pressed="false">显示明文</button>
             </div>
-            <div class="guide-credentials">
-              <label for="guide-token-input" style="margin-bottom:4px;">用于生成配置的客户端密钥（签发后自动填入，也可粘贴）</label>
-              <div class="secret-input">
-                <input type="password" id="guide-token-input" placeholder="aim_…，留空则显示占位符" data-secret-input />
-                <button type="button" id="btn-secret-guide-token-input" class="secondary small" data-secret-toggle="guide-token-input" aria-controls="guide-token-input" aria-pressed="false">显示明文</button>
-              </div>
-              <small class="field-hint" id="guide-token-hint" role="status" aria-live="polite"></small>
-            </div>
+            <small class="field-hint" id="guide-token-hint" role="status" aria-live="polite"></small>
           </div>
 
           <div class="form-group">
@@ -547,9 +577,10 @@
           <div class="page-heading">
             <div>
               <p class="eyebrow">你的共享知识</p><h1>知识库</h1>
-              <p class="desc">浏览所有租户和项目的知识，查看修订历史，从回收站恢复条目，或导出为 Markdown 压缩包。</p>
+              <p class="desc">浏览、新建、编辑所有租户和项目的知识，查看修订历史，从回收站恢复条目，或导出为 Markdown 压缩包。</p>
             </div>
             <div class="button-row">
+              <button type="button" id="btn-new-memory">新建知识</button>
               <button type="button" id="btn-download-export-zip" class="secondary" title="下载 Markdown 压缩包（.zip）">导出 Markdown</button>
               <button type="button" id="btn-open-purge" class="danger-outline">批量清空…</button>
             </div>
@@ -559,24 +590,42 @@
             <div class="filter-search">
               <label for="mem-filter-q" class="sr-only">关键词搜索</label>
               <input type="search" id="mem-filter-q" placeholder="搜索标题或正文，回车查询" />
+              <label for="mem-filter-sort" class="sr-only">排序方式</label>
+              <select id="mem-filter-sort" class="sort-select" aria-label="排序方式">
+                <option value="pinned">置顶优先</option>
+                <option value="recent">最近更新</option>
+                <option value="created">最近创建</option>
+                <option value="version">版本最高</option>
+                <option value="title">标题 A-Z</option>
+              </select>
               <button type="submit">搜索</button>
             </div>
             <button type="button" class="secondary filter-toggle" id="btn-toggle-memory-filters" aria-expanded="false" aria-controls="memory-filter-fields"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 5h14M5 10h10M8 15h4"/></svg><span>筛选条件</span><span id="memory-filter-count" class="badge hidden"></span><span class="filter-chevron" aria-hidden="true">⌄</span></button>
             <div class="filter-row" id="memory-filter-fields">
-              <label>租户<select id="mem-filter-tenant"><option value="">全部</option></select></label>
+              <label id="mem-filter-tenant-wrap">租户<select id="mem-filter-tenant"><option value="">全部</option></select></label>
               <label>范围<select id="mem-filter-scope"><option value="">全部</option><option value="global">全局记忆</option><option value="project">项目记忆</option></select></label>
               <label>项目<select id="mem-filter-project"><option value="">全部</option></select></label>
               <label>分类<select id="mem-filter-category"><option value="">全部</option></select></label>
               <label>标签<select id="mem-filter-tag"><option value="">全部</option></select></label>
+              <label>Agent<select id="mem-filter-agent"><option value="">全部</option></select></label>
               <label>状态<select id="mem-filter-deleted"><option value="active">正常</option><option value="deleted">回收站</option><option value="all">全部（含已删除）</option></select></label>
               <button type="button" class="secondary small" id="btn-clear-memory-filters">清除筛选</button>
             </div>
           </form>
 
+          <div id="memory-bulk-bar" class="bulk-bar hidden" role="region" aria-label="批量操作">
+            <span id="memory-bulk-count">已选 0 条</span>
+            <div class="button-row">
+              <button type="button" id="btn-bulk-delete-memories" class="danger-outline small">批量移入回收站</button>
+              <button type="button" id="btn-bulk-clear-memories" class="secondary small">取消选择</button>
+            </div>
+          </div>
+
           <div class="table-toolbar"><p id="memory-list-status" role="status">正在加载知识…</p><label for="mem-page-size">每页 <select id="mem-page-size"><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label></div>
           <table id="memories-table" class="memories-table">
             <thead>
               <tr>
+                <th class="col-check"><input type="checkbox" id="mem-select-all" aria-label="全选当前页" /></th>
                 <th>标题与摘要</th>
                 <th>范围 / 项目</th>
                 <th>分类 / 标签</th>
@@ -592,11 +641,23 @@
 
         <div id="memory-detail-card" class="drawer-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="detail-title">
           <article class="memory-drawer" tabindex="-1">
-            <div class="drawer-header"><div><p class="eyebrow">知识详情</p><h2 id="detail-title">知识详情与历史</h2></div><button class="secondary small" id="btn-close-detail">关闭详情</button></div>
+            <div class="drawer-header">
+              <div><p class="eyebrow">知识详情</p><h2 id="detail-title">知识详情与历史</h2></div>
+              <div class="button-row drawer-header-actions">
+                <button type="button" id="btn-detail-prev" class="secondary small" title="上一条（←）" aria-label="上一条">‹ 上一条</button>
+                <button type="button" id="btn-detail-next" class="secondary small" title="下一条（→）" aria-label="下一条">下一条 ›</button>
+                <button type="button" class="secondary small" id="btn-close-detail">关闭</button>
+              </div>
+            </div>
             <div id="detail-meta" class="detail-meta"></div>
             <div class="detail-toolbar">
-              <div class="client-tabs" aria-label="正文显示方式"><button type="button" id="btn-detail-preview" class="client-tab-btn active">阅读预览</button><button type="button" id="btn-detail-source" class="client-tab-btn">Markdown 源码</button></div>
+              <div class="client-tabs" aria-label="正文显示方式">
+                <button type="button" id="btn-detail-preview" class="client-tab-btn active">阅读预览</button>
+                <button type="button" id="btn-detail-source" class="client-tab-btn">Markdown 源码</button>
+                <button type="button" id="btn-detail-revisions" class="client-tab-btn">版本历史 <span id="detail-revisions-count" class="tab-count"></span></button>
+              </div>
               <div class="row-actions">
+                <button type="button" id="btn-edit-memory" class="secondary small hidden">编辑</button>
                 <button type="button" id="btn-copy-memory" class="secondary small">复制正文</button>
                 <button type="button" id="btn-pin-memory" class="secondary small hidden">置顶</button>
                 <button type="button" id="btn-restore-memory" class="small hidden">恢复</button>
@@ -604,11 +665,49 @@
                 <button type="button" id="btn-hard-delete-memory" class="danger small hidden">彻底删除</button>
               </div>
             </div>
-            <div id="detail-frontmatter" class="frontmatter hidden"></div>
-            <div id="detail-preview" class="markdown-body"></div>
-            <pre class="code-box hidden" id="detail-content"></pre>
-            <div class="section-heading"><h2>版本历史</h2><span class="field-hint">展开版本可查看相对上一版本的变化</span></div>
-            <div id="detail-revisions" class="revision-list"></div>
+            <div id="detail-view-body">
+              <div id="detail-frontmatter" class="frontmatter hidden"></div>
+              <div id="detail-preview" class="markdown-body"></div>
+              <pre class="code-box hidden" id="detail-content"></pre>
+              <div id="detail-revisions-panel" class="hidden">
+                <div class="section-heading" style="margin-bottom:12px;"><h2>版本历史</h2><span class="field-hint">展开版本可查看相对上一版本的变化</span></div>
+                <div id="detail-revisions" class="revision-list"></div>
+              </div>
+            </div>
+            <form id="memory-edit-form" class="hidden memory-edit-form">
+              <div class="form-group">
+                <label for="edit-mem-title">标题</label>
+                <input type="text" id="edit-mem-title" required />
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="edit-mem-category">分类</label>
+                  <input type="text" id="edit-mem-category" list="memory-category-presets" required />
+                </div>
+                <div class="form-group">
+                  <label for="edit-mem-tags">标签（逗号或空格分隔）</label>
+                  <input type="text" id="edit-mem-tags" placeholder="例如：architecture, api, auth" />
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" id="edit-mem-pinned" /> 置顶此知识</label>
+              </div>
+              <div class="form-group">
+                <div class="section-heading" style="margin-bottom:6px;">
+                  <label for="edit-mem-content" style="margin:0;">Markdown 正文</label>
+                  <div class="client-tabs compact-tabs">
+                    <button type="button" id="btn-edit-mode-write" class="client-tab-btn active">编写</button>
+                    <button type="button" id="btn-edit-mode-preview" class="client-tab-btn">预览</button>
+                  </div>
+                </div>
+                <textarea id="edit-mem-content" rows="14" required></textarea>
+                <div id="edit-mem-preview" class="markdown-body hidden editor-preview-box"></div>
+              </div>
+              <div class="button-row confirm-actions">
+                <button type="button" class="secondary" id="btn-cancel-edit-memory">取消</button>
+                <button type="submit" id="btn-save-edit-memory" disabled>保存修改</button>
+              </div>
+            </form>
           </article>
         </div>
       </section>
@@ -645,7 +744,7 @@
                 <div class="form-group">
                   <div class="section-heading" style="margin-bottom:6px;">
                     <span class="field-label" style="margin-bottom:0;">选择导出租户（可多选）</span>
-                    <div class="button-row" style="gap:6px;">
+                    <div class="button-row" id="mig-tenants-bulk-btns" style="gap:6px;">
                       <button type="button" class="secondary small" id="btn-mig-tenants-all">全选</button>
                       <button type="button" class="secondary small" id="btn-mig-tenants-none">取消全选</button>
                     </div>
@@ -678,6 +777,7 @@
                 <button type="submit" title="下载迁移包（.zip）">导出迁移包</button>
                 <button type="button" id="btn-mig-export-safekeep" class="secondary" title="将当前导出的迁移包直接上传到 SafeKeep">导出并上传到 SafeKeep</button>
               </div>
+              <small class="field-hint" id="mig-safekeep-hint"></small>
             </form>
           </div>
 
@@ -729,7 +829,7 @@
                 </div>
               </div>
 
-              <div class="button-row operation-actions"><button type="submit" id="btn-mig-import-submit">导入迁移包</button></div>
+              <div class="button-row operation-actions"><button type="submit" id="btn-mig-import-submit" disabled>导入迁移包</button></div>
             </form>
 
             <div id="mig-import-result" class="hidden" style="margin-top:16px;">
@@ -752,7 +852,7 @@
             <h1>审计中心</h1>
             <p class="desc">追踪 MCP 工具调用与控制台管理操作，执行安全合规与数据完整性巡检任务。</p>
           </div>
-          <div class="button-row">
+          <div class="button-row" id="audit-header-actions">
             <button type="button" id="btn-audit-export" class="secondary">导出日志 JSON</button>
             <button type="button" id="btn-open-audit-cleanup" class="danger-outline">清理过期日志…</button>
           </div>
@@ -761,14 +861,14 @@
         <div class="compact-stats audit-stats-bar">
           <span>日志总数 <strong id="audit-stat-total">0</strong></span>
           <span>近 24 小时 <strong id="audit-stat-24h">0</strong></span>
-          <span>近 24 小时异常/拒绝 <strong id="audit-stat-failed">0</strong></span>
-          <span>默认保留 <strong id="audit-stat-retention">30d</strong></span>
+          <button type="button" id="btn-audit-stat-failed" class="stat-pill-btn" title="点击筛选近 24 小时异常/拒绝记录">近 24 小时异常/拒绝 <strong id="audit-stat-failed">0</strong></button>
+          <span>默认保留 <strong id="audit-stat-retention">30 天</strong></span>
           <span>最早记录 <strong id="audit-stat-oldest">—</strong></span>
         </div>
 
-        <div class="client-tabs" style="margin-bottom:16px;" role="tablist" aria-label="审计视图切换">
-          <button type="button" id="btn-audit-sub-logs" class="client-tab-btn active" role="tab" aria-selected="true">审计日志</button>
-          <button type="button" id="btn-audit-sub-tasks" class="client-tab-btn" role="tab" aria-selected="false">审计任务</button>
+        <div class="settings-tabs" style="margin-bottom:18px;" role="tablist" aria-label="审计视图切换">
+          <button type="button" id="btn-audit-sub-logs" class="active" role="tab" aria-selected="true">审计日志</button>
+          <button type="button" id="btn-audit-sub-tasks" role="tab" aria-selected="false">审计任务</button>
         </div>
 
         <div id="audit-logs-panel">
@@ -777,9 +877,17 @@
               <div class="filter-search">
                 <label for="audit-filter-q" class="sr-only">搜索审计日志</label>
                 <input type="search" id="audit-filter-q" placeholder="搜索执行者、Agent、操作或错误信息" />
+                <label for="audit-filter-range" class="sr-only">时间范围</label>
+                <select id="audit-filter-range" class="sort-select" aria-label="时间范围">
+                  <option value="">全部时间</option>
+                  <option value="1h">近 1 小时</option>
+                  <option value="24h">近 24 小时</option>
+                  <option value="7d">近 7 天</option>
+                  <option value="30d">近 30 天</option>
+                </select>
                 <button type="submit">搜索</button>
               </div>
-              <div class="filter-row">
+              <div class="filter-row audit-filter-row">
                 <label>来源
                   <select id="audit-filter-source">
                     <option value="">全部</option>
@@ -793,11 +901,12 @@
                   <select id="audit-filter-status">
                     <option value="">全部</option>
                     <option value="success">成功</option>
+                    <option value="abnormal">异常 / 拒绝</option>
                     <option value="failed">失败</option>
                     <option value="denied">拒绝</option>
                   </select>
                 </label>
-                <label>租户
+                <label id="audit-filter-tenant-wrap">租户
                   <select id="audit-filter-tenant"><option value="">全部</option></select>
                 </label>
                 <label>资源类型
@@ -1233,7 +1342,7 @@
             <option value="weekly">每周</option>
             <option value="monthly">每月</option>
             <option value="cron">自定义</option>
-            <option value="interval">固定间隔（兼容已有任务）</option>
+            <option value="interval">固定间隔</option>
           </select>
         </div>
         <div class="form-group" id="sched-cfg-cron-group">
@@ -1327,7 +1436,10 @@
     <div class="scheduler-drawer scheduler-history-drawer" tabindex="-1">
       <div class="scheduler-drawer-header">
         <h2 id="scheduler-history-title">任务执行记录</h2>
-        <button type="button" class="secondary small" id="btn-close-scheduler-history">关闭</button>
+        <div class="button-row">
+          <label class="checkbox-label compact-checkbox"><input type="checkbox" id="sched-history-failed-only" /><span>仅看异常</span></label>
+          <button type="button" class="secondary small" id="btn-close-scheduler-history">关闭</button>
+        </div>
       </div>
       <div class="scheduler-drawer-body">
         <p id="scheduler-history-status" class="field-hint" role="status"></p>
@@ -1340,6 +1452,103 @@
           <button type="button" class="secondary small" id="btn-sched-runs-next">下一页</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <datalist id="memory-category-presets">
+    <option value="architecture"></option>
+    <option value="convention"></option>
+    <option value="decision"></option>
+    <option value="troubleshooting"></option>
+    <option value="environment"></option>
+    <option value="runbook"></option>
+    <option value="workflow"></option>
+    <option value="preference"></option>
+    <option value="reference"></option>
+    <option value="note"></option>
+  </datalist>
+
+  <div id="memory-create-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="memory-create-title">
+    <div class="modal-card memory-editor-card">
+      <div class="modal-header">
+        <h2 id="memory-create-title">新建知识</h2>
+        <button type="button" class="secondary small" id="btn-close-create-memory">关闭</button>
+      </div>
+      <form id="create-memory-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="new-mem-tenant">所属租户</label>
+            <select id="new-mem-tenant" required></select>
+          </div>
+          <div class="form-group">
+            <label for="new-mem-scope">范围</label>
+            <select id="new-mem-scope">
+              <option value="project">项目记忆</option>
+              <option value="global">全局记忆</option>
+            </select>
+          </div>
+          <div class="form-group" id="new-mem-project-group">
+            <label for="new-mem-project">项目</label>
+            <select id="new-mem-project"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="new-mem-title">标题</label>
+          <input type="text" id="new-mem-title" placeholder="简明扼要地描述这条知识" required />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="new-mem-category">分类</label>
+            <input type="text" id="new-mem-category" list="memory-category-presets" value="note" placeholder="如 architecture、convention、troubleshooting" required />
+          </div>
+          <div class="form-group">
+            <label for="new-mem-tags">标签（可选，逗号或空格分隔）</label>
+            <input type="text" id="new-mem-tags" placeholder="例如：backend, postgres, deploy" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="new-mem-pinned" /> 置顶此知识</label>
+        </div>
+        <div class="form-group">
+          <div class="section-heading" style="margin-bottom:6px;">
+            <label for="new-mem-content" style="margin:0;">Markdown 正文</label>
+            <div class="client-tabs compact-tabs">
+              <button type="button" id="btn-new-mem-write" class="client-tab-btn active">编写</button>
+              <button type="button" id="btn-new-mem-preview" class="client-tab-btn">预览</button>
+            </div>
+          </div>
+          <textarea id="new-mem-content" rows="10" placeholder="支持标准 Markdown 语法；严禁写入密码、Token、私钥等敏感凭据" required></textarea>
+          <div id="new-mem-preview" class="markdown-body hidden editor-preview-box"></div>
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-cancel-create-memory">取消</button>
+          <button type="submit" id="btn-submit-create-memory">保存知识</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="remote-edit-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="remote-edit-title">
+    <div class="modal-card confirm-card">
+      <div class="modal-header">
+        <h2 id="remote-edit-title">编辑仓库地址</h2>
+        <button type="button" class="secondary small" id="btn-close-remote-edit">关闭</button>
+      </div>
+      <form id="remote-edit-form">
+        <input type="hidden" id="edit-remote-id" />
+        <div class="form-group">
+          <label for="edit-remote-url">Git 仓库地址（SSH 或 HTTPS）</label>
+          <input type="text" id="edit-remote-url" required />
+        </div>
+        <div class="form-group">
+          <label for="edit-remote-workspace">Monorepo 子目录（可选）</label>
+          <input type="text" id="edit-remote-workspace" placeholder="留空表示仓库根目录" />
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-cancel-remote-edit">取消</button>
+          <button type="submit" id="btn-save-remote-edit" disabled>保存修改</button>
+        </div>
+      </form>
     </div>
   </div>
 

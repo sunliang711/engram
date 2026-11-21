@@ -11,7 +11,14 @@
     selectedPrincipal: "",
     selectedProject: "",
     memories: [],
-    facets: { categories: [], tags: [] },
+    selectedMemoryIds: new Set(),
+    facets: { categories: [], tags: [], agents: [] },
+    overview: null,
+    memoryEditMode: false,
+    memoryDetailTab: "preview",
+    memoryEditBaseline: "",
+    remoteEditBaseline: "",
+    schedulerHistoryFailedOnly: false,
     lastRefresh: 0,
     latestToken: "",
     clientConfigTokenID: "",
@@ -344,16 +351,25 @@
       state.principals = principals.items || [];
       state.projects = projects.items || [];
       state.tokens = tokens.items || [];
-      state.facets = { categories: facets.categories || [], tags: facets.tags || [] };
+      state.facets = { categories: facets.categories || [], tags: facets.tags || [], agents: facets.agents || [] };
+      state.overview = overview;
       state.deletedCount = overview.deleted_memories_count || 0;
 
       $("stat-tenants").textContent = overview.tenants_count || 0;
       $("stat-principals").textContent = overview.principals_count || 0;
+      if ($("stat-principals-wrap")) {
+        const bound = overview.active_tenant_members_count;
+        const totalP = overview.principals_count || 0;
+        $("stat-principals-wrap").title = (typeof bound === "number" && bound !== totalP)
+          ? t`系统共有 ${totalP} 个非内置成员账号，其中 ${bound} 位已加入租户`
+          : t("系统中非内置成员总数");
+      }
       $("stat-projects").textContent = overview.projects_count || 0;
       $("stat-memories").textContent = overview.active_memories_count || 0;
       $("stat-deleted").textContent = overview.deleted_memories_count || 0;
       $("stat-tokens").textContent = overview.active_tokens_count || 0;
       $("stat-events").textContent = overview.events_count || 0;
+      renderOverviewHealth(overview);
 
       renderOverviewSetup();
       renderSelectors();
@@ -369,7 +385,7 @@
           await loadAuditCenter();
         } else if (activeTab() === "tab-scheduler") {
           await loadSchedulerCenter();
-        } else if (activeTab() === "tab-settings") {
+        } else if (activeTab() === "tab-settings" || activeTab() === "tab-migration") {
           await loadSafekeepSettings();
         }
       }
@@ -390,7 +406,7 @@
 
   // renderSelectors preserves valid selections when shared administration data refreshes.
   function renderSelectors() {
-    const tenantSelects = ["proj-tenant"];
+    const tenantSelects = ["proj-tenant", "new-mem-tenant"];
     tenantSelects.forEach((id) => {
       const sel = $(id);
       if (!sel) return;
@@ -405,10 +421,17 @@
     renderMemoryProjectFilter();
     fillSelect("mem-filter-category", state.facets.categories.map((f) => [f.value, t`${categoryLabel(f.value)}（${f.count}）`]));
     fillSelect("mem-filter-tag", state.facets.tags.map((f) => [f.value, t`${f.value}（${f.count}）`]));
+    if ($("mem-filter-agent")) fillSelect("mem-filter-agent", (state.facets.agents || []).map((f) => [f.value, t`${f.value}（${f.count}）`]));
+    if ($("project-filter-tenant")) fillSelect("project-filter-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
     if ($("audit-filter-tenant")) fillSelect("audit-filter-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
     if ($("audit-filter-resource")) fillSelect("audit-filter-resource", Object.entries(AUDIT_RESOURCE_TYPES));
     if ($("audit-filter-action")) fillSelect("audit-filter-action", Object.entries(AUDIT_ACTIONS));
     if ($("audit-task-tenant")) fillSelect("audit-task-tenant", state.tenants.map((t) => [t.id, tenantLabel(t)]));
+    const singleTenant = state.tenants.length <= 1;
+    if ($("mem-filter-tenant-wrap")) $("mem-filter-tenant-wrap").classList.toggle("hidden", singleTenant && !$("mem-filter-tenant").value);
+    if ($("audit-filter-tenant-wrap")) $("audit-filter-tenant-wrap").classList.toggle("hidden", singleTenant && !($("audit-filter-tenant") && $("audit-filter-tenant").value));
+    if ($("project-filter-tenant-wrap")) $("project-filter-tenant-wrap").classList.toggle("hidden", singleTenant && !($("project-filter-tenant") && $("project-filter-tenant").value));
+    if ($("mig-tenants-bulk-btns")) $("mig-tenants-bulk-btns").classList.toggle("hidden", singleTenant);
     renderMigrationSelectors();
   }
 
@@ -489,7 +512,7 @@
         const tokens = state.tokens.filter((token) => token.tenant_id === state.memberTenant && token.principal_id === p.id && !token.revoked_at);
         const projectAccess = projects.length ? t`已授权 ${projects.length} 个项目` : t("未授权任何项目");
         return `
-      <tr class="${p.id === state.selectedPrincipal ? "member-selected" : ""}">
+      <tr class="clickable-row${p.id === state.selectedPrincipal ? " member-selected" : ""}" data-member-id="${p.id}">
         <td><strong>${escapeHtml(p.display_name)}</strong></td>
         <td><span class="badge">${escapeHtml(TENANT_ROLES[membership.role] || membership.role)}</span></td>
         <td>${membership.can_create_project ? t("允许") : t("不允许")}</td>
@@ -546,6 +569,14 @@
       const options = Object.entries(PROJECT_ROLES).map(([value, name]) => `<option value="${value}"${(drafts.get(project.id) || role) === value ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
       return `<tr><td><strong>${escapeHtml(project.name)}</strong></td><td>${escapeHtml(label)}</td><td><div class="row-actions"><select data-project="${project.id}" data-saved="${role}" aria-label="${escapeHtml(t`项目「${project.name}」的权限`)}"${enabled ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-member-project" data-project="${project.id}"${enabled && drafts.has(project.id) && drafts.get(project.id) !== role ? "" : " disabled"}>${t("保存授权")}</button></div></td></tr>`;
     }).join("") || t('<tr><td colspan="3" class="empty-state">当前租户还没有项目，可前往“项目”页注册。</td></tr>');
+    const batchBar = $("member-projects-batch-bar");
+    if (batchBar) {
+      const hasEditable = active && projects.some((p) => p.status === "active");
+      ["btn-member-projects-all-writer", "btn-member-projects-all-reader", "btn-member-projects-all-none"].forEach((id) => {
+        if ($(id)) $(id).disabled = !hasEditable;
+      });
+      if (typeof syncMemberProjectsBatchButton === "function") syncMemberProjectsBatchButton();
+    }
   }
 
   // canSaveMemberRole compares effective permissions without treating refreshes as edits.
@@ -577,6 +608,38 @@
     renderTokensTable();
   }
 
+  function renderOverviewHealth(overview) {
+    const strip = $("overview-health");
+    if (!strip) return;
+    const initialized = state.tenants.length > 0;
+    const health = (overview && overview.health) || {};
+    const hasHealth = initialized && (typeof health.audit_failed_24h === "number" || health.last_backup);
+    strip.classList.toggle("hidden", !hasHealth);
+    if (!hasHealth) return;
+    const failed = health.audit_failed_24h || 0;
+    if ($("overview-health-audit-val")) $("overview-health-audit-val").textContent = failed ? t`${failed} 条` : t("无异常");
+    if ($("overview-health-audit-dot")) $("overview-health-audit-dot").className = "health-dot " + (failed > 0 ? "danger" : "ok");
+    const bk = health.last_backup;
+    if ($("overview-health-backup-val") && $("overview-health-backup-dot")) {
+      if (!bk) {
+        $("overview-health-backup-val").textContent = t("未启用");
+        $("overview-health-backup-dot").className = "health-dot";
+      } else if (!bk.enabled) {
+        $("overview-health-backup-val").textContent = t("已停用");
+        $("overview-health-backup-dot").className = "health-dot warn";
+      } else if (bk.last_run_status === "failed" || bk.last_run_status === "timeout") {
+        $("overview-health-backup-val").textContent = t`上次失败 · ${bk.last_run_at ? relativeTime(bk.last_run_at) : "—"}`;
+        $("overview-health-backup-dot").className = "health-dot danger";
+      } else if (bk.last_run_at) {
+        $("overview-health-backup-val").textContent = t`正常 · ${relativeTime(bk.last_run_at)}`;
+        $("overview-health-backup-dot").className = "health-dot ok";
+      } else {
+        $("overview-health-backup-val").textContent = t("已启用，待首次执行");
+        $("overview-health-backup-dot").className = "health-dot ok";
+      }
+    }
+  }
+
   // renderOverviewSetup guides first-time users into the tenant management flow.
   function renderOverviewSetup() {
     const initialized = state.tenants.length > 0;
@@ -592,7 +655,7 @@
       const members = visiblePrincipals().filter((person) => tenantMembership(person, tenant.id));
       const projects = state.projects.filter((project) => project.tenant_id === tenant.id && project.status === "active");
       const tokens = state.tokens.filter((token) => token.tenant_id === tenant.id && !token.revoked_at);
-      return `<tr><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button><button type="button" class="danger-outline small btn-delete-tenant" data-id="${tenant.id}">${t("删除")}</button></div></td></tr>`;
+      return `<tr class="clickable-row" data-tenant-id="${tenant.id}"><td><button type="button" class="text-button btn-open-tenant" data-id="${tenant.id}">${escapeHtml(tenant.name)}</button></td><td>${members.length}</td><td>${projects.length}</td><td>${tokens.length}</td><td><span class="badge ${tenant.status === "active" ? "success" : "danger"}">${statusLabel(tenant.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-tenant" data-id="${tenant.id}">${t("管理")}</button><button type="button" class="danger-outline small btn-delete-tenant" data-id="${tenant.id}">${t("删除")}</button></div></td></tr>`;
     }).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无租户，请先新建租户。")}</td></tr>`;
   }
 
@@ -617,7 +680,22 @@
 
   // renderProjectsTable leaves detailed repositories and permissions on the project detail page.
   function renderProjectsTable() {
-    $("projects-table").querySelector("tbody").innerHTML = state.projects.map((project) => `<tr><td><button type="button" class="text-button btn-open-project" data-id="${project.id}">${escapeHtml(project.name)}</button></td><td>${escapeHtml(project.tenant_name)}</td><td>${(project.repositories || []).length}</td><td>${projectPrincipals(project).length}</td><td><span class="badge ${project.status === "active" ? "success" : "danger"}">${statusLabel(project.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-project-memories" data-id="${project.id}">${t("知识库")}</button><button type="button" class="secondary small btn-open-project" data-id="${project.id}">${t("管理")}</button></div></td></tr>`).join("") || `<tr><td colspan="6" class="empty-state">${t("尚无项目，请注册第一个项目。")}</td></tr>`;
+    const q = ($("project-filter-q") ? $("project-filter-q").value : "").trim().toLowerCase();
+    const tenantFilter = $("project-filter-tenant") ? $("project-filter-tenant").value : "";
+    const filtered = state.projects.filter((project) => {
+      if (tenantFilter && project.tenant_id !== tenantFilter) return false;
+      if (!q) return true;
+      const inName = (project.name || "").toLowerCase().includes(q);
+      const inRepo = (project.repositories || []).some((r) => (r.canonical_remote || "").toLowerCase().includes(q));
+      return inName || inRepo;
+    });
+    const emptyMsg = state.projects.length ? t("没有匹配的项目。") : t("尚无项目，请注册第一个项目。");
+    $("projects-table").querySelector("tbody").innerHTML = filtered.map((project) => {
+      const memCnt = typeof project.memories_count === "number" ? project.memories_count : 0;
+      const lastAt = project.last_memory_at ? `<time title="${escapeHtml(formatDate(project.last_memory_at))}">${relativeTime(project.last_memory_at)}</time>` : `<span class="muted">—</span>`;
+      const meta = t`${(project.repositories || []).length} 仓库 · ${projectPrincipals(project).length} 成员`;
+      return `<tr class="clickable-row" data-project-id="${project.id}"><td><button type="button" class="text-button btn-open-project" data-id="${project.id}">${escapeHtml(project.name)}</button></td><td>${escapeHtml(project.tenant_name)}</td><td><strong>${memCnt}</strong></td><td class="date-cell">${lastAt}</td><td class="muted">${escapeHtml(meta)}</td><td><span class="badge ${project.status === "active" ? "success" : "danger"}">${statusLabel(project.status)}</span></td><td><div class="row-actions"><button type="button" class="secondary small btn-open-project-memories" data-id="${project.id}">${t("知识库")}</button><button type="button" class="secondary small btn-open-project" data-id="${project.id}">${t("管理")}</button></div></td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="empty-state">${emptyMsg}</td></tr>`;
   }
 
   // renderProjectDetail binds all repository and permission operations to the displayed project.
@@ -634,17 +712,23 @@
       clearFormErrors($("add-project-member-form"));
       $("add-project-remote-form").dataset.project = project.id;
     }
+    const tenant = state.tenants.find((item) => item.id === project.tenant_id);
+    const enabled = project.status === "active" && tenant && tenant.status === "active";
     $("project-breadcrumb-name").textContent = project.name;
     $("project-detail-title").textContent = project.name;
-    $("project-detail-context").textContent = t`所属租户：${project.tenant_name}`;
+    const memCountHint = typeof project.memories_count === "number" ? t` · ${project.memories_count} 条知识` : "";
+    $("project-detail-context").textContent = t`所属租户：${project.tenant_name}` + memCountHint;
     $("project-detail-status").textContent = statusLabel(project.status);
     $("project-detail-status").className = "badge " + (project.status === "active" ? "success" : "danger");
     $("project-identity").innerHTML = `<p>${t("项目 ID")} · ${identifier(project.id)}</p><p>${t("标记文件 UUID")} · ${project.marker ? identifier(project.marker) : t("未生成")}</p><p class="field-hint">${t("创建时间")} · ${formatDate(project.created_at)}</p>`;
-    $("project-remotes-table").querySelector("tbody").innerHTML = (project.repositories || []).map((remote) => `<tr><td><code>${escapeHtml(remote.canonical_remote)}</code></td><td>${escapeHtml(remote.workspace_path || t("仓库根目录"))}</td></tr>`).join("") || `<tr><td colspan="2" class="empty-state">${t("未关联仓库，通过标记文件识别")}</td></tr>`;
+    $("project-remotes-table").querySelector("tbody").innerHTML = (project.repositories || []).map((remote) => `<tr><td><code>${escapeHtml(remote.canonical_remote)}</code></td><td>${escapeHtml(remote.workspace_path || t("仓库根目录"))}</td><td><div class="row-actions" style="justify-content:flex-end;"><button type="button" class="secondary small btn-edit-remote" data-id="${remote.id}"${enabled ? "" : " disabled"}>${t("编辑")}</button><button type="button" class="danger-outline small btn-delete-remote" data-id="${remote.id}"${enabled ? "" : " disabled"}>${t("删除")}</button></div></td></tr>`).join("") || `<tr><td colspan="3" class="empty-state">${t("未关联仓库，通过标记文件识别")}</td></tr>`;
     $("project-members-table").querySelector("tbody").innerHTML = projectPrincipals(project).map((person) => {
       const grant = (project.members || []).find((item) => item.principal_id === person.id);
-      return `<tr><td>${escapeHtml(person.display_name)}</td><td>${escapeHtml(PROJECT_ROLES[grant.role] || grant.role)}</td><td>${statusLabel(person.status)}</td></tr>`;
-    }).join("") || `<tr><td colspan="3" class="empty-state">${t("尚无项目成员，请从当前租户选择成员授权。")}</td></tr>`;
+      const role = grant ? grant.role : "none";
+      const canEditRow = enabled && person.status === "active";
+      const options = Object.entries(PROJECT_ROLES).map(([value, name]) => `<option value="${value}"${role === value ? " selected" : ""}>${escapeHtml(name)}</option>`).join("");
+      return `<tr><td><strong>${escapeHtml(person.display_name)}</strong></td><td>${escapeHtml(PROJECT_ROLES[role] || role)}</td><td><span class="badge ${person.status === "active" ? "success" : "danger"}">${statusLabel(person.status)}</span></td><td><div class="row-actions"><select class="proj-member-role-select" data-principal="${person.id}" data-saved="${role}" aria-label="${escapeHtml(t`成员「${person.display_name}」的项目权限`)}"${canEditRow ? "" : " disabled"}>${options}</select><button type="button" class="secondary small btn-save-proj-member-inline" data-principal="${person.id}" disabled>${t("保存")}</button></div></td></tr>`;
+    }).join("") || `<tr><td colspan="4" class="empty-state">${t("尚无项目成员，请从当前租户选择成员授权。")}</td></tr>`;
     const select = $("pm-principal");
     const previous = select.dataset.project === project.id ? select.value : "";
     const previousRole = $("pm-role").value;
@@ -653,8 +737,6 @@
     const members = visiblePrincipals().filter((person) => person.status === "active" && tenantMembership(person, project.tenant_id));
     select.innerHTML = members.map((person) => t`<option value="${person.id}">${escapeHtml(person.display_name)}（${escapeHtml(person.subject)}）</option>`).join("");
     if (members.some((person) => person.id === previous)) select.value = previous;
-    const tenant = state.tenants.find((item) => item.id === project.tenant_id);
-    const enabled = project.status === "active" && tenant && tenant.status === "active";
     $("add-project-remote-form").querySelectorAll("input, button").forEach((element) => { element.disabled = !enabled; });
     select.disabled = !enabled || !members.length;
     renderProjectRole();
@@ -701,6 +783,8 @@
     $("mem-filter-q").value = "";
     $("mem-filter-category").value = "";
     $("mem-filter-tag").value = "";
+    if ($("mem-filter-agent")) $("mem-filter-agent").value = "";
+    if ($("mem-filter-sort")) $("mem-filter-sort").value = "pinned";
     $("mem-filter-deleted").value = "active";
     $("mem-filter-project").value = "";
     const tenantSelect = $("mem-filter-tenant");
@@ -854,10 +938,25 @@
   }
 
   // memoryFilters reads the list filters in the order they are written to the URL.
-  const MEMORY_FILTERS = [["tenant", "mem-filter-tenant", "tenant_id"], ["scope", "mem-filter-scope", "scope"], ["project", "mem-filter-project", "project_id"], ["category", "mem-filter-category", "category"], ["tag", "mem-filter-tag", "tag"], ["deleted", "mem-filter-deleted", "deleted"], ["q", "mem-filter-q", "q"]];
+  const MEMORY_FILTERS = [["tenant", "mem-filter-tenant", "tenant_id"], ["scope", "mem-filter-scope", "scope"], ["project", "mem-filter-project", "project_id"], ["category", "mem-filter-category", "category"], ["tag", "mem-filter-tag", "tag"], ["agent", "mem-filter-agent", "agent"], ["deleted", "mem-filter-deleted", "deleted"], ["sort", "mem-filter-sort", "sort"], ["q", "mem-filter-q", "q"]];
 
   function memoryFilterValues() {
-    return Object.fromEntries(MEMORY_FILTERS.map(([key, id]) => [key, $(id).value.trim()]));
+    return Object.fromEntries(MEMORY_FILTERS.map(([key, id]) => [key, $(id) ? $(id).value.trim() : ""]));
+  }
+
+  function updateMemoryBulkBar() {
+    const bar = $("memory-bulk-bar");
+    if (!bar) return;
+    const count = state.selectedMemoryIds.size;
+    bar.classList.toggle("hidden", count === 0);
+    if ($("memory-bulk-count")) $("memory-bulk-count").textContent = t`已选 ${count} 条`;
+    const allBox = $("mem-select-all");
+    if (allBox) {
+      const activeIds = state.memories.filter((m) => !m.deleted_at).map((m) => m.id);
+      allBox.checked = activeIds.length > 0 && activeIds.every((id) => state.selectedMemoryIds.has(id));
+      allBox.indeterminate = count > 0 && !allBox.checked;
+      allBox.disabled = activeIds.length === 0;
+    }
   }
 
   // loadMemories ignores stale responses; quiet reloads keep the current rows until new ones arrive.
@@ -869,12 +968,17 @@
     if (!options.quiet) {
       // Remove stale actions while a new result set is pending, including on slow connections.
       state.memories = [];
-      tbody.innerHTML = t('<tr><td colspan="6" class="empty-state">正在加载知识…</td></tr>');
+      state.selectedMemoryIds.clear();
+      updateMemoryBulkBar();
+      tbody.innerHTML = t('<tr><td colspan="7" class="empty-state">正在加载知识…</td></tr>');
       $("memory-list-status").textContent = t("正在加载知识…");
     }
     const filters = memoryFilterValues();
     const params = new URLSearchParams({ page: state.memoryPage, page_size: state.memoryPageSize });
-    MEMORY_FILTERS.forEach(([key, , param]) => { if (filters[key]) params.set(param, filters[key]); });
+    MEMORY_FILTERS.forEach(([key, , param]) => {
+      if (key === "sort" && (!filters[key] || filters[key] === "pinned")) return;
+      if (filters[key]) params.set(param, filters[key]);
+    });
     $("memories-table").setAttribute("aria-busy", "true");
     $("btn-memory-prev").disabled = true;
     $("btn-memory-next").disabled = true;
@@ -884,11 +988,14 @@
       state.memories = res.items || [];
       state.memoryPage = res.page;
       state.memoryTotal = res.total;
+      const visibleIds = new Set(state.memories.filter((m) => !m.deleted_at).map((m) => m.id));
+      Array.from(state.selectedMemoryIds).forEach((id) => { if (!visibleIds.has(id)) state.selectedMemoryIds.delete(id); });
       tbody.innerHTML = state.memories.map((m) => memoryRow(m, filters.q)).join("");
-      const filtered = !!(filters.tenant || filters.scope || filters.project || filters.category || filters.tag || filters.q || filters.deleted !== "active");
+      updateMemoryBulkBar();
+      const filtered = !!(filters.tenant || filters.scope || filters.project || filters.category || filters.tag || filters.agent || filters.q || filters.deleted !== "active");
       if (!state.memories.length) {
         const trash = filters.deleted === "deleted";
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><strong>${trash ? t("回收站是空的") : filtered ? t("未找到匹配的知识") : t("知识库还是空的")}</strong><p>${trash ? t("删除的知识会先进入回收站，可随时恢复。") : filtered ? t("试试其他关键词，或点击清除筛选。") : t("连接 AI 客户端后，让 Agent 保存第一条共享记忆。")}</p></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><strong>${trash ? t("回收站是空的") : filtered ? t("未找到匹配的知识") : t("知识库还是空的")}</strong><p>${trash ? t("删除的知识会先进入回收站，可随时恢复。") : filtered ? t("试试其他关键词，或点击清除筛选。") : t("连接 AI 客户端后，让 Agent 保存第一条共享记忆，或点击右上角“新建知识”。")}</p></td></tr>`;
       }
       const trashHint = filters.deleted === "active" && state.deletedCount ? t` · <button type="button" class="link-btn" id="btn-open-trash">回收站 ${state.deletedCount} 条</button>` : "";
       $("memory-list-status").innerHTML = t`共 ${res.total} 条知识${filtered ? t(" · 已应用筛选") : ""}${trashHint}`;
@@ -900,7 +1007,9 @@
     } catch (err) {
       if (request !== state.memoryRequest) return;
       state.memories = [];
-      tbody.innerHTML = t('<tr><td colspan="6" class="empty-state">知识加载失败，请点击搜索重试。</td></tr>');
+      state.selectedMemoryIds.clear();
+      updateMemoryBulkBar();
+      tbody.innerHTML = t('<tr><td colspan="7" class="empty-state">知识加载失败，请点击搜索重试。</td></tr>');
       $("memory-list-status").textContent = t("加载失败，当前结果不可用");
       $("memory-page-info").textContent = "";
       showToast(err.message, true);
@@ -912,15 +1021,19 @@
   // memoryRow renders one list entry; tags, categories and projects double as filter shortcuts.
   function memoryRow(m, keyword) {
     const deleted = !!m.deleted_at;
+    const checked = !deleted && state.selectedMemoryIds.has(m.id);
     const project = m.scope === "global" ? "" : `<button type="button" class="chip-link" data-filter="mem-filter-project" data-value="${m.project_id}">${escapeHtml(m.project_name)}</button>`;
     const tags = (m.tags || []).map((tag) => `<button type="button" class="tag-chip" data-filter="mem-filter-tag" data-value="${escapeHtml(tag)}">${escapeHtml(tag)}</button>`).join("");
+    const agent = (m.updated_agent || m.created_agent || "").trim();
+    const agentSub = agent ? `<div class="muted" style="font-size:11.5px;margin-top:3px;">${escapeHtml(agent)}</div>` : "";
     return `<tr data-memory-id="${m.id}" class="memory-row${deleted ? " row-muted" : ""}">
+      <td class="col-check">${deleted ? "" : `<input type="checkbox" class="mem-row-check" data-id="${m.id}" aria-label="${escapeHtml(t`选择「${m.title}」`)}"${checked ? " checked" : ""} />`}</td>
       <td class="memory-main"><button type="button" class="memory-title btn-view-mem" data-id="${m.id}">${highlight(m.title, keyword)}</button>${m.is_pinned ? t('<span class="badge warning">置顶</span>') : ""}<p class="memory-snippet">${memorySnippet(m.content_md, keyword)}</p></td>
       <td><span class="badge nowrap">${m.scope === "global" ? t("全局") : t("项目")}</span><div>${project}</div></td>
       <td><button type="button" class="chip-link" data-filter="mem-filter-category" data-value="${escapeHtml(m.category)}">${escapeHtml(categoryLabel(m.category))}</button><div class="tag-list">${tags}</div></td>
       <td class="nowrap">v${m.version} <span class="badge ${deleted ? "danger" : "success"}">${deleted ? t("已删除") : statusLabel(m.status)}</span></td>
-      <td class="date-cell"><time title="${escapeHtml(formatDate(m.updated_at))}">${relativeTime(m.updated_at)}</time></td>
-      <td><div class="row-actions">${deleted ? t`<button type="button" class="small btn-restore-mem" data-id="${m.id}">恢复</button>` : t`<button type="button" class="secondary small btn-view-mem" data-id="${m.id}">查看</button>`}</div></td>
+      <td class="date-cell"><time title="${escapeHtml(formatDate(m.updated_at))}">${relativeTime(m.updated_at)}</time>${agentSub}</td>
+      <td><div class="row-actions">${deleted ? t`<button type="button" class="small btn-restore-mem" data-id="${m.id}">恢复</button>` : t`<button type="button" class="secondary small btn-edit-mem-row" data-id="${m.id}">编辑</button>`}</div></td>
     </tr>`;
   }
 
@@ -987,9 +1100,10 @@
   function agentName(value) { return typeof value === "string" && value.trim() ? value : t("未知 Agent"); }
 
   // viewMemoryDetail opens immediately and guards against out-of-order history requests.
-  async function viewMemoryDetail(memId, updateURL = true) {
+  async function viewMemoryDetail(memId, updateURL = true, openInEdit = false) {
     const request = ++state.detailRequest;
     state.selectedMemory = null;
+    if (typeof exitMemoryEditMode === "function") exitMemoryEditMode();
     if ($("memory-detail-card").classList.contains("hidden")) state.detailTrigger = document.activeElement;
     $("memory-detail-card").classList.remove("hidden");
     document.body.classList.add("drawer-open");
@@ -999,7 +1113,12 @@
     $("detail-preview").textContent = t("正在加载正文与历史…");
     $("detail-revisions").textContent = "";
     $("detail-content").textContent = "";
-    ["btn-pin-memory", "btn-delete-memory", "btn-restore-memory", "btn-hard-delete-memory"].forEach((id) => $(id).classList.add("hidden"));
+    if ($("detail-revisions-count")) $("detail-revisions-count").textContent = "";
+    ["btn-edit-memory", "btn-pin-memory", "btn-delete-memory", "btn-restore-memory", "btn-hard-delete-memory"].forEach((id) => $(id) && $(id).classList.add("hidden"));
+    const list = state.memories || [];
+    const listIdx = list.findIndex((item) => item.id === memId);
+    if ($("btn-detail-prev")) $("btn-detail-prev").disabled = listIdx <= 0;
+    if ($("btn-detail-next")) $("btn-detail-next").disabled = listIdx < 0 || listIdx >= list.length - 1;
     $("btn-detail-preview").click();
     $("btn-close-detail").focus();
     try {
@@ -1027,13 +1146,20 @@
       $("detail-frontmatter").innerHTML = fields.map(([key, value]) => `<span>${key ? `<b>${escapeHtml(key)}</b> ` : ""}${escapeHtml(value)}</span>`).join("");
       $("detail-frontmatter").classList.toggle("hidden", !fields.length);
       $("detail-content").textContent = mem.content_md || "";
-      $("detail-preview").innerHTML = window.EngramMarkdown.render(body);
+      let previewBody = body;
+      const leadingHeading = /^\s*#\s+([^\r\n]+)\r?\n+/.exec(previewBody);
+      if (leadingHeading && leadingHeading[1].trim().toLowerCase() === (mem.title || "").trim().toLowerCase()) {
+        previewBody = previewBody.slice(leadingHeading[0].length);
+      }
+      $("detail-preview").innerHTML = window.EngramMarkdown.render(previewBody);
+      if ($("btn-edit-memory")) $("btn-edit-memory").classList.toggle("hidden", deleted);
       $("btn-pin-memory").textContent = mem.is_pinned ? t("取消置顶") : t("置顶");
       $("btn-pin-memory").classList.toggle("hidden", deleted);
       $("btn-delete-memory").classList.toggle("hidden", deleted);
       $("btn-restore-memory").classList.toggle("hidden", !deleted);
       $("btn-hard-delete-memory").classList.toggle("hidden", !deleted);
       const revisions = revRes.items || [];
+      if ($("detail-revisions-count")) $("detail-revisions-count").textContent = revisions.length ? String(revisions.length) : "";
       $("detail-revisions").innerHTML = revisions.map((revision, index) => {
         const previous = revisions[index + 1];
         const snap = revision.snapshot || {};
@@ -1043,6 +1169,7 @@
         const diff = previous || revision.operation === "create" ? window.EngramMarkdown.diff(revisionContent(old), revisionContent(snap)) : "";
         return t`<details class="revision-item"><summary><strong>v${revision.version} · ${escapeHtml(operation)}</strong><span>${formatDate(revision.created_at)} · ${escapeHtml(actorName(revision.actor_id))} · ${escapeHtml(agentName(snap.updated_agent))}</span></summary>${meta ? `<pre class="revision-meta">${escapeHtml(meta)}</pre>` : ""}${diff}<details><summary>原始快照</summary><pre class="code-box">${escapeHtml(JSON.stringify(revision.snapshot, null, 2))}</pre></details></details>`;
       }).join("") || t('<p class="empty-state">暂无版本历史</p>');
+      if (openInEdit && !deleted && typeof enterMemoryEditMode === "function") enterMemoryEditMode();
       if (updateURL) syncLocation(true);
     } catch (err) {
       if (request !== state.detailRequest) return;
@@ -1067,6 +1194,7 @@
     const wasOpen = !$("memory-detail-card").classList.contains("hidden");
     state.detailRequest++;
     state.selectedMemory = null;
+    if (typeof exitMemoryEditMode === "function") exitMemoryEditMode();
     $("memory-detail-card").classList.add("hidden");
     document.body.classList.remove("drawer-open");
     if (wasOpen && restoreFocus && state.detailTrigger && state.detailTrigger.isConnected) state.detailTrigger.focus({ preventScroll: true });
@@ -1326,8 +1454,9 @@
 
   // updateMemoryFilterToggle keeps collapsed filters visible through their active count.
   function updateMemoryFilterToggle() {
-    const count = ["tenant", "scope", "project", "category", "tag", "deleted"].filter((key) => {
-      const value = $("mem-filter-" + key).value;
+    const count = ["tenant", "scope", "project", "category", "tag", "agent", "deleted"].filter((key) => {
+      const el = $("mem-filter-" + key);
+      const value = el ? el.value : "";
       return value && !(key === "deleted" && value === "active");
     }).length;
     $("memory-filter-count").textContent = count;
@@ -1372,7 +1501,7 @@
     if (tabId === "tab-audit" && state.locationReady) loadAuditCenter().catch((err) => showToast(err.message, true));
     if (tabId === "tab-scheduler" && state.locationReady) loadSchedulerCenter().catch((err) => showToast(err.message, true));
     if (tabId === "tab-settings") setSettingsTab(state.settingsTab, false);
-    if (tabId === "tab-settings" && state.locationReady) loadSafekeepSettings().catch((err) => showToast(err.message, true));
+    if ((tabId === "tab-settings" || tabId === "tab-migration") && state.locationReady) loadSafekeepSettings().catch((err) => showToast(err.message, true));
     if (updateURL) syncLocation(true);
   }
 
@@ -1408,8 +1537,9 @@
     if (tab === "tab-settings" && state.settingsTab !== "backup") params.set("section", state.settingsTab);
     if (tab === "tab-memories") {
       MEMORY_FILTERS.forEach(([key, id]) => {
-        const value = $(id).value;
-        if (value && !(key === "deleted" && value === "active")) params.set(key, value);
+        const el = $(id);
+        const value = el ? el.value : "";
+        if (value && !(key === "deleted" && value === "active") && !(key === "sort" && value === "pinned")) params.set(key, value);
       });
       if (state.memoryPage > 1) params.set("page", state.memoryPage);
       if (state.memoryPageSize !== 20) params.set("size", state.memoryPageSize);
@@ -1484,10 +1614,13 @@
     switchMainTab(allowed.includes(tab) ? tab : "tab-overview", false);
     const filterParams = tab === "tab-memories" ? params : new URLSearchParams();
     MEMORY_FILTERS.forEach(([key, id]) => {
-      const el = $(id); const fallback = key === "deleted" ? "active" : ""; const value = filterParams.get(key) || fallback;
+      const el = $(id);
+      if (!el) return;
+      const fallback = key === "deleted" ? "active" : key === "sort" ? "pinned" : "";
+      const value = filterParams.get(key) || fallback;
       if (el.tagName === "SELECT" && value && !Array.from(el.options).some((option) => option.value === value)) {
-        // Deep links may name a category, tag or project that has no active entries yet.
-        if (["category", "tag", "project"].includes(key)) el.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`);
+        // Deep links may name a category, tag, agent or project that has no active entries yet.
+        if (["category", "tag", "project", "agent"].includes(key)) el.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`);
         else { el.value = fallback; return; }
       }
       el.value = value;
@@ -1511,7 +1644,13 @@
   // loadRecentMemories keeps the dashboard useful after the first client is connected.
   async function loadRecentMemories() {
     const res = await api("/api/admin/memories?page_size=5&deleted=active&sort=recent");
-    $("recent-memories").innerHTML = (res.items || []).map((mem) => `<button type="button" class="recent-item" data-id="${mem.id}"><span><strong>${escapeHtml(mem.title)}</strong><small>${escapeHtml(mem.project_name || t("全局记忆"))} · ${escapeHtml(mem.category)}</small></span><time title="${escapeHtml(formatDate(mem.updated_at))}">${relativeTime(mem.updated_at)}</time></button>`).join("") || t('<p class="empty-state">还没有知识。完成客户端接入后，让 Agent 保存第一条记忆。</p>');
+    $("recent-memories").innerHTML = (res.items || []).map((mem) => {
+      const scopeBadge = `<span class="badge">${mem.scope === "global" ? t("全局") : escapeHtml(mem.project_name || t("项目"))}</span>`;
+      const catText = escapeHtml(categoryLabel(mem.category));
+      const agent = (mem.updated_agent || mem.created_agent || "").trim();
+      const agentHtml = agent ? `<span class="muted">· ${escapeHtml(agent)}</span>` : "";
+      return `<button type="button" class="recent-item" data-id="${mem.id}"><span><strong>${escapeHtml(mem.title)}</strong><div class="recent-item-meta">${scopeBadge}<small style="margin-top:0;">${catText}</small>${agentHtml}</div></span><time title="${escapeHtml(formatDate(mem.updated_at))}">${relativeTime(mem.updated_at)}</time></button>`;
+    }).join("") || t('<p class="empty-state">还没有知识。完成客户端接入后，让 Agent 保存第一条记忆。</p>');
     $("recent-memories").querySelectorAll("button").forEach((btn) => btn.addEventListener("click", () => { switchMainTab("tab-memories"); viewMemoryDetail(btn.dataset.id); }));
   }
 
@@ -2002,7 +2141,10 @@
     const openBtn = event.target.closest(".btn-open-tenant");
     if (openBtn) { openTenant(openBtn.dataset.id); return; }
     const deleteBtn = event.target.closest(".btn-delete-tenant");
-    if (deleteBtn) confirmDeleteTenant(deleteBtn.dataset.id);
+    if (deleteBtn) { confirmDeleteTenant(deleteBtn.dataset.id); return; }
+    if (event.target.closest("button, a, input, select")) return;
+    const row = event.target.closest("tr[data-tenant-id]");
+    if (row) openTenant(row.dataset.tenantId);
   });
   if ($("btn-rename-tenant")) $("btn-rename-tenant").addEventListener("click", () => state.memberTenant && promptRenameTenant(state.memberTenant));
   if ($("btn-delete-tenant")) $("btn-delete-tenant").addEventListener("click", () => state.memberTenant && confirmDeleteTenant(state.memberTenant));
@@ -2012,12 +2154,18 @@
     const memoriesBtn = event.target.closest(".btn-open-project-memories");
     if (memoriesBtn) { openProjectMemories(memoriesBtn.dataset.id); return; }
     const button = event.target.closest(".btn-open-project");
-    if (button) openProject(button.dataset.id);
+    if (button) { openProject(button.dataset.id); return; }
+    if (event.target.closest("button, a, input, select")) return;
+    const row = event.target.closest("tr[data-project-id]");
+    if (row) openProject(row.dataset.projectId);
   });
+  if ($("project-filter-q")) $("project-filter-q").addEventListener("input", renderProjectsTable);
+  if ($("project-filter-tenant")) $("project-filter-tenant").addEventListener("change", renderProjectsTable);
   if ($("btn-open-project-memories")) $("btn-open-project-memories").addEventListener("click", () => state.selectedProject && openProjectMemories(state.selectedProject));
   $("btn-project-list").addEventListener("click", () => openProject(""));
   $("btn-new-project").addEventListener("click", () => { $("project-forms-panel").classList.remove("hidden"); $("proj-name").focus(); });
   $("btn-cancel-project").addEventListener("click", () => { $("project-forms-panel").classList.add("hidden"); $("btn-new-project").focus(); });
+  $("project-forms-panel").addEventListener("click", (event) => { if (event.target === $("project-forms-panel")) { $("project-forms-panel").classList.add("hidden"); $("btn-new-project").focus(); } });
   $("pm-principal").addEventListener("change", renderProjectRole);
   $("btn-close-client-config").addEventListener("click", () => closeClientGuides());
   $("client-config-modal").addEventListener("click", (event) => { if (event.target === $("client-config-modal")) closeClientGuides(); });
@@ -2027,6 +2175,7 @@
   });
   $("btn-new-tenant").addEventListener("click", () => { $("create-tenant-card").classList.remove("hidden"); $("tenant-name").focus(); });
   $("btn-cancel-tenant").addEventListener("click", () => { $("create-tenant-card").classList.add("hidden"); $("btn-new-tenant").focus(); });
+  $("create-tenant-card").addEventListener("click", (event) => { if (event.target === $("create-tenant-card")) { $("create-tenant-card").classList.add("hidden"); $("btn-new-tenant").focus(); } });
   $("btn-add-member").addEventListener("click", () => {
     $("tenant-forms-panel").classList.remove("hidden");
     clearFormErrors($("create-principal-form"));
@@ -2035,11 +2184,15 @@
     $("prin-mode").focus();
   });
   $("btn-cancel-member").addEventListener("click", () => { $("tenant-forms-panel").classList.add("hidden"); $("btn-add-member").focus(); });
+  $("tenant-forms-panel").addEventListener("click", (event) => { if (event.target === $("tenant-forms-panel")) { $("tenant-forms-panel").classList.add("hidden"); $("btn-add-member").focus(); } });
   $("principals-table").addEventListener("click", (event) => {
     const manageBtn = event.target.closest(".btn-manage-member");
     if (manageBtn) { openTenant(state.memberTenant, manageBtn.dataset.id); return; }
     const deleteBtn = event.target.closest(".btn-delete-member");
-    if (deleteBtn) confirmDeleteMember(deleteBtn.dataset.id);
+    if (deleteBtn) { confirmDeleteMember(deleteBtn.dataset.id); return; }
+    if (event.target.closest("button, a, input, select")) return;
+    const row = event.target.closest("tr[data-member-id]");
+    if (row) openTenant(state.memberTenant, row.dataset.memberId);
   });
   if ($("btn-rename-member")) $("btn-rename-member").addEventListener("click", () => state.selectedPrincipal && promptRenameMember(state.selectedPrincipal));
   if ($("btn-remove-member-tenant")) $("btn-remove-member-tenant").addEventListener("click", () => state.selectedPrincipal && confirmRemoveMemberFromTenant(state.selectedPrincipal));
@@ -2104,12 +2257,63 @@
     await refreshAllData();
   }, canSaveMemberRole);
 
+  function syncMemberProjectsBatchButton() {
+    const saveAllBtn = $("btn-save-all-member-projects");
+    if (!saveAllBtn || !$("member-projects-table")) return;
+    const dirty = Array.from($("member-projects-table").querySelectorAll("select[data-project]")).filter((sel) => !sel.disabled && sel.value !== sel.dataset.saved);
+    saveAllBtn.disabled = dirty.length === 0;
+    saveAllBtn.textContent = dirty.length ? t`保存全部改动（${dirty.length}）` : t("保存全部改动");
+  }
+
   $("member-projects-table").addEventListener("change", (event) => {
     const select = event.target.closest("select[data-project]");
     if (!select) return;
     const button = select.closest("tr").querySelector(".btn-save-member-project");
     button.disabled = button.getAttribute("aria-busy") === "true" || select.disabled || select.value === select.dataset.saved;
+    syncMemberProjectsBatchButton();
   });
+
+  function applyAllMemberProjectRoles(targetRole) {
+    if (!$("member-projects-table")) return;
+    $("member-projects-table").querySelectorAll("select[data-project]").forEach((sel) => {
+      if (sel.disabled) return;
+      sel.value = targetRole;
+      const btn = sel.closest("tr").querySelector(".btn-save-member-project");
+      if (btn) btn.disabled = btn.getAttribute("aria-busy") === "true" || sel.value === sel.dataset.saved;
+    });
+    syncMemberProjectsBatchButton();
+  }
+  if ($("btn-member-projects-all-writer")) $("btn-member-projects-all-writer").addEventListener("click", () => applyAllMemberProjectRoles("writer"));
+  if ($("btn-member-projects-all-reader")) $("btn-member-projects-all-reader").addEventListener("click", () => applyAllMemberProjectRoles("reader"));
+  if ($("btn-member-projects-all-none")) $("btn-member-projects-all-none").addEventListener("click", () => applyAllMemberProjectRoles("none"));
+  if ($("btn-save-all-member-projects")) {
+    $("btn-save-all-member-projects").addEventListener("click", async () => {
+      const principal = selectedMember();
+      const btn = $("btn-save-all-member-projects");
+      if (!principal || !btn || btn.disabled) return;
+      const dirtySelects = Array.from($("member-projects-table").querySelectorAll("select[data-project]")).filter((sel) => !sel.disabled && sel.value !== sel.dataset.saved);
+      if (!dirtySelects.length) return;
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      try {
+        await api("/api/admin/projects/members/batch", {
+          method: "POST",
+          body: JSON.stringify({
+            principal_id: principal.id,
+            grants: dirtySelects.map((sel) => ({ project_id: sel.dataset.project, role: sel.value })),
+          }),
+        });
+        dirtySelects.forEach((sel) => { sel.dataset.saved = sel.value; });
+        showToast(t`已批量更新 ${dirtySelects.length} 个项目的权限`);
+        await refreshAllData();
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.removeAttribute("aria-busy");
+        syncMemberProjectsBatchButton();
+      }
+    });
+  }
 
   // Project updates capture the current identity before awaiting the scoped write.
   $("member-projects-table").addEventListener("click", async (event) => {
@@ -2229,22 +2433,92 @@
   });
 
   $("btn-close-detail").addEventListener("click", () => closeMemoryDetail());
+  if ($("btn-detail-prev")) {
+    $("btn-detail-prev").addEventListener("click", () => {
+      if (!state.selectedMemory) return;
+      const idx = state.memories.findIndex((m) => m.id === state.selectedMemory.id);
+      if (idx > 0) viewMemoryDetail(state.memories[idx - 1].id);
+    });
+  }
+  if ($("btn-detail-next")) {
+    $("btn-detail-next").addEventListener("click", () => {
+      if (!state.selectedMemory) return;
+      const idx = state.memories.findIndex((m) => m.id === state.selectedMemory.id);
+      if (idx >= 0 && idx < state.memories.length - 1) viewMemoryDetail(state.memories[idx + 1].id);
+    });
+  }
   // Whole rows open the detail drawer; buttons inside a row keep their own action.
   $("memories-table").querySelector("tbody").addEventListener("click", (event) => {
+    const checkbox = event.target.closest(".mem-row-check");
+    if (checkbox) {
+      if (checkbox.checked) state.selectedMemoryIds.add(checkbox.dataset.id);
+      else state.selectedMemoryIds.delete(checkbox.dataset.id);
+      updateMemoryBulkBar();
+      return;
+    }
     const row = event.target.closest("tr[data-memory-id]");
     if (!row) return;
     const mem = state.memories.find((item) => item.id === row.dataset.memoryId);
     if (event.target.closest(".btn-restore-mem")) { if (mem) memoryAction("restore", mem); return; }
-    if (event.target.closest("[data-filter], .id-copy")) return;
+    if (event.target.closest(".btn-edit-mem-row")) { viewMemoryDetail(row.dataset.memoryId, true, true); return; }
+    if (event.target.closest("[data-filter], .id-copy, .col-check")) return;
     if (window.getSelection && String(window.getSelection()).trim()) return;
     viewMemoryDetail(row.dataset.memoryId);
   });
+  if ($("mem-select-all")) {
+    $("mem-select-all").addEventListener("change", () => {
+      const checked = $("mem-select-all").checked;
+      state.memories.filter((m) => !m.deleted_at).forEach((m) => {
+        if (checked) state.selectedMemoryIds.add(m.id);
+        else state.selectedMemoryIds.delete(m.id);
+      });
+      $("memories-table").querySelectorAll(".mem-row-check").forEach((box) => { box.checked = checked; });
+      updateMemoryBulkBar();
+    });
+  }
+  if ($("btn-bulk-clear-memories")) {
+    $("btn-bulk-clear-memories").addEventListener("click", () => {
+      state.selectedMemoryIds.clear();
+      $("memories-table").querySelectorAll(".mem-row-check").forEach((box) => { box.checked = false; });
+      updateMemoryBulkBar();
+    });
+  }
+  if ($("btn-bulk-delete-memories")) {
+    $("btn-bulk-delete-memories").addEventListener("click", async () => {
+      const selected = state.memories.filter((m) => !m.deleted_at && state.selectedMemoryIds.has(m.id));
+      if (!selected.length) return;
+      const confirmed = await confirmDialog({
+        title: t`批量移入回收站（${selected.length} 条）？`,
+        message: t`选中的 ${selected.length} 条知识将移入回收站，AI 客户端将不再检索到它们。之后可在回收站中恢复。`,
+        confirmText: t("批量移入回收站"),
+      });
+      if (!confirmed) return;
+      const btn = $("btn-bulk-delete-memories");
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      try {
+        const res = await api("/api/admin/memories/batch-delete", {
+          method: "POST",
+          body: JSON.stringify({ items: selected.map((m) => ({ tenant_id: m.tenant_id, memory_id: m.id })) }),
+        });
+        state.selectedMemoryIds.clear();
+        updateMemoryBulkBar();
+        showToast(t`已将 ${res.deleted || selected.length} 条知识移入回收站`);
+        await refreshAllData({ quiet: true });
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.disabled = false;
+        btn.removeAttribute("aria-busy");
+      }
+    });
+  }
   document.addEventListener("click", (event) => {
     const chip = event.target.closest("[data-filter]");
     if (chip) { event.preventDefault(); applyMemoryFilter(chip.dataset.filter, chip.dataset.value); return; }
     if (event.target.closest("#btn-open-trash")) applyMemoryFilter("mem-filter-deleted", "deleted");
   });
-  ["mem-filter-tenant", "mem-filter-scope", "mem-filter-project", "mem-filter-category", "mem-filter-tag", "mem-filter-deleted"].forEach((id) => $(id).addEventListener("change", () => {
+  ["mem-filter-tenant", "mem-filter-scope", "mem-filter-project", "mem-filter-category", "mem-filter-tag", "mem-filter-agent", "mem-filter-deleted", "mem-filter-sort"].forEach((id) => $(id) && $(id).addEventListener("change", () => {
     if (id === "mem-filter-tenant") renderMemoryProjectFilter();
     if (id === "mem-filter-project" && $(id).value) $("mem-filter-scope").value = "project";
     state.memoryPage = 1;
@@ -2267,8 +2541,9 @@
   $("btn-memory-next").addEventListener("click", () => { state.memoryPage++; syncLocation(true); loadMemories(); });
   $("mem-page-size").addEventListener("change", () => { saveMemoryPageSize(Number($("mem-page-size").value)); syncLocation(true); loadMemories(); });
   $("btn-clear-memory-filters").addEventListener("click", () => { $("filter-memories-form").reset(); renderMemoryProjectFilter(); state.memoryPage = 1; syncLocation(true); loadMemories(); });
-  $("btn-detail-preview").addEventListener("click", () => setDetailMode(false));
-  $("btn-detail-source").addEventListener("click", () => setDetailMode(true));
+  $("btn-detail-preview").addEventListener("click", () => setDetailMode("preview"));
+  $("btn-detail-source").addEventListener("click", () => setDetailMode("source"));
+  if ($("btn-detail-revisions")) $("btn-detail-revisions").addEventListener("click", () => setDetailMode("revisions"));
   $("btn-copy-memory").addEventListener("click", () => { if (state.selectedMemory) copyText(state.selectedMemory.content_md); });
   bindSecretFields();
   $("guide-server-input").value = window.location.origin;
@@ -2280,12 +2555,334 @@
     if (code) copyText(code.closest(".markdown-code").querySelector("code").textContent);
   });
 
-  // setDetailMode switches between the safe reading preview and the original Markdown source.
-  function setDetailMode(source) {
-    $("detail-content").classList.toggle("hidden", !source);
-    $("detail-preview").classList.toggle("hidden", source);
-    $("btn-detail-source").classList.toggle("active", source);
-    $("btn-detail-preview").classList.toggle("active", !source);
+  // setDetailMode switches between reading preview, Markdown source, and revision history.
+  function setDetailMode(mode) {
+    const normalized = mode === true ? "source" : mode === false ? "preview" : (mode || "preview");
+    state.memoryDetailTab = normalized;
+    $("detail-preview").classList.toggle("hidden", normalized !== "preview");
+    $("detail-content").classList.toggle("hidden", normalized !== "source");
+    if ($("detail-revisions-panel")) $("detail-revisions-panel").classList.toggle("hidden", normalized !== "revisions");
+    $("btn-detail-preview").classList.toggle("active", normalized === "preview");
+    $("btn-detail-source").classList.toggle("active", normalized === "source");
+    if ($("btn-detail-revisions")) $("btn-detail-revisions").classList.toggle("active", normalized === "revisions");
+  }
+
+  function parseTagList(raw) {
+    return Array.from(new Set(String(raw || "").split(/[,\s，、]+/).map((s) => s.trim()).filter(Boolean)));
+  }
+
+  function memoryEditPayload() {
+    return {
+      title: $("edit-mem-title") ? $("edit-mem-title").value.trim() : "",
+      category: $("edit-mem-category") ? $("edit-mem-category").value.trim() : "",
+      tags: parseTagList($("edit-mem-tags") ? $("edit-mem-tags").value : ""),
+      is_pinned: !!($("edit-mem-pinned") && $("edit-mem-pinned").checked),
+      content: $("edit-mem-content") ? $("edit-mem-content").value : "",
+    };
+  }
+
+  function canSaveMemoryEdit() {
+    if (!state.memoryEditMode || !state.selectedMemory) return false;
+    const p = memoryEditPayload();
+    if (!p.title || !p.category || !p.content.trim()) return false;
+    return JSON.stringify(p) !== state.memoryEditBaseline;
+  }
+
+  function setEditEditorPreview(preview) {
+    if (!$("edit-mem-content") || !$("edit-mem-preview")) return;
+    $("edit-mem-content").classList.toggle("hidden", preview);
+    $("edit-mem-preview").classList.toggle("hidden", !preview);
+    if (preview) $("edit-mem-preview").innerHTML = window.EngramMarkdown.render($("edit-mem-content").value || "");
+    if ($("btn-edit-mode-write")) $("btn-edit-mode-write").classList.toggle("active", !preview);
+    if ($("btn-edit-mode-preview")) $("btn-edit-mode-preview").classList.toggle("active", preview);
+  }
+
+  function enterMemoryEditMode() {
+    const mem = state.selectedMemory;
+    if (!mem || mem.deleted_at || !$("memory-edit-form")) return;
+    state.memoryEditMode = true;
+    $("edit-mem-title").value = mem.title || "";
+    $("edit-mem-category").value = mem.category || "";
+    $("edit-mem-tags").value = (mem.tags || []).join(", ");
+    $("edit-mem-pinned").checked = !!mem.is_pinned;
+    $("edit-mem-content").value = mem.content_md || "";
+    state.memoryEditBaseline = JSON.stringify(memoryEditPayload());
+    clearFormErrors($("memory-edit-form"));
+    setEditEditorPreview(false);
+    if ($("detail-view-body")) $("detail-view-body").classList.add("hidden");
+    const toolbar = $("memory-detail-card").querySelector(".detail-toolbar");
+    if (toolbar) toolbar.classList.add("hidden");
+    $("memory-edit-form").classList.remove("hidden");
+    $("btn-save-edit-memory").disabled = !canSaveMemoryEdit();
+    $("edit-mem-title").focus();
+  }
+
+  function exitMemoryEditMode() {
+    state.memoryEditMode = false;
+    if ($("memory-edit-form")) $("memory-edit-form").classList.add("hidden");
+    if ($("detail-view-body")) $("detail-view-body").classList.remove("hidden");
+    const toolbar = $("memory-detail-card") && $("memory-detail-card").querySelector(".detail-toolbar");
+    if (toolbar) toolbar.classList.remove("hidden");
+  }
+
+  if ($("btn-edit-memory")) $("btn-edit-memory").addEventListener("click", enterMemoryEditMode);
+  if ($("btn-cancel-edit-memory")) $("btn-cancel-edit-memory").addEventListener("click", exitMemoryEditMode);
+  if ($("btn-edit-mode-write")) $("btn-edit-mode-write").addEventListener("click", () => setEditEditorPreview(false));
+  if ($("btn-edit-mode-preview")) $("btn-edit-mode-preview").addEventListener("click", () => setEditEditorPreview(true));
+  if ($("memory-edit-form")) {
+    onSubmit("memory-edit-form", async (e) => {
+      e.preventDefault();
+      const mem = state.selectedMemory;
+      if (!mem) return;
+      const p = memoryEditPayload();
+      await api("/api/admin/memories", {
+        method: "PATCH",
+        body: JSON.stringify({
+          tenant_id: mem.tenant_id,
+          memory_id: mem.id,
+          expected_version: mem.version,
+          title: p.title,
+          category: p.category,
+          tags: p.tags,
+          is_pinned: p.is_pinned,
+          content: p.content,
+        }),
+      });
+      exitMemoryEditMode();
+      showToast(t`「${p.title}」已保存更新`);
+      await refreshAllData({ quiet: true });
+      await loadMemories({ quiet: true, keepDetail: true });
+      await viewMemoryDetail(mem.id, false);
+    }, canSaveMemoryEdit);
+  }
+
+  function renderNewMemoryProjects() {
+    if (!$("new-mem-tenant") || !$("new-mem-project")) return;
+    const tid = $("new-mem-tenant").value;
+    const prev = $("new-mem-project").value;
+    const projects = state.projects.filter((p) => p.tenant_id === tid && p.status === "active");
+    $("new-mem-project").innerHTML = projects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("") || `<option value="">${t("当前租户尚无项目")}</option>`;
+    if (projects.some((p) => p.id === prev)) $("new-mem-project").value = prev;
+    if ($("new-mem-project-group")) $("new-mem-project-group").classList.toggle("hidden", $("new-mem-scope").value !== "project");
+    $("new-mem-project").required = $("new-mem-scope").value === "project";
+  }
+
+  function setCreateEditorPreview(preview) {
+    if (!$("new-mem-content") || !$("new-mem-preview")) return;
+    $("new-mem-content").classList.toggle("hidden", preview);
+    $("new-mem-preview").classList.toggle("hidden", !preview);
+    if (preview) $("new-mem-preview").innerHTML = window.EngramMarkdown.render($("new-mem-content").value || "");
+    if ($("btn-new-mem-write")) $("btn-new-mem-write").classList.toggle("active", !preview);
+    if ($("btn-new-mem-preview")) $("btn-new-mem-preview").classList.toggle("active", preview);
+  }
+
+  function openCreateMemoryModal() {
+    if (!state.tenants.length) { showToast(t("请先创建租户。"), true); return; }
+    const form = $("create-memory-form");
+    form.reset();
+    clearFormErrors(form);
+    const activeProject = state.projects.find((p) => p.id === ($("mem-filter-project") ? $("mem-filter-project").value : ""));
+    $("new-mem-tenant").value = activeProject ? activeProject.tenant_id : ($("mem-filter-tenant").value || state.tenants[0].id);
+    const filterScope = $("mem-filter-scope") ? $("mem-filter-scope").value : "";
+    $("new-mem-scope").value = filterScope === "global" ? "global" : (state.projects.some((p) => p.tenant_id === $("new-mem-tenant").value && p.status === "active") ? "project" : "global");
+    renderNewMemoryProjects();
+    if (activeProject) $("new-mem-project").value = activeProject.id;
+    setCreateEditorPreview(false);
+    $("memory-create-modal").classList.remove("hidden");
+    $("new-mem-title").focus();
+  }
+
+  function closeCreateMemoryModal() {
+    if ($("memory-create-modal")) $("memory-create-modal").classList.add("hidden");
+    if ($("btn-new-memory")) $("btn-new-memory").focus();
+  }
+
+  if ($("btn-new-memory")) $("btn-new-memory").addEventListener("click", openCreateMemoryModal);
+  if ($("btn-close-create-memory")) $("btn-close-create-memory").addEventListener("click", closeCreateMemoryModal);
+  if ($("btn-cancel-create-memory")) $("btn-cancel-create-memory").addEventListener("click", closeCreateMemoryModal);
+  if ($("memory-create-modal")) $("memory-create-modal").addEventListener("click", (e) => { if (e.target === $("memory-create-modal")) closeCreateMemoryModal(); });
+  if ($("new-mem-tenant")) $("new-mem-tenant").addEventListener("change", renderNewMemoryProjects);
+  if ($("new-mem-scope")) $("new-mem-scope").addEventListener("change", renderNewMemoryProjects);
+  if ($("btn-new-mem-write")) $("btn-new-mem-write").addEventListener("click", () => setCreateEditorPreview(false));
+  if ($("btn-new-mem-preview")) $("btn-new-mem-preview").addEventListener("click", () => setCreateEditorPreview(true));
+  if ($("create-memory-form")) {
+    onSubmit("create-memory-form", async (e) => {
+      e.preventDefault();
+      const scope = $("new-mem-scope").value;
+      const projectID = scope === "project" ? $("new-mem-project").value : "";
+      if (scope === "project" && !projectID) throw new FormError(t("请先选择一个项目，或切换为全局记忆。"), "new-mem-project");
+      const created = await api("/api/admin/memories", {
+        method: "POST",
+        body: JSON.stringify({
+          tenant_id: $("new-mem-tenant").value,
+          scope,
+          project_id: projectID,
+          title: $("new-mem-title").value.trim(),
+          category: $("new-mem-category").value.trim(),
+          tags: parseTagList($("new-mem-tags").value),
+          is_pinned: $("new-mem-pinned").checked,
+          content: $("new-mem-content").value,
+        }),
+      });
+      closeCreateMemoryModal();
+      showToast(t`知识「${created.title}」已创建`);
+      await refreshAllData({ quiet: true });
+      await loadMemories();
+      if (created && created.id) await viewMemoryDetail(created.id);
+    });
+  }
+
+  // Project rename/delete, remote edit/delete, and inline project member role updates.
+  if ($("btn-rename-project")) {
+    $("btn-rename-project").addEventListener("click", () => {
+      const project = state.projects.find((p) => p.id === state.selectedProject);
+      if (!project) return;
+      openRenameModal({
+        title: t("重命名项目"),
+        desc: t`修改项目「${project.name}」的名称，不会影响仓库映射或已有知识。`,
+        label: t("项目新名称"),
+        initialValue: project.name,
+        onSubmitValue: async (newName) => {
+          await api("/api/admin/projects", { method: "PATCH", body: JSON.stringify({ id: project.id, name: newName }) });
+          showToast(t`项目已改名为「${newName}」`);
+          await refreshAllData();
+        },
+      });
+    });
+  }
+  if ($("btn-delete-project")) {
+    $("btn-delete-project").addEventListener("click", async () => {
+      const project = state.projects.find((p) => p.id === state.selectedProject);
+      if (!project) return;
+      const confirmed = await confirmDialog({
+        title: t`删除项目「${project.name}」？`,
+        message: t`将永久删除项目「${project.name}」及其名下的全部项目知识、修订历史、仓库映射与成员授权，此操作不可恢复。`,
+        confirmText: t("永久删除项目"),
+      });
+      if (!confirmed) return;
+      try {
+        await api("/api/admin/projects", { method: "DELETE", body: JSON.stringify({ id: project.id }) });
+        state.selectedProject = "";
+        showToast(t`项目「${project.name}」已删除`);
+        await refreshAllData();
+        syncLocation(true);
+      } catch (err) {
+        showToast(err.message, true);
+      }
+    });
+  }
+
+  function closeRemoteEditModal() {
+    if ($("remote-edit-modal")) $("remote-edit-modal").classList.add("hidden");
+  }
+  function canSaveRemoteEdit() {
+    const url = $("edit-remote-url") ? $("edit-remote-url").value.trim() : "";
+    const ws = $("edit-remote-workspace") ? $("edit-remote-workspace").value.trim() : "";
+    return !!url && JSON.stringify([url, ws]) !== state.remoteEditBaseline;
+  }
+  if ($("btn-close-remote-edit")) $("btn-close-remote-edit").addEventListener("click", closeRemoteEditModal);
+  if ($("btn-cancel-remote-edit")) $("btn-cancel-remote-edit").addEventListener("click", closeRemoteEditModal);
+  if ($("remote-edit-modal")) $("remote-edit-modal").addEventListener("click", (e) => { if (e.target === $("remote-edit-modal")) closeRemoteEditModal(); });
+  if ($("remote-edit-form")) {
+    onSubmit("remote-edit-form", async (e) => {
+      e.preventDefault();
+      await api("/api/admin/projects/remotes", {
+        method: "PATCH",
+        body: JSON.stringify({
+          id: $("edit-remote-id").value,
+          remote_url: $("edit-remote-url").value.trim(),
+          workspace_path: $("edit-remote-workspace").value.trim(),
+        }),
+      });
+      closeRemoteEditModal();
+      showToast(t("仓库地址已更新"));
+      await refreshAllData();
+    }, canSaveRemoteEdit);
+  }
+  if ($("project-remotes-table")) {
+    $("project-remotes-table").addEventListener("click", async (event) => {
+      const project = state.projects.find((p) => p.id === state.selectedProject);
+      if (!project) return;
+      const editBtn = event.target.closest(".btn-edit-remote");
+      if (editBtn) {
+        const remote = (project.repositories || []).find((r) => r.id === editBtn.dataset.id);
+        if (!remote) return;
+        $("edit-remote-id").value = remote.id;
+        $("edit-remote-url").value = remote.canonical_remote || "";
+        $("edit-remote-workspace").value = remote.workspace_path || "";
+        state.remoteEditBaseline = JSON.stringify([$("edit-remote-url").value.trim(), $("edit-remote-workspace").value.trim()]);
+        clearFormErrors($("remote-edit-form"));
+        $("btn-save-remote-edit").disabled = true;
+        $("remote-edit-modal").classList.remove("hidden");
+        $("edit-remote-url").focus();
+        return;
+      }
+      const delBtn = event.target.closest(".btn-delete-remote");
+      if (delBtn) {
+        const remote = (project.repositories || []).find((r) => r.id === delBtn.dataset.id);
+        if (!remote) return;
+        const confirmed = await confirmDialog({
+          title: t("移除仓库地址？"),
+          message: t`将从项目「${project.name}」移除仓库映射「${remote.canonical_remote}」。移除后通过该仓库地址将不再自动匹配到此项目。`,
+          confirmText: t("移除"),
+        });
+        if (!confirmed) return;
+        try {
+          await api("/api/admin/projects/remotes", { method: "DELETE", body: JSON.stringify({ id: remote.id }) });
+          showToast(t("仓库地址已移除"));
+          await refreshAllData();
+        } catch (err) {
+          showToast(err.message, true);
+        }
+      }
+    });
+  }
+  if ($("project-members-table")) {
+    $("project-members-table").addEventListener("change", (event) => {
+      const select = event.target.closest(".proj-member-role-select");
+      if (!select) return;
+      const btn = select.closest("tr").querySelector(".btn-save-proj-member-inline");
+      if (btn) btn.disabled = select.disabled || select.value === select.dataset.saved;
+    });
+    $("project-members-table").addEventListener("click", async (event) => {
+      const btn = event.target.closest(".btn-save-proj-member-inline");
+      const project = state.projects.find((p) => p.id === state.selectedProject);
+      if (!btn || btn.disabled || !project) return;
+      const select = btn.closest("tr").querySelector(".proj-member-role-select");
+      const role = select.value;
+      btn.disabled = true;
+      btn.setAttribute("aria-busy", "true");
+      try {
+        await api("/api/admin/projects/members", {
+          method: "POST",
+          body: JSON.stringify({ project_id: project.id, principal_id: btn.dataset.principal, role }),
+        });
+        select.dataset.saved = role;
+        showToast(t("项目权限已更新"));
+        await refreshAllData();
+      } catch (err) {
+        showToast(err.message, true);
+      } finally {
+        btn.removeAttribute("aria-busy");
+        btn.disabled = select.disabled || select.value === select.dataset.saved;
+      }
+    });
+  }
+
+  // Overview health strip shortcuts.
+  if ($("btn-overview-health-audit")) {
+    $("btn-overview-health-audit").addEventListener("click", () => {
+      if ($("audit-filter-status")) $("audit-filter-status").value = "abnormal";
+      if ($("audit-filter-range")) $("audit-filter-range").value = "24h";
+      state.auditPage = 1;
+      switchAuditSubTab("logs");
+      switchMainTab("tab-audit");
+    });
+  }
+  if ($("btn-overview-health-backup")) {
+    $("btn-overview-health-backup").addEventListener("click", () => {
+      switchMainTab("tab-scheduler");
+    });
   }
 
   $("btn-check-mcp").addEventListener("click", async () => {
@@ -2335,6 +2932,11 @@
   document.addEventListener("keydown", (e) => {
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
     const renameOpen = $("rename-modal") && !$("rename-modal").classList.contains("hidden");
+    const remoteEditOpen = $("remote-edit-modal") && !$("remote-edit-modal").classList.contains("hidden");
+    const memCreateOpen = $("memory-create-modal") && !$("memory-create-modal").classList.contains("hidden");
+    const tenantCreateOpen = $("create-tenant-card") && !$("create-tenant-card").classList.contains("hidden");
+    const memberCreateOpen = $("tenant-forms-panel") && !$("tenant-forms-panel").classList.contains("hidden");
+    const projectCreateOpen = $("project-forms-panel") && !$("project-forms-panel").classList.contains("hidden");
     const purgeOpen = !$("purge-modal").classList.contains("hidden");
     const auditDetailOpen = $("audit-detail-modal") && !$("audit-detail-modal").classList.contains("hidden");
     const auditCleanupOpen = $("audit-cleanup-modal") && !$("audit-cleanup-modal").classList.contains("hidden");
@@ -2346,6 +2948,11 @@
     if (e.key === "Escape") {
       if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
       else if (renameOpen) closeRenameModal();
+      else if (remoteEditOpen) closeRemoteEditModal();
+      else if (memCreateOpen) closeCreateMemoryModal();
+      else if (tenantCreateOpen) { $("create-tenant-card").classList.add("hidden"); $("btn-new-tenant").focus(); }
+      else if (memberCreateOpen) { $("tenant-forms-panel").classList.add("hidden"); $("btn-add-member").focus(); }
+      else if (projectCreateOpen) { $("project-forms-panel").classList.add("hidden"); $("btn-new-project").focus(); }
       else if (purgeOpen) closePurgeModal();
       else if (auditDetailOpen) $("audit-detail-modal").classList.add("hidden");
       else if (auditCleanupOpen) $("audit-cleanup-modal").classList.add("hidden");
@@ -2353,6 +2960,7 @@
       else if (schedConfigOpen) closeSchedulerConfig();
       else if (glossaryOpen) toggleGlossaryModal(false);
       else if (clientConfigOpen) closeClientGuides();
+      else if (detailOpen && state.memoryEditMode) exitMemoryEditMode();
       else if (detailOpen) closeMemoryDetail();
       else if ($("app-navigation") && $("app-navigation").classList.contains("open")) setSidebarOpen(false);
       else if (document.querySelector(".account-menu").open) {
@@ -2360,10 +2968,18 @@
         document.querySelector(".account-menu summary").focus();
       }
     }
-    if (e.key === "Tab" && (confirmOpen || renameOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
-      const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && detailOpen && !state.memoryEditMode && !confirmOpen) {
+      const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
+      if (tag !== "input" && tag !== "textarea" && tag !== "select") {
+        const btn = $(e.key === "ArrowLeft" ? "btn-detail-prev" : "btn-detail-next");
+        if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
+      }
+    }
+    if (e.key === "Tab" && (confirmOpen || renameOpen || remoteEditOpen || memCreateOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
+      const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : remoteEditOpen ? "remote-edit-modal" : memCreateOpen ? "memory-create-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
+      if (!first || !last) return;
       if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
       else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
     }
@@ -2647,6 +3263,7 @@
       systemOpts.classList.add("hidden");
       submitBtn.textContent = t("导入迁移包");
       submitBtn.classList.remove("danger");
+      submitBtn.disabled = true;
       return;
     }
 
@@ -2674,6 +3291,7 @@
       systemOpts.classList.add("hidden");
       submitBtn.textContent = t("导入迁移包");
       submitBtn.classList.remove("danger");
+      submitBtn.disabled = true;
       return;
     }
 
@@ -2691,11 +3309,14 @@
       syncMigrationImportTenantMode();
       submitBtn.textContent = t("导入知识库");
       submitBtn.classList.remove("danger");
+      submitBtn.disabled = false;
     } else {
       knowledgeOpts.classList.add("hidden");
       systemOpts.classList.remove("hidden");
       submitBtn.textContent = t("上传并还原");
       submitBtn.classList.add("danger");
+      const hasData = state.tenants.length > 0;
+      submitBtn.disabled = hasData && !($("mig-import-confirm") && $("mig-import-confirm").checked);
     }
   }
 
@@ -2748,6 +3369,9 @@
   }
   if ($("mig-import-tenant-mode")) {
     $("mig-import-tenant-mode").addEventListener("change", syncMigrationImportTenantMode);
+  }
+  if ($("mig-import-confirm")) {
+    $("mig-import-confirm").addEventListener("change", renderMigrationInspect);
   }
   if ($("mig-import-file")) {
     $("mig-import-file").addEventListener("change", async () => {
@@ -3164,7 +3788,7 @@
     const mainParts = [];
     if (info.typeLabel) mainParts.push(`<span class="audit-resource-type">${escapeHtml(info.typeLabel)}</span>`);
     if (info.target) mainParts.push(`<span class="audit-resource-target">${escapeHtml(info.target)}</span>`);
-    const sub = info.detail ? `<div class="audit-resource-sub">${escapeHtml(info.detail)}</div>` : "";
+    const sub = info.detail ? `<div class="audit-resource-sub">${escapeHtml(localizeEmbeddedTimestamps(info.detail))}</div>` : "";
     const titleAttr = info.rawId ? ` title="${escapeHtml(info.rawId)}"` : "";
     return `<div class="audit-resource-cell"${titleAttr}><div class="audit-resource-main">${mainParts.join("")}</div>${sub}</div>`;
   }
@@ -3190,6 +3814,26 @@
     return t`${sec} 秒`;
   }
 
+  function formatRetentionLabel(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return t("30 天");
+    const goFull = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(text);
+    if (goFull && (goFull[1] || goFull[2] || goFull[3])) {
+      const secs = (Number(goFull[1] || 0) * 3600) + (Number(goFull[2] || 0) * 60) + Number(goFull[3] || 0);
+      if (secs > 0) return formatDurationSeconds(secs);
+    }
+    const dayMatch = /^(\d+)d$/i.exec(text);
+    if (dayMatch) return t`${Number(dayMatch[1])} 天`;
+    return text;
+  }
+
+  function localizeEmbeddedTimestamps(text) {
+    return String(text || "").replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, (iso) => {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? iso : formatDate(iso);
+    });
+  }
+
   function switchAuditSubTab(sub) {
     state.auditSubTab = sub === "tasks" ? "tasks" : "logs";
     const isLogs = state.auditSubTab === "logs";
@@ -3201,6 +3845,7 @@
       $("btn-audit-sub-tasks").classList.toggle("active", !isLogs);
       $("btn-audit-sub-tasks").setAttribute("aria-selected", String(!isLogs));
     }
+    if ($("audit-header-actions")) $("audit-header-actions").classList.toggle("hidden", !isLogs);
     if ($("audit-logs-panel")) $("audit-logs-panel").classList.toggle("hidden", !isLogs);
     if ($("audit-tasks-panel")) $("audit-tasks-panel").classList.toggle("hidden", isLogs);
   }
@@ -3213,12 +3858,17 @@
     const tenant = $("audit-filter-tenant") ? $("audit-filter-tenant").value : "";
     const resourceType = $("audit-filter-resource") ? $("audit-filter-resource").value : "";
     const action = $("audit-filter-action") ? $("audit-filter-action").value.trim() : "";
+    const range = $("audit-filter-range") ? $("audit-filter-range").value : "";
     if (q) p.set("q", q);
     if (src) p.set("source", src);
     if (status) p.set("status", status);
     if (tenant) p.set("tenant_id", tenant);
     if (resourceType) p.set("resource_type", resourceType);
     if (action) p.set("action", action);
+    if (range) {
+      const msMap = { "1h": 3600e3, "24h": 86400e3, "7d": 7 * 86400e3, "30d": 30 * 86400e3 };
+      if (msMap[range]) p.set("from", new Date(Date.now() - msMap[range]).toISOString());
+    }
     if (includePaging) {
       p.set("page", state.auditPage);
       p.set("page_size", state.auditPageSize);
@@ -3233,7 +3883,8 @@
     $("audit-stat-total").textContent = stats.total_count || 0;
     $("audit-stat-24h").textContent = stats.last_24h_count || 0;
     $("audit-stat-failed").textContent = stats.last_24h_failed || 0;
-    $("audit-stat-retention").textContent = stats.default_retention || "30d";
+    if ($("btn-audit-stat-failed")) $("btn-audit-stat-failed").classList.toggle("has-alert", (stats.last_24h_failed || 0) > 0);
+    $("audit-stat-retention").textContent = formatRetentionLabel(stats.default_retention || "30d");
     $("audit-stat-oldest").textContent = stats.oldest_at ? formatDate(stats.oldest_at) : "—";
   }
 
@@ -3272,14 +3923,14 @@
       const actorSub = entry.agent_name ? `<div class="muted" style="font-size:12px;">${escapeHtml(entry.agent_name)}</div>` : "";
       const actionLabel = auditActionLabel(entry.action);
       const resHtml = renderAuditResourceCell(entry);
-      return `<tr>
+      return `<tr class="clickable-row" data-audit-id="${entry.id}">
         <td><time title="${escapeHtml(formatDate(entry.created_at))}">${escapeHtml(formatDate(entry.created_at))}</time></td>
         <td><span class="badge">${escapeHtml(AUDIT_SOURCES[entry.source] || entry.source || "—")}</span></td>
         <td><span class="audit-action-label" title="${escapeHtml(entry.action || "")}">${escapeHtml(actionLabel)}</span></td>
         <td><div>${escapeHtml(actor)}</div>${actorSub}</td>
         <td>${resHtml}</td>
         <td><span class="badge ${auditStatusBadgeClass(entry.status)}">${escapeHtml(AUDIT_STATUSES[entry.status] || entry.status)}</span></td>
-        <td>${entry.duration_ms || 0} ms</td>
+        <td class="nowrap">${entry.duration_ms || 0} ms</td>
         <td><button type="button" class="secondary small btn-audit-detail" data-id="${entry.id}">${t("详情")}</button></td>
       </tr>`;
     }).join("");
@@ -3334,17 +3985,23 @@
   function renderAuditTaskDefinitions() {
     const container = $("audit-task-definitions");
     if (!container) return;
-    container.innerHTML = state.auditTaskDefs.map((def) => `
+    container.innerHTML = state.auditTaskDefs.map((def) => {
+      const lastRun = (state.auditTaskRuns || []).find((r) => r.task_type === def.task_type);
+      const lastMeta = lastRun
+        ? `<div class="audit-task-meta">${t`上次执行：${formatDate(lastRun.started_at)} · 发现 ${lastRun.findings_count || 0} 项`}</div>`
+        : `<div class="audit-task-meta">${t("尚未执行过巡检")}</div>`;
+      return `
       <article class="audit-task-card">
         <div>
           <h3>${escapeHtml(t(def.name))}</h3>
           <p>${escapeHtml(t(def.description))}</p>
+          ${lastMeta}
         </div>
         <div>
           <button type="button" class="secondary small btn-run-audit-task" data-type="${escapeHtml(def.task_type)}">${t("执行审计任务")}</button>
         </div>
-      </article>
-    `).join("");
+      </article>`;
+    }).join("");
   }
 
   function renderAuditTaskFindings(run) {
@@ -3501,12 +4158,14 @@
     $("scheduler-runs-page-info").textContent = t`第 ${state.schedulerRunsPage} / ${totalPages} 页`;
     $("btn-sched-runs-prev").disabled = state.schedulerRunsPage <= 1;
     $("btn-sched-runs-next").disabled = state.schedulerRunsPage >= totalPages;
-    $("scheduler-history-list").innerHTML = state.schedulerRuns.map((run) => `<article class="scheduler-run">
+    const failedOnly = !!($("sched-history-failed-only") && $("sched-history-failed-only").checked);
+    const items = failedOnly ? state.schedulerRuns.filter((run) => run.status !== "success") : state.schedulerRuns;
+    $("scheduler-history-list").innerHTML = items.map((run) => `<article class="scheduler-run">
       <div class="scheduler-run-header"><span class="badge ${schedStatusBadgeClass(run.status)}">${escapeHtml(SCHED_STATUSES[run.status] || run.status)}</span><time>${escapeHtml(formatDate(run.started_at))}</time><span class="muted">${run.trigger_type === "manual" ? t("手动触发") : t("自动调度")}</span><span class="muted">${run.duration_ms || 0} ms</span></div>
-      <p>${escapeHtml(run.summary || "—")}</p>
+      <p>${escapeHtml(localizeEmbeddedTimestamps(run.summary || "—"))}</p>
       ${run.error_message ? `<pre>${escapeHtml(run.error_message)}</pre>` : ""}
       ${run.details && Object.keys(run.details).length ? `<details><summary>${t("详情")}</summary><pre>${escapeHtml(JSON.stringify(run.details, null, 2))}</pre></details>` : ""}
-    </article>`).join("") || `<p class="empty-state">${t("暂无定时任务执行历史。")}</p>`;
+    </article>`).join("") || `<p class="empty-state">${failedOnly ? t("当前页没有异常执行记录。") : t("暂无定时任务执行历史。")}</p>`;
   }
 
   // openSchedulerConfigModal restores both calendar rules and legacy intervals.
@@ -3761,7 +4420,7 @@
       try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
     });
   }
-  ["audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-resource", "audit-filter-action"].forEach((id) => {
+  ["audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-resource", "audit-filter-action", "audit-filter-range"].forEach((id) => {
     if ($(id)) {
       $(id).addEventListener("change", async () => {
         state.auditPage = 1;
@@ -3769,6 +4428,15 @@
       });
     }
   });
+  if ($("btn-audit-stat-failed")) {
+    $("btn-audit-stat-failed").addEventListener("click", async () => {
+      switchAuditSubTab("logs");
+      if ($("audit-filter-status")) $("audit-filter-status").value = "abnormal";
+      if ($("audit-filter-range")) $("audit-filter-range").value = "24h";
+      state.auditPage = 1;
+      try { await loadAuditLogs(); } catch (err) { showToast(err.message, true); }
+    });
+  }
   if ($("audit-page-size")) {
     $("audit-page-size").addEventListener("change", async () => {
       state.auditPageSize = Number($("audit-page-size").value) || 20;
@@ -3778,7 +4446,7 @@
   }
   if ($("btn-clear-audit-filters")) {
     $("btn-clear-audit-filters").addEventListener("click", async () => {
-      ["audit-filter-q", "audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-resource", "audit-filter-action"].forEach((id) => {
+      ["audit-filter-q", "audit-filter-source", "audit-filter-status", "audit-filter-tenant", "audit-filter-resource", "audit-filter-action", "audit-filter-range"].forEach((id) => {
         if ($(id)) $(id).value = "";
       });
       state.auditPage = 1;
@@ -3802,8 +4470,16 @@
   if ($("audit-logs-table")) {
     $("audit-logs-table").addEventListener("click", (e) => {
       const btn = e.target.closest(".btn-audit-detail");
-      if (!btn) return;
-      const entry = state.auditLogs.find((item) => item.id === btn.dataset.id);
+      if (btn) {
+        const entry = state.auditLogs.find((item) => item.id === btn.dataset.id);
+        if (entry) openAuditDetail(entry);
+        return;
+      }
+      if (e.target.closest("button, a, input, select")) return;
+      if (window.getSelection && String(window.getSelection()).trim()) return;
+      const row = e.target.closest("tr[data-audit-id]");
+      if (!row) return;
+      const entry = state.auditLogs.find((item) => item.id === row.dataset.auditId);
       if (entry) openAuditDetail(entry);
     });
   }
@@ -3974,6 +4650,7 @@
   if ($("scheduler-config-modal")) $("scheduler-config-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-config-modal")) closeSchedulerConfig(); });
   if ($("btn-close-scheduler-history")) $("btn-close-scheduler-history").addEventListener("click", () => closeSchedulerHistory());
   if ($("scheduler-history-modal")) $("scheduler-history-modal").addEventListener("click", (e) => { if (e.target === $("scheduler-history-modal")) closeSchedulerHistory(); });
+  if ($("sched-history-failed-only")) $("sched-history-failed-only").addEventListener("change", () => renderSchedulerRuns());
 
   if ($("scheduler-config-form")) {
     onSubmit("scheduler-config-form", async (e) => {
@@ -4024,10 +4701,15 @@
     $("btn-sk-save").disabled = true;
 
     const badge = $("sk-status-badge");
+    const configured = !!data.base_url && !!data.has_api_key;
     if (badge) {
-      const configured = !!data.base_url && !!data.has_api_key;
       badge.textContent = configured ? t("已配置") : t("未配置");
       badge.className = "badge " + (configured ? "success" : "");
+    }
+    if ($("mig-safekeep-hint")) {
+      $("mig-safekeep-hint").textContent = configured
+        ? t`SafeKeep 已配置：将上传至 ${data.base_url}（路径：${data.default_path || "engram"}）`
+        : t("尚未配置 SafeKeep；前往「系统设置 → 备份与存储」配置后即可一键上传。");
     }
     if ($("sk-api-key-hint")) {
       $("sk-api-key-hint").textContent = data.has_api_key

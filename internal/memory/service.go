@@ -1399,6 +1399,333 @@ func (s *Service) AdminSetPinned(ctx context.Context, req AdminPinRequest) (*Mem
 	})
 }
 
+// AdminCreate creates a new global or project memory on behalf of the authenticated console admin.
+func (s *Service) AdminCreate(ctx context.Context, req AdminCreateRequest) (*MemoryDetail, error) {
+	p, err := s.auth.VerifyAdminActor(ctx, req.TenantID, req.ActorID)
+	if err != nil {
+		return nil, err
+	}
+	if err := security.ValidateScope(req.Scope); err != nil {
+		return nil, err
+	}
+	if err := security.ValidateCategory(req.Category); err != nil {
+		return nil, err
+	}
+	tags := normalizeTags(req.Tags)
+	refs := []security.SourceRef{}
+	if err := security.ValidateMemoryContent(s.cfg.Limits, req.Title, req.Content, tags, refs); err != nil {
+		return nil, err
+	}
+	agentName := strings.TrimSpace(req.AgentName)
+	if agentName == "" {
+		agentName = "WebUI"
+	}
+	agentName, err = normalizeAgentName(agentName)
+	if err != nil {
+		return nil, err
+	}
+	if req.Scope == "global" {
+		req.ProjectID = nil
+	} else if req.ProjectID == nil {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "project_id is required for project scope")
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "begin admin create transaction", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if req.Scope == "project" {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE id = $1 AND tenant_id = $2)`, *req.ProjectID, req.TenantID).Scan(&exists); err != nil {
+			return nil, apperror.Wrap(apperror.CodeInternalError, "check project for admin create", err)
+		}
+		if !exists {
+			return nil, apperror.New(apperror.CodeInvalidArgument, "project not found in tenant")
+		}
+	}
+
+	now := time.Now().UTC()
+	memID := uuid.New()
+	cHash := security.ContentHash(req.Content)
+	refsJSON, err := json.Marshal(refs)
+	if err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "marshal source_refs", err)
+	}
+	detail := MemoryDetail{
+		ID:           memID,
+		TenantID:     req.TenantID,
+		Scope:        req.Scope,
+		ProjectID:    req.ProjectID,
+		Category:     req.Category,
+		Title:        strings.TrimSpace(req.Title),
+		Content:      req.Content,
+		Tags:         tags,
+		SourceRefs:   refs,
+		IsPinned:     req.IsPinned,
+		Status:       "active",
+		Version:      1,
+		ContentHash:  cHash,
+		CreatedBy:    p.PrincipalID,
+		UpdatedBy:    p.PrincipalID,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		CreatedAgent: agentName,
+		UpdatedAgent: agentName,
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO memories (
+			id, tenant_id, scope, project_id, category, title, content_md,
+			tags, source_refs, is_pinned, status, version, content_hash,
+			created_by, updated_by, created_at, updated_at, created_agent, updated_agent
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12, $13,
+			$14, $15, $16, $17, $18, $19
+		)
+	`,
+		detail.ID, detail.TenantID, detail.Scope, detail.ProjectID, detail.Category, detail.Title, detail.Content,
+		detail.Tags, refsJSON, detail.IsPinned, detail.Status, detail.Version, detail.ContentHash,
+		detail.CreatedBy, detail.UpdatedBy, detail.CreatedAt, detail.UpdatedAt, detail.CreatedAgent, detail.UpdatedAgent,
+	); err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "insert admin memory", err)
+	}
+
+	reqID := req.RequestID
+	if reqID == "" {
+		reqID = "webui-create-" + uuid.NewString()
+	}
+	if err := insertRevision(ctx, tx, detail, "create", p.PrincipalID, reqID); err != nil {
+		return nil, err
+	}
+	if _, err := s.appendEventLocked(ctx, tx, detail.TenantID, detail.ProjectID, detail.ID, "create", detail.Version, p.PrincipalID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "commit admin create transaction", err)
+	}
+	return &detail, nil
+}
+
+// AdminUpdate edits an active memory on behalf of the authenticated console admin with optimistic locking.
+func (s *Service) AdminUpdate(ctx context.Context, req AdminUpdateRequest) (*MemoryDetail, error) {
+	if req.ExpectedVersion <= 0 {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "expected_version must be > 0")
+	}
+	if isPatchEmpty(req.Patch) {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "patch must contain at least one field")
+	}
+	p, err := s.auth.VerifyAdminActor(ctx, req.TenantID, req.ActorID)
+	if err != nil {
+		return nil, err
+	}
+	agentName := strings.TrimSpace(req.AgentName)
+	if agentName == "" {
+		agentName = "WebUI"
+	}
+	agentName, err = normalizeAgentName(agentName)
+	if err != nil {
+		return nil, err
+	}
+	if req.Patch.Category != nil {
+		if err := security.ValidateCategory(*req.Patch.Category); err != nil {
+			return nil, err
+		}
+	}
+	if req.Patch.Status != nil {
+		if err := security.ValidateStatus(*req.Patch.Status); err != nil {
+			return nil, err
+		}
+	}
+	if req.Patch.Title != nil {
+		t := strings.TrimSpace(*req.Patch.Title)
+		if t == "" || len(t) > s.cfg.Limits.MaxTitleBytes {
+			return nil, apperror.New(apperror.CodeInvalidArgument, "invalid title length in patch")
+		}
+		if err := security.CheckTextSafety(t); err != nil {
+			return nil, err
+		}
+	}
+	if req.Patch.Content != nil {
+		c := *req.Patch.Content
+		if strings.TrimSpace(c) == "" || len(c) > s.cfg.Limits.MaxContentBytes {
+			return nil, apperror.New(apperror.CodeInvalidArgument, "invalid content size in patch")
+		}
+		if err := security.CheckTextSafety(c); err != nil {
+			return nil, err
+		}
+	}
+	if req.Patch.Tags != nil {
+		if err := security.ValidateTags(s.cfg.Limits, normalizeTags(*req.Patch.Tags)); err != nil {
+			return nil, err
+		}
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "begin admin update transaction", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	current, err := s.loadMemoryByID(ctx, tx, req.TenantID, req.MemoryID)
+	if err != nil {
+		return nil, err
+	}
+	if current.DeletedAt != nil {
+		return nil, apperror.New(apperror.CodeInvalidArgument, "cannot edit a deleted memory; restore it first")
+	}
+
+	updated := *current
+	if req.Patch.Category != nil {
+		updated.Category = *req.Patch.Category
+	}
+	if req.Patch.Title != nil {
+		updated.Title = strings.TrimSpace(*req.Patch.Title)
+	}
+	if req.Patch.Content != nil {
+		updated.Content = *req.Patch.Content
+		updated.ContentHash = security.ContentHash(updated.Content)
+	}
+	if req.Patch.Tags != nil {
+		updated.Tags = normalizeTags(*req.Patch.Tags)
+	}
+	if req.Patch.IsPinned != nil {
+		updated.IsPinned = *req.Patch.IsPinned
+	}
+	if req.Patch.Status != nil {
+		updated.Status = *req.Patch.Status
+	}
+	updated.UpdatedAgent = agentName
+	updated.UpdatedBy = p.PrincipalID
+	updated.UpdatedAt = time.Now().UTC()
+
+	var newVersion int64
+	err = tx.QueryRow(ctx, `
+		UPDATE memories
+		SET category = $1,
+			title = $2,
+			content_md = $3,
+			tags = $4,
+			is_pinned = $5,
+			status = $6,
+			content_hash = $7,
+			version = version + 1,
+			updated_by = $8,
+			updated_at = $9,
+			updated_agent = $10
+		WHERE id = $11 AND tenant_id = $12 AND version = $13 AND deleted_at IS NULL
+		RETURNING version
+	`,
+		updated.Category, updated.Title, updated.Content, updated.Tags,
+		updated.IsPinned, updated.Status, updated.ContentHash,
+		updated.UpdatedBy, updated.UpdatedAt, updated.UpdatedAgent,
+		req.MemoryID, req.TenantID, req.ExpectedVersion,
+	).Scan(&newVersion)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeVersionConflict, "version mismatch: memory was modified concurrently")
+		}
+		return nil, apperror.Wrap(apperror.CodeInternalError, "update admin memory", err)
+	}
+	updated.Version = newVersion
+
+	reqID := req.RequestID
+	if reqID == "" {
+		reqID = "webui-update-" + uuid.NewString()
+	}
+	if err := insertRevision(ctx, tx, updated, "update", p.PrincipalID, reqID); err != nil {
+		return nil, err
+	}
+	if _, err := s.appendEventLocked(ctx, tx, updated.TenantID, updated.ProjectID, updated.ID, "update", updated.Version, p.PrincipalID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "commit admin update transaction", err)
+	}
+	return &updated, nil
+}
+
+// AdminBatchDelete soft-deletes selected active memories within a tenant in one transaction.
+func (s *Service) AdminBatchDelete(ctx context.Context, req AdminBatchDeleteRequest) (int, error) {
+	if len(req.MemoryIDs) == 0 {
+		return 0, nil
+	}
+	p, err := s.auth.VerifyAdminActor(ctx, req.TenantID, req.ActorID)
+	if err != nil {
+		return 0, err
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "begin batch delete transaction", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, version
+		FROM memories
+		WHERE tenant_id = $1 AND id = ANY($2) AND deleted_at IS NULL
+		ORDER BY id
+		FOR UPDATE
+	`, req.TenantID, req.MemoryIDs)
+	if err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "lock memories for batch delete", err)
+	}
+	var targets []MemoryVersion
+	for rows.Next() {
+		var mv MemoryVersion
+		if err := rows.Scan(&mv.ID, &mv.Version); err != nil {
+			rows.Close()
+			return 0, apperror.Wrap(apperror.CodeInternalError, "scan batch delete target", err)
+		}
+		targets = append(targets, mv)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "iterate batch delete targets", err)
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	now := time.Now().UTC()
+	reqID := req.RequestID
+	if reqID == "" {
+		reqID = "webui-batch-delete-" + uuid.NewString()
+	}
+	for _, target := range targets {
+		current, err := s.loadMemoryByID(ctx, tx, req.TenantID, target.ID)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE memories
+			SET deleted_at = $1, version = version + 1, updated_by = $2, updated_at = $1, updated_agent = ''
+			WHERE id = $3 AND tenant_id = $4 AND version = $5 AND deleted_at IS NULL
+		`, now, p.PrincipalID, target.ID, req.TenantID, target.Version); err != nil {
+			return 0, apperror.Wrap(apperror.CodeInternalError, "batch delete memory", err)
+		}
+		deleted := *current
+		deleted.Version = target.Version + 1
+		deleted.UpdatedAgent = ""
+		deleted.UpdatedBy = p.PrincipalID
+		deleted.UpdatedAt = now
+		deleted.DeletedAt = &now
+		if err := insertRevision(ctx, tx, deleted, "delete", p.PrincipalID, reqID+"-"+target.ID.String()); err != nil {
+			return 0, err
+		}
+		if _, err := s.appendEventLocked(ctx, tx, deleted.TenantID, deleted.ProjectID, deleted.ID, "delete", deleted.Version, p.PrincipalID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, apperror.Wrap(apperror.CodeInternalError, "commit batch delete transaction", err)
+	}
+	return len(targets), nil
+}
+
 // PurgeDigest fingerprints a set of memory versions independent of order, so a purge can prove
 // it removes exactly what a backup contained.
 func PurgeDigest(items []MemoryVersion) string {

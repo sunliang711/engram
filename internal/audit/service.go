@@ -243,8 +243,12 @@ func buildWhereClause(f QueryFilter) (string, []any) {
 		conds = append(conds, fmt.Sprintf("action ILIKE $%d ESCAPE '\\'", len(args)))
 	}
 	if st := strings.TrimSpace(f.Status); st != "" {
-		args = append(args, st)
-		conds = append(conds, fmt.Sprintf("status = $%d", len(args)))
+		if st == "abnormal" {
+			conds = append(conds, "status IN ('failed', 'denied')")
+		} else {
+			args = append(args, st)
+			conds = append(conds, fmt.Sprintf("status = $%d", len(args)))
+		}
 	}
 	if rt := strings.TrimSpace(f.ResourceType); rt != "" {
 		args = append(args, rt)

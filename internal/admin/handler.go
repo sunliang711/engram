@@ -115,6 +115,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/principals", h.requireActiveAdmin(h.handlePrincipals))
 	mux.HandleFunc("/api/admin/projects", h.requireActiveAdmin(h.handleProjects))
 	mux.HandleFunc("/api/admin/projects/members", h.requireActiveAdmin(h.handleProjectMembers))
+	mux.HandleFunc("/api/admin/projects/members/batch", h.requireActiveAdmin(h.handleProjectMembersBatch))
 	mux.HandleFunc("/api/admin/projects/remotes", h.requireActiveAdmin(h.handleProjectRemotes))
 	mux.HandleFunc("/api/admin/tokens", h.requireActiveAdmin(h.handleTokens))
 	mux.HandleFunc("/api/admin/tokens/reveal", h.requireActiveAdmin(h.handleRevealToken))
@@ -123,6 +124,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/memories/revisions", h.requireActiveAdmin(h.handleMemoryRevisions))
 	mux.HandleFunc("/api/admin/memories/restore", h.requireActiveAdmin(h.handleRestoreMemory))
 	mux.HandleFunc("/api/admin/memories/delete", h.requireActiveAdmin(h.handleDeleteMemory))
+	mux.HandleFunc("/api/admin/memories/batch-delete", h.requireActiveAdmin(h.handleBatchDeleteMemories))
 	mux.HandleFunc("/api/admin/memories/pin", h.requireActiveAdmin(h.handlePinMemory))
 	mux.HandleFunc("/api/admin/memories/facets", h.requireActiveAdmin(h.handleMemoryFacets))
 	mux.HandleFunc("/api/admin/memories/purge/backup", h.requireActiveAdmin(h.handlePurgeBackup))
@@ -465,32 +467,58 @@ func (h *Handler) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		tenantsCnt, principalsCnt, projectsCnt      int
-		activeMemCnt, deletedMemCnt, activeTokenCnt int
-		eventsCnt                                   int64
+		tenantsCnt, principalsCnt, boundMembersCnt, projectsCnt int
+		activeMemCnt, deletedMemCnt, activeTokenCnt             int
+		eventsCnt                                               int64
 	)
 	err := h.pool.QueryRow(r.Context(), `
 		SELECT
 			(SELECT count(*)::int FROM tenants),
 			(SELECT count(*)::int FROM principals WHERE identity_provider <> 'system_webui'),
+			(SELECT count(DISTINCT tm.principal_id)::int FROM tenant_members tm JOIN principals p ON p.id = tm.principal_id WHERE p.identity_provider <> 'system_webui'),
 			(SELECT count(*)::int FROM projects),
 			(SELECT count(*)::int FROM memories WHERE deleted_at IS NULL),
 			(SELECT count(*)::int FROM memories WHERE deleted_at IS NOT NULL),
 			(SELECT count(*)::int FROM api_tokens WHERE revoked_at IS NULL),
 			(SELECT count(*)::bigint FROM memory_events)
-	`).Scan(&tenantsCnt, &principalsCnt, &projectsCnt, &activeMemCnt, &deletedMemCnt, &activeTokenCnt, &eventsCnt)
+	`).Scan(&tenantsCnt, &principalsCnt, &boundMembersCnt, &projectsCnt, &activeMemCnt, &deletedMemCnt, &activeTokenCnt, &eventsCnt)
 	if err != nil {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "query overview stats", err))
 		return
 	}
+	health := map[string]any{}
+	if h.auditSvc != nil {
+		if stats, err := h.auditSvc.GetStats(r.Context()); err == nil && stats != nil {
+			health["audit_last_24h"] = stats.Last24hCount
+			health["audit_failed_24h"] = stats.Last24hFailed
+		}
+	}
+	if h.scheduler != nil {
+		if tasks, err := h.scheduler.ListTasks(r.Context()); err == nil {
+			for _, tk := range tasks {
+				if tk.Name == scheduler.TaskSafekeepMigrationBackup {
+					health["last_backup"] = map[string]any{
+						"enabled":         tk.Enabled,
+						"last_run_at":     tk.LastRunAt,
+						"last_run_status": tk.LastStatus,
+						"last_summary":    tk.LastSummary,
+						"next_run_at":     tk.NextRunAt,
+					}
+					break
+				}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"tenants_count":          tenantsCnt,
-		"principals_count":       principalsCnt,
-		"projects_count":         projectsCnt,
-		"active_memories_count":  activeMemCnt,
-		"deleted_memories_count": deletedMemCnt,
-		"active_tokens_count":    activeTokenCnt,
-		"events_count":           eventsCnt,
+		"tenants_count":               tenantsCnt,
+		"principals_count":            principalsCnt,
+		"active_tenant_members_count": boundMembersCnt,
+		"projects_count":              projectsCnt,
+		"active_memories_count":       activeMemCnt,
+		"deleted_memories_count":      deletedMemCnt,
+		"active_tokens_count":         activeTokenCnt,
+		"events_count":                eventsCnt,
+		"health":                      health,
 	})
 }
 
@@ -1345,15 +1373,17 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 
 		type projItem struct {
-			ID           uuid.UUID        `json:"id"`
-			TenantID     uuid.UUID        `json:"tenant_id"`
-			TenantName   string           `json:"tenant_name"`
-			Name         string           `json:"name"`
-			Marker       *uuid.UUID       `json:"marker,omitempty"`
-			Status       string           `json:"status"`
-			CreatedAt    time.Time        `json:"created_at"`
-			Repositories []map[string]any `json:"repositories"`
-			Members      []map[string]any `json:"members"`
+			ID            uuid.UUID        `json:"id"`
+			TenantID      uuid.UUID        `json:"tenant_id"`
+			TenantName    string           `json:"tenant_name"`
+			Name          string           `json:"name"`
+			Marker        *uuid.UUID       `json:"marker,omitempty"`
+			Status        string           `json:"status"`
+			CreatedAt     time.Time        `json:"created_at"`
+			MemoriesCount int              `json:"memories_count"`
+			LastMemoryAt  *time.Time       `json:"last_memory_at,omitempty"`
+			Repositories  []map[string]any `json:"repositories"`
+			Members       []map[string]any `json:"members"`
 		}
 		list := make([]*projItem, 0)
 		byID := make(map[uuid.UUID]*projItem)
@@ -1369,6 +1399,27 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 			byID[p.ID] = &p
 		}
 		rows.Close()
+
+		memStatRows, err := h.pool.Query(ctx, `
+			SELECT project_id, count(*)::int, max(updated_at)
+			FROM memories
+			WHERE project_id IS NOT NULL AND deleted_at IS NULL
+			GROUP BY project_id
+		`)
+		if err == nil {
+			defer memStatRows.Close()
+			for memStatRows.Next() {
+				var pid uuid.UUID
+				var cnt int
+				var lastAt *time.Time
+				if err := memStatRows.Scan(&pid, &cnt, &lastAt); err == nil {
+					if p, ok := byID[pid]; ok {
+						p.MemoriesCount = cnt
+						p.LastMemoryAt = lastAt
+					}
+				}
+			}
+		}
 
 		repoRows, err := h.pool.Query(ctx, `
 			SELECT id, project_id, canonical_remote, workspace_path, is_primary
@@ -1527,6 +1578,142 @@ func (h *Handler) handleProjects(w http.ResponseWriter, r *http.Request) {
 			"workspace_path":   wsPath,
 		})
 
+	case http.MethodPatch:
+		var req struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+			return
+		}
+		pid, err := uuid.Parse(strings.TrimSpace(req.ID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project id"))
+			return
+		}
+		newName := strings.TrimSpace(req.Name)
+		if newName == "" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "project name is required"))
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin rename project tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		var tid uuid.UUID
+		var oldName, status string
+		if err := tx.QueryRow(ctx, `SELECT tenant_id, name, status FROM projects WHERE id = $1 FOR UPDATE`, pid).Scan(&tid, &oldName, &status); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "project not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "lock project", err))
+			return
+		}
+		if err := project.LockRegistration(ctx, tx, tid); err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		var dup bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE tenant_id = $1 AND name = $2 AND status = 'active' AND id <> $3)`, tid, newName, pid).Scan(&dup); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check duplicate project name", err))
+			return
+		}
+		if dup {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "PROJECT_EXISTS", "message": "该租户下已有同名项目，请换一个名称。"})
+			return
+		}
+		if _, err := tx.Exec(ctx, `UPDATE projects SET name = $2 WHERE id = $1`, pid, newName); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "rename project", err))
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit rename project tx", err))
+			return
+		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			ProjectID:    &pid,
+			Action:       "project.update",
+			ResourceType: "project",
+			ResourceID:   pid.String(),
+			Details:      map[string]any{"old_name": oldName, "name": newName},
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"id": pid, "tenant_id": tid, "name": newName, "status": status})
+
+	case http.MethodDelete:
+		var req struct {
+			ID string `json:"id"`
+		}
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+				return
+			}
+		}
+		rawID := strings.TrimSpace(req.ID)
+		if rawID == "" {
+			rawID = strings.TrimSpace(r.URL.Query().Get("id"))
+		}
+		pid, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project id"))
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin delete project tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		var tid uuid.UUID
+		var projName string
+		if err := tx.QueryRow(ctx, `SELECT tenant_id, name FROM projects WHERE id = $1 FOR UPDATE`, pid).Scan(&tid, &projName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "project not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "lock project for delete", err))
+			return
+		}
+		for _, stmt := range []struct {
+			sql string
+			msg string
+		}{
+			{`DELETE FROM memory_events WHERE project_id = $1`, "delete project memory_events"},
+			{`DELETE FROM memory_revisions WHERE memory_id IN (SELECT id FROM memories WHERE project_id = $1)`, "delete project memory_revisions"},
+			{`UPDATE memories SET source_memory_id = NULL WHERE source_memory_id IN (SELECT id FROM memories WHERE project_id = $1)`, "unlink project source_memory_id"},
+			{`DELETE FROM memories WHERE project_id = $1`, "delete project memories"},
+			{`DELETE FROM project_repositories WHERE project_id = $1`, "delete project repositories"},
+			{`DELETE FROM project_members WHERE project_id = $1`, "delete project members"},
+			{`DELETE FROM projects WHERE id = $1`, "delete project"},
+		} {
+			if _, err := tx.Exec(ctx, stmt.sql, pid); err != nil {
+				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, stmt.msg, err))
+				return
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit delete project tx", err))
+			return
+		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			ProjectID:    &pid,
+			Action:       "project.delete",
+			ResourceType: "project",
+			ResourceID:   pid.String(),
+			Details:      map[string]any{"name": projName},
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": pid, "name": projName})
+
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -1618,92 +1805,318 @@ func (h *Handler) handleProjectMembers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"project_id": pid, "principal_id": prinID, "role": req.Role})
 }
 
-// handleProjectRemotes adds repository mappings under the same tenant registration lock as MCP.
-func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
+// handleProjectMembersBatch updates multiple project grants for one principal in a single transaction.
+func (h *Handler) handleProjectMembersBatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	var req struct {
-		ProjectID     string `json:"project_id"`
-		RemoteURL     string `json:"remote_url"`
-		WorkspacePath string `json:"workspace_path"`
-		IsPrimary     bool   `json:"is_primary"`
+		PrincipalID string `json:"principal_id"`
+		Grants      []struct {
+			ProjectID string `json:"project_id"`
+			Role      string `json:"role"`
+		} `json:"grants"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
 		return
 	}
-	pid, err := uuid.Parse(req.ProjectID)
+	prinID, err := uuid.Parse(strings.TrimSpace(req.PrincipalID))
 	if err != nil {
-		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project_id"))
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid principal_id"))
 		return
 	}
-	canonRemote, err := project.NormalizeRemote(req.RemoteURL)
-	if err != nil {
-		writeJSONError(w, err)
-		return
-	}
-	wsPath, err := project.NormalizeRelPath(req.WorkspacePath)
-	if err != nil {
-		writeJSONError(w, err)
+	if len(req.Grants) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"updated": 0})
 		return
 	}
 
-	var tid uuid.UUID
-	err = h.pool.QueryRow(r.Context(), `SELECT tenant_id FROM projects WHERE id = $1`, pid).Scan(&tid)
-	if err != nil {
-		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "project not found"))
-		return
+	type parsedGrant struct {
+		projectID uuid.UUID
+		role      string
+	}
+	parsed := make([]parsedGrant, 0, len(req.Grants))
+	for _, g := range req.Grants {
+		pid, err := uuid.Parse(strings.TrimSpace(g.ProjectID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project_id in grants"))
+			return
+		}
+		if g.Role != "none" && g.Role != "reader" && g.Role != "writer" {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project permission"))
+			return
+		}
+		parsed = append(parsed, parsedGrant{projectID: pid, role: g.Role})
 	}
 
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
-		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin repository registration tx", err))
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin batch project grants tx", err))
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := project.LockRegistration(ctx, tx, tid); err != nil {
-		writeJSONError(w, err)
-		return
-	}
 
-	repoID := uuid.New()
-	tag, err := tx.Exec(ctx, `
-		INSERT INTO project_repositories (id, tenant_id, project_id, canonical_remote, workspace_path, is_primary)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (tenant_id, canonical_remote, workspace_path) DO NOTHING
-	`, repoID, tid, pid, canonRemote, wsPath, req.IsPrimary)
-	if err == nil && tag.RowsAffected() == 0 {
-		writeJSON(w, http.StatusConflict, map[string]any{"code": "REPOSITORY_EXISTS", "message": "该仓库地址（含子目录）已关联到本租户的项目，无需重复添加。"})
-		return
-	}
-	if err != nil {
-		writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "insert project_repository", err))
-		return
+	for _, g := range parsed {
+		var belongsToTenant bool
+		err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM projects p
+				JOIN tenant_members tm ON tm.tenant_id = p.tenant_id
+				JOIN principals pr ON pr.id = tm.principal_id AND pr.identity_provider <> 'system_webui'
+				WHERE p.id = $1 AND tm.principal_id = $2
+			)
+		`, g.projectID, prinID).Scan(&belongsToTenant)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check tenant membership for batch grant", err))
+			return
+		}
+		if !belongsToTenant {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "principal must be a member of the project's tenant first"))
+			return
+		}
+		if g.role == "none" {
+			if _, err := tx.Exec(ctx, `DELETE FROM project_members WHERE project_id = $1 AND principal_id = $2`, g.projectID, prinID); err != nil {
+				writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "revoke project permission", err))
+				return
+			}
+		} else {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO project_members (project_id, principal_id, role)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (project_id, principal_id) DO UPDATE SET role = EXCLUDED.role
+			`, g.projectID, prinID, g.role); err != nil {
+				writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "upsert project member", err))
+				return
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit repository registration", err))
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit batch project grants tx", err))
 		return
 	}
 	h.recordAdminAudit(r, audit.Entry{
-		TenantID:     &tid,
-		ProjectID:    &pid,
-		Action:       "project.remote_add",
-		ResourceType: "project_repository",
-		ResourceID:   repoID.String(),
-		Details: map[string]any{
-			"canonical_remote": observability.SanitizeRemoteURL(canonRemote),
+		Action:       "project.member_batch_upsert",
+		ResourceType: "project_member",
+		ResourceID:   prinID.String(),
+		Details:      map[string]any{"count": len(parsed)},
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"principal_id": prinID, "updated": len(parsed)})
+}
+
+// handleProjectRemotes manages repository mappings (add, update, delete) under tenant registration lock.
+func (h *Handler) handleProjectRemotes(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			ProjectID     string `json:"project_id"`
+			RemoteURL     string `json:"remote_url"`
+			WorkspacePath string `json:"workspace_path"`
+			IsPrimary     bool   `json:"is_primary"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+			return
+		}
+		pid, err := uuid.Parse(req.ProjectID)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project_id"))
+			return
+		}
+		canonRemote, err := project.NormalizeRemote(req.RemoteURL)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		wsPath, err := project.NormalizeRelPath(req.WorkspacePath)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+
+		var tid uuid.UUID
+		err = h.pool.QueryRow(ctx, `SELECT tenant_id FROM projects WHERE id = $1`, pid).Scan(&tid)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "project not found"))
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin repository registration tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if err := project.LockRegistration(ctx, tx, tid); err != nil {
+			writeJSONError(w, err)
+			return
+		}
+
+		repoID := uuid.New()
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO project_repositories (id, tenant_id, project_id, canonical_remote, workspace_path, is_primary)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (tenant_id, canonical_remote, workspace_path) DO NOTHING
+		`, repoID, tid, pid, canonRemote, wsPath, req.IsPrimary)
+		if err == nil && tag.RowsAffected() == 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "REPOSITORY_EXISTS", "message": "该仓库地址（含子目录）已关联到本租户的项目，无需重复添加。"})
+			return
+		}
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInvalidArgument, "insert project_repository", err))
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit repository registration", err))
+			return
+		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			ProjectID:    &pid,
+			Action:       "project.remote_add",
+			ResourceType: "project_repository",
+			ResourceID:   repoID.String(),
+			Details: map[string]any{
+				"canonical_remote": observability.SanitizeRemoteURL(canonRemote),
+				"workspace_path":   wsPath,
+			},
+		})
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"id":               repoID,
+			"project_id":       pid,
+			"canonical_remote": canonRemote,
 			"workspace_path":   wsPath,
-		},
-	})
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":               repoID,
-		"project_id":       pid,
-		"canonical_remote": canonRemote,
-		"workspace_path":   wsPath,
-	})
+		})
+
+	case http.MethodPatch:
+		var req struct {
+			ID            string `json:"id"`
+			RemoteURL     string `json:"remote_url"`
+			WorkspacePath string `json:"workspace_path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+			return
+		}
+		repoID, err := uuid.Parse(strings.TrimSpace(req.ID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid repository id"))
+			return
+		}
+		canonRemote, err := project.NormalizeRemote(req.RemoteURL)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		wsPath, err := project.NormalizeRelPath(req.WorkspacePath)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+
+		tx, err := h.pool.Begin(ctx)
+		if err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "begin repository update tx", err))
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		var tid, pid uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT tenant_id, project_id FROM project_repositories WHERE id = $1 FOR UPDATE`, repoID).Scan(&tid, &pid); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "repository mapping not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "lock repository mapping", err))
+			return
+		}
+		if err := project.LockRegistration(ctx, tx, tid); err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		var dup bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM project_repositories WHERE tenant_id = $1 AND canonical_remote = $2 AND workspace_path = $3 AND id <> $4)`, tid, canonRemote, wsPath, repoID).Scan(&dup); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "check duplicate repository", err))
+			return
+		}
+		if dup {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "REPOSITORY_EXISTS", "message": "该仓库地址（含子目录）已关联到本租户的项目。"})
+			return
+		}
+		if _, err := tx.Exec(ctx, `UPDATE project_repositories SET canonical_remote = $2, workspace_path = $3 WHERE id = $1`, repoID, canonRemote, wsPath); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "update project repository", err))
+			return
+		}
+		if err := tx.Commit(ctx); err != nil {
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "commit repository update tx", err))
+			return
+		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			ProjectID:    &pid,
+			Action:       "project.remote_update",
+			ResourceType: "project_repository",
+			ResourceID:   repoID.String(),
+			Details: map[string]any{
+				"canonical_remote": observability.SanitizeRemoteURL(canonRemote),
+				"workspace_path":   wsPath,
+			},
+		})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":               repoID,
+			"project_id":       pid,
+			"canonical_remote": canonRemote,
+			"workspace_path":   wsPath,
+		})
+
+	case http.MethodDelete:
+		var req struct {
+			ID string `json:"id"`
+		}
+		if r.ContentLength > 0 {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+				return
+			}
+		}
+		rawID := strings.TrimSpace(req.ID)
+		if rawID == "" {
+			rawID = strings.TrimSpace(r.URL.Query().Get("id"))
+		}
+		repoID, err := uuid.Parse(rawID)
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid repository id"))
+			return
+		}
+		var tid, pid uuid.UUID
+		var canonRemote, wsPath string
+		if err := h.pool.QueryRow(ctx, `DELETE FROM project_repositories WHERE id = $1 RETURNING tenant_id, project_id, canonical_remote, workspace_path`, repoID).Scan(&tid, &pid, &canonRemote, &wsPath); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "repository mapping not found"))
+				return
+			}
+			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "delete project repository", err))
+			return
+		}
+		h.recordAdminAudit(r, audit.Entry{
+			TenantID:     &tid,
+			ProjectID:    &pid,
+			Action:       "project.remote_delete",
+			ResourceType: "project_repository",
+			ResourceID:   repoID.String(),
+			Details: map[string]any{
+				"canonical_remote": observability.SanitizeRemoteURL(canonRemote),
+				"workspace_path":   wsPath,
+			},
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "deleted", "id": repoID})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (h *Handler) handleTokens(w http.ResponseWriter, r *http.Request) {
@@ -1944,12 +2357,222 @@ func (h *Handler) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "revoked"})
 }
 
-// handleMemories returns a bounded, deterministic page with filter-aware totals.
+// handleMemories lists, creates, or edits memories from the management console.
 func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		h.handleListMemories(w, r)
+	case http.MethodPost:
+		h.handleCreateMemory(w, r)
+	case http.MethodPatch:
+		h.handleUpdateMemory(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) handleCreateMemory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID  string   `json:"tenant_id"`
+		Scope     string   `json:"scope"`
+		ProjectID string   `json:"project_id"`
+		Category  string   `json:"category"`
+		Title     string   `json:"title"`
+		Content   string   `json:"content"`
+		Tags      []string `json:"tags"`
+		IsPinned  bool     `json:"is_pinned"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	tid, err := uuid.Parse(strings.TrimSpace(req.TenantID))
+	if err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_id"))
+		return
+	}
+	var projID *uuid.UUID
+	if strings.TrimSpace(req.ProjectID) != "" {
+		pid, err := uuid.Parse(strings.TrimSpace(req.ProjectID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid project_id"))
+			return
+		}
+		projID = &pid
+	}
+	actorID, err := h.ensureAdminActorForTenant(r.Context(), tid)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	created, err := h.memSvc.AdminCreate(r.Context(), memory.AdminCreateRequest{
+		TenantID:  tid,
+		ActorID:   actorID,
+		Scope:     strings.TrimSpace(req.Scope),
+		ProjectID: projID,
+		Category:  strings.TrimSpace(req.Category),
+		Title:     req.Title,
+		Content:   req.Content,
+		Tags:      req.Tags,
+		IsPinned:  req.IsPinned,
+		AgentName: "WebUI",
+		RequestID: "webui-create-" + uuid.NewString(),
+	})
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tid,
+		ProjectID:    created.ProjectID,
+		Action:       "memory.create",
+		ResourceType: "memory",
+		ResourceID:   created.ID.String(),
+		Details: map[string]any{
+			"title":    created.Title,
+			"scope":    created.Scope,
+			"category": created.Category,
+		},
+	})
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *Handler) handleUpdateMemory(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TenantID        string   `json:"tenant_id"`
+		MemoryID        string   `json:"memory_id"`
+		ExpectedVersion int64    `json:"expected_version"`
+		Title           *string  `json:"title"`
+		Category        *string  `json:"category"`
+		Content         *string  `json:"content"`
+		Tags            *[]string `json:"tags"`
+		IsPinned        *bool    `json:"is_pinned"`
+		Status          *string  `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	tid, err := uuid.Parse(strings.TrimSpace(req.TenantID))
+	if err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_id"))
+		return
+	}
+	memID, err := uuid.Parse(strings.TrimSpace(req.MemoryID))
+	if err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid memory_id"))
+		return
+	}
+	actorID, err := h.ensureAdminActorForTenant(r.Context(), tid)
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	updated, err := h.memSvc.AdminUpdate(r.Context(), memory.AdminUpdateRequest{
+		TenantID:        tid,
+		ActorID:         actorID,
+		MemoryID:        memID,
+		ExpectedVersion: req.ExpectedVersion,
+		Patch: memory.MemoryPatch{
+			Title:    req.Title,
+			Category: req.Category,
+			Content:  req.Content,
+			Tags:     req.Tags,
+			IsPinned: req.IsPinned,
+			Status:   req.Status,
+		},
+		AgentName: "WebUI",
+		RequestID: "webui-update-" + uuid.NewString(),
+	})
+	if err != nil {
+		writeJSONError(w, err)
+		return
+	}
+	h.recordAdminAudit(r, audit.Entry{
+		TenantID:     &tid,
+		ProjectID:    updated.ProjectID,
+		Action:       "memory.update",
+		ResourceType: "memory",
+		ResourceID:   memID.String(),
+		Details: map[string]any{
+			"expected_version": req.ExpectedVersion,
+			"version":          updated.Version,
+			"title":            updated.Title,
+			"category":         updated.Category,
+		},
+	})
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (h *Handler) handleBatchDeleteMemories(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	var req struct {
+		Items []struct {
+			TenantID string `json:"tenant_id"`
+			MemoryID string `json:"memory_id"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
+		return
+	}
+	if len(req.Items) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": 0})
+		return
+	}
+	if len(req.Items) > 100 {
+		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "cannot batch delete more than 100 memories at once"))
+		return
+	}
+	byTenant := make(map[uuid.UUID][]uuid.UUID)
+	for _, it := range req.Items {
+		tid, err := uuid.Parse(strings.TrimSpace(it.TenantID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid tenant_id"))
+			return
+		}
+		mid, err := uuid.Parse(strings.TrimSpace(it.MemoryID))
+		if err != nil {
+			writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid memory_id"))
+			return
+		}
+		byTenant[tid] = append(byTenant[tid], mid)
+	}
+	totalDeleted := 0
+	for tid, mids := range byTenant {
+		actorID, err := h.ensureAdminActorForTenant(r.Context(), tid)
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		cnt, err := h.memSvc.AdminBatchDelete(r.Context(), memory.AdminBatchDeleteRequest{
+			TenantID:  tid,
+			ActorID:   actorID,
+			MemoryIDs: mids,
+			RequestID: "webui-batch-delete-" + uuid.NewString(),
+		})
+		if err != nil {
+			writeJSONError(w, err)
+			return
+		}
+		totalDeleted += cnt
+		if cnt > 0 {
+			tidCopy := tid
+			h.recordAdminAudit(r, audit.Entry{
+				TenantID:     &tidCopy,
+				Action:       "memory.batch_delete",
+				ResourceType: "memory",
+				Details:      map[string]any{"deleted": cnt},
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": totalDeleted})
+}
+
+func (h *Handler) handleListMemories(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	tenantIDStr := strings.TrimSpace(q.Get("tenant_id"))
 	scope := strings.TrimSpace(q.Get("scope"))
@@ -2006,6 +2629,10 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	if tag := strings.TrimSpace(q.Get("tag")); tag != "" {
 		where = append(where, addArg(tag)+" = ANY(m.tags)")
 	}
+	if agent := strings.TrimSpace(q.Get("agent")); agent != "" {
+		p := addArg(agent)
+		where = append(where, "(m.created_agent = "+p+" OR m.updated_agent = "+p+")")
+	}
 	if memoryID := q.Get("memory_id"); memoryID != "" {
 		id, err := uuid.Parse(memoryID)
 		if err != nil {
@@ -2028,17 +2655,24 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 	// Clamp stale pages after a deletion or a restore changes the filtered result set.
 	lastPage := max(1, (total+pageSize-1)/pageSize)
 	page = min(page, lastPage)
-	// Pinned entries lead the knowledge list; sort=recent keeps a pure recency order.
+	// Pinned entries lead the knowledge list by default; sort supports recent, created, version, title.
 	orderBy := "m.is_pinned DESC, m.updated_at DESC, m.id DESC"
-	if q.Get("sort") == "recent" {
+	switch strings.TrimSpace(q.Get("sort")) {
+	case "recent":
 		orderBy = "m.updated_at DESC, m.id DESC"
+	case "created":
+		orderBy = "m.created_at DESC, m.id DESC"
+	case "version":
+		orderBy = "m.version DESC, m.updated_at DESC, m.id DESC"
+	case "title":
+		orderBy = "lower(m.title) ASC, m.id ASC"
 	}
 	limitArg := addArg(pageSize)
 	offsetArg := addArg((page - 1) * pageSize)
 	rows, err := h.pool.Query(r.Context(), `
 		SELECT m.id, m.tenant_id, m.scope, m.project_id, coalesce(p.name, ''),
 		       m.category, m.title, m.content_md, m.tags, m.is_pinned, m.status,
-		       m.version, m.updated_at, m.deleted_at, m.created_agent, m.updated_agent
+		       m.version, m.created_at, m.updated_at, m.deleted_at, m.created_agent, m.updated_agent
 		FROM memories m
 		LEFT JOIN projects p ON p.id = m.project_id
 		`+whereClause+`
@@ -2061,30 +2695,30 @@ func (h *Handler) handleMemories(w http.ResponseWriter, r *http.Request) {
 			tags                  []string
 			isPinned              bool
 			version               int64
-			updatedAt             time.Time
+			createdAt, updatedAt  time.Time
 			deletedAt             *time.Time
 		)
 		var createdAgent, updatedAgent string
-		if err := rows.Scan(&id, &tid, &sc, &projID, &pName, &cat, &title, &content, &tags, &isPinned, &status, &version, &updatedAt, &deletedAt, &createdAgent, &updatedAgent); err != nil {
+		if err := rows.Scan(&id, &tid, &sc, &projID, &pName, &cat, &title, &content, &tags, &isPinned, &status, &version, &createdAt, &updatedAt, &deletedAt, &createdAgent, &updatedAgent); err != nil {
 			writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "scan memory", err))
 			return
 		}
 		items = append(items, map[string]any{
-			"id":           id,
-			"tenant_id":    tid,
-			"scope":        sc,
-			"project_id":   projID,
-			"project_name": pName,
-			"category":     cat,
-			"title":        title,
-			"content_md":   content,
-			"tags":         tags,
-			"is_pinned":    isPinned,
-			"status":       status,
-			"version":      version,
-			"updated_at":   updatedAt,
-			"deleted_at":   deletedAt,
-
+			"id":            id,
+			"tenant_id":     tid,
+			"scope":         sc,
+			"project_id":    projID,
+			"project_name":  pName,
+			"category":      cat,
+			"title":         title,
+			"content_md":    content,
+			"tags":          tags,
+			"is_pinned":     isPinned,
+			"status":        status,
+			"version":       version,
+			"created_at":    createdAt,
+			"updated_at":    updatedAt,
+			"deleted_at":    deletedAt,
 			"created_agent": createdAgent,
 			"updated_agent": updatedAgent,
 		})
@@ -2372,7 +3006,22 @@ func (h *Handler) handleMemoryFacets(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "list memory tags", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"categories": categories, "tags": tags})
+	agents, err := collect(`
+		SELECT agent, count(DISTINCT id)::int
+		FROM (
+			SELECT id, created_agent AS agent FROM memories WHERE deleted_at IS NULL AND created_agent <> ''
+			UNION ALL
+			SELECT id, updated_agent AS agent FROM memories WHERE deleted_at IS NULL AND updated_agent <> ''
+		) a
+		GROUP BY agent
+		ORDER BY count(DISTINCT id) DESC, agent
+		LIMIT 100
+	`)
+	if err != nil {
+		writeJSONError(w, apperror.Wrap(apperror.CodeInternalError, "list memory agents", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"categories": categories, "tags": tags, "agents": agents})
 }
 
 // purgeTokenTTL bounds how long a downloaded backup can authorize the matching purge.

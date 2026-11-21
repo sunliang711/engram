@@ -286,3 +286,37 @@ type AdminPinRequest struct {
 	IsPinned        bool      `json:"is_pinned"`
 	RequestID       string    `json:"request_id"`
 }
+
+// AdminCreateRequest creates a new memory from the management console.
+type AdminCreateRequest struct {
+	TenantID  uuid.UUID
+	ActorID   uuid.UUID
+	Scope     string
+	ProjectID *uuid.UUID
+	Category  string
+	Title     string
+	Content   string
+	Tags      []string
+	IsPinned  bool
+	AgentName string
+	RequestID string
+}
+
+// AdminUpdateRequest updates an existing active memory from the management console.
+type AdminUpdateRequest struct {
+	TenantID        uuid.UUID
+	ActorID         uuid.UUID
+	MemoryID        uuid.UUID
+	ExpectedVersion int64
+	Patch           MemoryPatch
+	AgentName       string
+	RequestID       string
+}
+
+// AdminBatchDeleteRequest soft-deletes a selected set of memories in one tenant transaction.
+type AdminBatchDeleteRequest struct {
+	TenantID  uuid.UUID
+	ActorID   uuid.UUID
+	MemoryIDs []uuid.UUID
+	RequestID string
+}
