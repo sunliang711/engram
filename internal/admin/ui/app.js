@@ -390,7 +390,11 @@
         }
       }
       await loadRecentMemories();
-      $("last-refresh").textContent = t("已更新 ") + new Date().toLocaleTimeString(locale, { hour12: false });
+      const refreshBtn = $("btn-refresh");
+      if (refreshBtn) {
+        const refreshedAt = new Date().toLocaleTimeString(locale, { hour12: false });
+        refreshBtn.title = `${t("重新加载所有数据")} (${t("已更新 ").trim()} ${refreshedAt})`;
+      }
     } catch (err) {
       showToast(err.message, true);
     }

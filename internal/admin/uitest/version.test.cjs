@@ -65,6 +65,8 @@ test('sidebar header renders the version badge in the top-left corner and topbar
   const topbar = html.match(/<header class="topbar">([\s\S]*?)<\/header>/)?.[1];
   assert.ok(topbar, 'Missing topbar markup');
   assert.doesNotMatch(topbar, /id="app-version"/);
+  assert.doesNotMatch(topbar, /id="last-refresh"/);
+  assert.match(appSource, /refreshBtn\.title\s*=/);
 
   const refreshBtn = topbar.match(/<button[^>]*id="btn-refresh"[^>]*>([\s\S]*?)<\/button>/)?.[1];
   assert.ok(refreshBtn, 'Missing refresh button markup');
