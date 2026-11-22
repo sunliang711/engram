@@ -4610,8 +4610,10 @@
       const runBtn = e.target.closest(".btn-sched-run");
       if (!runBtn) return;
       const taskName = runBtn.dataset.name;
+      const originalLabel = runBtn.textContent;
       runBtn.disabled = true;
       runBtn.setAttribute("aria-busy", "true");
+      runBtn.textContent = `${t("执行中")}…`;
       try {
         const res = await api("/api/admin/scheduler/tasks/run", {
           method: "POST",
@@ -4625,6 +4627,7 @@
       } finally {
         runBtn.disabled = false;
         runBtn.removeAttribute("aria-busy");
+        runBtn.textContent = originalLabel;
       }
     });
   }

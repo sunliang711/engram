@@ -1507,7 +1507,7 @@ body:has(.modal-backdrop:not(.hidden)) { overflow: hidden; }
 .scheduler-plans-table th:nth-child(3) { width: 164px; }
 .scheduler-plans-table th:nth-child(4) { width: auto; }
 .scheduler-plans-table th:nth-child(5) { width: 68px; }
-.scheduler-plans-table th:nth-child(6) { width: 212px; }
+.scheduler-plans-table th:nth-child(6) { width: 224px; }
 .scheduler-plans-table th, .scheduler-plans-table td { padding: 18px 16px; vertical-align: middle; }
 .scheduler-plans-table th:first-child, .scheduler-plans-table td:first-child { padding-left: 24px; }
 .scheduler-plans-table th:last-child, .scheduler-plans-table td:last-child { padding-right: 24px; }
@@ -1522,6 +1522,7 @@ body:has(.modal-backdrop:not(.hidden)) { overflow: hidden; }
 .scheduler-plans-table .badge { font-size: 11px; padding: 2px 8px; }
 .scheduler-plans-table .row-actions { gap: 6px; justify-content: flex-end; }
 .scheduler-plans-table .row-actions button { padding: 6px 8px; font-size: 12px; box-shadow: none; }
+.scheduler-plans-table .btn-sched-run[aria-busy="true"]::after { content: none; }
 .scheduler-plans-table .row-actions .secondary { color: var(--text-secondary); border-color: var(--border); background: var(--bg-panel); }
 .scheduler-plans-table .row-actions .secondary:hover:not(:disabled) { color: var(--text-accent); border-color: var(--border-strong); background: var(--bg-secondary-hover); }
 .scheduler-plan-code { display: inline-block; padding: 2px 6px; border-radius: 4px; background: var(--bg-panel); font-size: 11px; }

@@ -13,6 +13,7 @@ test('CSS preserves sticky topbar, aligned sidebar buttons, and unwrapped audit 
   assert.doesNotMatch(css, /\.topbar\s*\{\s*position:\s*relative;/);
   assert.doesNotMatch(css, /\.tab-btn\s*\{\s*padding:\s*9px 20px;/);
   assert.match(css, /#audit-logs-table \.btn-audit-detail\s*\{[^}]*white-space:\s*nowrap;/);
+  assert.match(css, /\.scheduler-plans-table \.btn-sched-run\[aria-busy="true"\]::after\s*\{\s*content:\s*none;\s*\}/);
 });
 
 test('HTML orders member client keys before project permissions and exposes P0-P2 controls', () => {
