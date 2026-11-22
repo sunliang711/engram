@@ -56,11 +56,23 @@ function renderHarness(language = 'zh-CN') {
   return { $, state, context };
 }
 
-test('topbar brand renders the version badge in the top-left corner', () => {
-  const topbar = html.match(/<header class="topbar">[\s\S]*?<div class="brand">([\s\S]*?)<\/div>/)?.[1];
-  assert.ok(topbar, 'Missing topbar brand markup');
-  assert.match(topbar, /id="app-version"/);
-  assert.match(topbar, /class="version-badge hidden"/);
+test('sidebar header renders the version badge in the top-left corner and topbar actions stay icon-only', () => {
+  const sidebarHeader = html.match(/<div class="sidebar-header">([\s\S]*?)<\/div>\s*<nav/)?.[1];
+  assert.ok(sidebarHeader, 'Missing sidebar header markup');
+  assert.match(sidebarHeader, /id="app-version"/);
+  assert.match(sidebarHeader, /class="version-badge hidden"/);
+
+  const topbar = html.match(/<header class="topbar">([\s\S]*?)<\/header>/)?.[1];
+  assert.ok(topbar, 'Missing topbar markup');
+  assert.doesNotMatch(topbar, /id="app-version"/);
+
+  const refreshBtn = topbar.match(/<button[^>]*id="btn-refresh"[^>]*>([\s\S]*?)<\/button>/)?.[1];
+  assert.ok(refreshBtn, 'Missing refresh button markup');
+  assert.match(refreshBtn.trim(), /^<svg[\s\S]*<\/svg>$/);
+
+  const accountSummary = topbar.match(/<details class="account-menu">[\s\S]*?<summary[^>]*>([\s\S]*?)<\/summary>/)?.[1];
+  assert.ok(accountSummary, 'Missing account menu summary markup');
+  assert.match(accountSummary.trim(), /^<svg[\s\S]*<\/svg><span id="current-admin-user" class="sr-only">admin<\/span>$/);
 });
 
 test('renderView displays server version and preserves it across logout', () => {

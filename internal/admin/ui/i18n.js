@@ -306,6 +306,7 @@
     "重新加载所有数据": "Reload all data",
     "刷新": "Refresh",
     "· 账号": "· Account",
+    "账号菜单": "Account menu",
     "使用说明": "Help",
     "修改密码": "Change password",
     "退出登录": "Sign out",
@@ -1236,8 +1237,7 @@
         '<circle cx="10" cy="10" r="7.5"/>' +
         '<ellipse cx="10" cy="10" rx="3.2" ry="7.5"/>' +
         '<path d="M3 10h14"/>' +
-        "</svg>" +
-        `<span class="pref-lang-pair"><span class="${locale === "zh-CN" ? "pref-active" : "pref-dim"}">中</span><span class="pref-sep">/</span><span class="${locale === "en" ? "pref-active" : "pref-dim"}">EN</span></span>`;
+        "</svg>";
     }
   }
 

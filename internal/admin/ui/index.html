@@ -95,7 +95,7 @@
           <img src="/ui/favicon.svg" alt="" class="brand-logo" width="36" height="36" />
         </div>
         <div class="sidebar-brand-text">
-          <div class="sidebar-brand-title">Engram<span class="brand-dot">.</span></div>
+          <div class="sidebar-brand-title"><span>Engram<span class="brand-dot">.</span></span><span id="app-version" class="version-badge hidden" title="系统版本" aria-label="系统版本"></span></div>
           <div class="sidebar-brand-sub">共享记忆管理平台</div>
         </div>
         <button type="button" id="btn-close-sidebar" class="sidebar-close-btn" aria-label="收起导航"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
@@ -132,7 +132,6 @@
           <span class="topbar-crumb-root">工作空间</span>
           <span class="topbar-crumb-sep" aria-hidden="true">›</span>
           <span id="topbar-current-page" class="topbar-crumb-current">概览</span>
-          <span id="app-version" class="version-badge hidden" title="系统版本" aria-label="系统版本"></span>
         </div>
         <div class="topbar-actions">
           <div class="preferences-controls">
@@ -140,9 +139,9 @@
             <button type="button" class="secondary small pref-toggle" data-ui-theme aria-label="切换主题"></button>
           </div>
           <span id="last-refresh" class="refresh-status" role="status" aria-live="polite"></span>
-          <button type="button" class="secondary small" id="btn-refresh" title="重新加载所有数据" aria-label="刷新"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M16.5 8A6.5 6.5 0 1 0 17 12M16.5 3v5h-5"/></svg><span>刷新</span></button>
+          <button type="button" class="secondary small" id="btn-refresh" title="重新加载所有数据" aria-label="刷新"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M16.5 8A6.5 6.5 0 1 0 17 12M16.5 3v5h-5"/></svg></button>
           <details class="account-menu">
-            <summary><span id="current-admin-user">admin</span> · 账号</summary>
+            <summary title="账号菜单" aria-label="账号菜单"><svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10" cy="6.8" r="3.2"/><path d="M4.2 16.5c0-3 2.5-5 5.8-5s5.8 2 5.8 5"/></svg><span id="current-admin-user" class="sr-only">admin</span></summary>
             <div class="account-actions">
               <button class="secondary small" id="btn-open-glossary">使用说明</button>
               <button class="secondary small" id="btn-open-change-pwd">修改密码</button>

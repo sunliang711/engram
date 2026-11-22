@@ -134,6 +134,8 @@ test('button preference controls toggle theme and language on a single click', (
   assert.equal(storage.get('engram.theme'), 'dark');
 
   assert.equal(langBtn.attrs['data-lang-current'], 'zh-CN');
+  assert.match(langBtn.innerHTML, /^<svg[\s\S]*<\/svg>$/);
+  assert.equal(langBtn.attrs['aria-label'], '切换为英文');
   langBtn.click();
   assert.equal(new URL(location.assigned).searchParams.get('lang'), 'en');
 });
