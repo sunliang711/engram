@@ -1280,8 +1280,12 @@ pre[id$="-rules"], #guide-claude-cli, #mig-import-result-box { white-space: pre-
 .scheduler-drawer-footer { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border); padding: 16px 24px; margin: 0; }
 .scheduler-history-drawer { width: min(640px, 100vw); }
 body.scheduler-drawer-open { overflow: hidden; }
-.schedule-preview ol { list-style: none; margin: 8px 0; color: var(--text-secondary); font-size: 13px; line-height: 1.9; font-variant-numeric: tabular-nums; }
+.schedule-preview ol { list-style: none; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); color: var(--text-secondary); font-family: var(--font-mono); font-size: 12px; line-height: 1.9; font-variant-numeric: tabular-nums; }
+.schedule-preview ol:empty { display: none; }
 .schedule-preview .error { color: var(--text-danger); }
+.scheduler-meta-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.scheduler-enabled-field { min-height: 40px; display: flex; align-items: center; }
+.scheduler-params-section { padding-top: 16px; border-top: 1px solid var(--border); }
 .scheduler-plans-table { min-width: 1040px !important; }
 .scheduler-plans-table th:first-child { min-width: 250px; }
 .scheduler-plans-table td { vertical-align: top; }

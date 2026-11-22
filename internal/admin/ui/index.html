@@ -1327,30 +1327,23 @@
         <div class="scheduler-drawer-body">
         <p class="desc" id="sched-cfg-desc"></p>
         <div class="form-group">
-          <label class="checkbox-label">
-            <input type="checkbox" id="sched-cfg-enabled" />
-            <span>启用此定时任务</span>
-          </label>
-        </div>
-        <div class="form-group">
           <label for="sched-cfg-schedule-type">计划</label>
           <select id="sched-cfg-schedule-type">
-            <option value="hourly">每小时</option>
-            <option value="daily">每天</option>
-            <option value="weekly">每周</option>
-            <option value="monthly">每月</option>
+            <option value="hourly">每小时 (0 * * * *)</option>
+            <option value="daily">每天 (0 4 * * *)</option>
+            <option value="weekly">每周 (0 5 * * 1)</option>
+            <option value="monthly">每月 (0 4 1 * *)</option>
             <option value="cron">自定义</option>
-            <option value="interval">固定间隔</option>
           </select>
         </div>
-        <div class="form-group" id="sched-cfg-cron-group">
+        <div class="form-group hidden" id="sched-cfg-cron-group">
           <label for="sched-cfg-cron">Cron 表达式（分 时 日 月 周）</label>
           <input type="text" id="sched-cfg-cron" placeholder="例如 0 2 * * 1（每周一 02:00）" />
           <small class="field-hint">支持五字段 Cron、列表、范围和步长；星期 0 表示周日。</small>
         </div>
         <div class="form-group" id="sched-cfg-timezone-group">
           <label for="sched-cfg-timezone">执行时区</label>
-          <input type="text" id="sched-cfg-timezone" list="scheduler-timezones" value="Asia/Singapore" />
+          <input type="text" id="sched-cfg-timezone" list="scheduler-timezones" value="Asia/Singapore" required />
           <datalist id="scheduler-timezones">
             <option value="Asia/Singapore"></option>
             <option value="Asia/Shanghai"></option>
@@ -1359,30 +1352,27 @@
             <option value="Europe/London"></option>
           </datalist>
         </div>
-        <div class="form-group" id="sched-cfg-interval-group">
-          <label for="sched-cfg-interval">执行间隔</label>
-          <input type="text" id="sched-cfg-interval" placeholder="例如 1h、30m、6h、24h" required />
-          <div class="preset-chips" data-target="sched-cfg-interval">
-            <button type="button" class="secondary small preset-chip" data-value="5m">5 分钟</button>
-            <button type="button" class="secondary small preset-chip" data-value="15m">15 分钟</button>
-            <button type="button" class="secondary small preset-chip" data-value="1h">1 小时</button>
-            <button type="button" class="secondary small preset-chip" data-value="6h">6 小时</button>
-            <button type="button" class="secondary small preset-chip" data-value="24h">24 小时</button>
-          </div>
-          <small class="field-hint">最小支持 <code>10s</code>，可使用 <code>m</code>、<code>h</code>、<code>d</code> 等时长格式。</small>
-        </div>
         <div class="form-group schedule-preview" aria-live="polite" aria-atomic="true">
           <span class="field-label">未来执行时间</span>
           <p id="sched-cfg-preview-status" class="field-hint" role="status"></p>
           <ol id="sched-cfg-next-runs"></ol>
           <small class="field-hint">预览未来 5 次执行时间，按所选时区显示。</small>
         </div>
-        <div class="form-group">
-          <label for="sched-cfg-timeout">超时（秒）</label>
-          <input type="number" id="sched-cfg-timeout" min="1" max="86400" value="600" required />
-          <small class="field-hint">任务达到时限后取消执行，范围 1 ~ 86400 秒。</small>
+        <div class="scheduler-meta-row">
+          <div class="form-group">
+            <label for="sched-cfg-timeout">超时（秒）</label>
+            <input type="number" id="sched-cfg-timeout" min="1" max="86400" value="600" required />
+            <small class="field-hint">范围 1 ~ 86400 秒。</small>
+          </div>
+          <div class="form-group">
+            <span class="field-label">启用状态</span>
+            <label class="checkbox-label scheduler-enabled-field">
+              <input type="checkbox" id="sched-cfg-enabled" />
+              <span>启用此定时任务</span>
+            </label>
+          </div>
         </div>
-        <div id="sched-cfg-audit-cleanup-fields">
+        <div id="sched-cfg-audit-cleanup-fields" class="scheduler-params-section">
           <div class="form-group">
             <label for="sched-cfg-retention">审计日志保留时长</label>
             <input type="text" id="sched-cfg-retention" placeholder="例如 30d、720h、7d" />
@@ -1401,7 +1391,7 @@
             <small class="field-hint">每次数据库事务最多删除的条数（100 ~ 10000），防止长锁阻塞。</small>
           </div>
         </div>
-        <div id="sched-cfg-safekeep-fields" class="hidden">
+        <div id="sched-cfg-safekeep-fields" class="scheduler-params-section hidden">
           <div class="form-group">
             <label for="sched-cfg-mig-mode">导出迁移包类型</label>
             <select id="sched-cfg-mig-mode">

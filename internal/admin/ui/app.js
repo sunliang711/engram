@@ -4172,7 +4172,7 @@
     </article>`).join("") || `<p class="empty-state">${failedOnly ? t("当前页没有异常执行记录。") : t("暂无定时任务执行历史。")}</p>`;
   }
 
-  // openSchedulerConfigModal restores both calendar rules and legacy intervals.
+  // openSchedulerConfigModal restores calendar rules and maps legacy intervals to a calendar preset.
   function openSchedulerConfigModal(taskName) {
     const task = state.schedulerTasks.find((item) => item.name === taskName);
     if (!task || !$("scheduler-config-modal")) return;
@@ -4181,12 +4181,14 @@
     $("sched-cfg-desc").textContent = t(task.description) || "";
     $("sched-cfg-enabled").checked = !!task.enabled;
     state.schedulerConfigOpener = document.activeElement;
-    $("sched-cfg-interval").value = formatIntervalInput(task.interval_seconds);
     const presets = schedulerPlanPresets();
+    const isLegacyInterval = !task.schedule_type || task.schedule_type === "interval";
     const selected = Object.keys(presets).find((kind) => presets[kind] === task.cron_expression);
-    $("sched-cfg-schedule-type").value = !task.schedule_type || task.schedule_type === "interval" ? "interval" : selected || "cron";
+    const fallbackPreset = task.interval_seconds >= 604800 ? "weekly" : task.interval_seconds <= 3600 ? "hourly" : "daily";
+    const scheduleType = isLegacyInterval ? (selected || fallbackPreset) : (selected || "cron");
+    $("sched-cfg-schedule-type").value = scheduleType;
     $("sched-cfg-timezone").value = task.timezone || "Asia/Singapore";
-    $("sched-cfg-cron").value = task.cron_expression || "0 4 * * *";
+    $("sched-cfg-cron").value = presets[scheduleType] || task.cron_expression || "0 4 * * *";
     $("sched-cfg-timeout").value = task.timeout_seconds || 600;
     updateScheduleFields();
     const cfg = task.config || {};
@@ -4209,7 +4211,7 @@
         }
       }
     }
-    state.schedulerConfigBaseline = JSON.stringify(schedulerConfigPayload());
+    state.schedulerConfigBaseline = isLegacyInterval ? "" : JSON.stringify(schedulerConfigPayload());
     $("scheduler-config-modal").classList.remove("hidden");
     document.body.classList.add("scheduler-drawer-open");
     $("btn-close-scheduler-config").focus();
@@ -4273,21 +4275,22 @@
     return { hourly: "0 * * * *", daily: "0 4 * * *", weekly: "0 5 * * 1", monthly: "0 4 1 * *" };
   }
 
-  // updateScheduleFields exposes raw Cron only for custom rules and retains legacy intervals.
+  // updateScheduleFields exposes raw Cron only for custom rules.
   function updateScheduleFields() {
     const type = $("sched-cfg-schedule-type").value;
     const preset = schedulerPlanPresets()[type];
     if (preset) $("sched-cfg-cron").value = preset;
-    for (const [id, visible] of [["sched-cfg-cron-group", type === "cron"], ["sched-cfg-timezone-group", type !== "interval"], ["sched-cfg-interval-group", type === "interval"]]) {
-      $(id).classList.toggle("hidden", !visible);
-      $(id).querySelectorAll("input, select").forEach((input) => { input.disabled = !visible; input.required = visible; });
+    const cronGroup = $("sched-cfg-cron-group");
+    const customCron = type === "cron";
+    if (cronGroup) {
+      cronGroup.classList.toggle("hidden", !customCron);
+      cronGroup.querySelectorAll("input, select").forEach((input) => { input.disabled = !customCron; input.required = customCron; });
     }
   }
 
   // calendarSchedulePayload uses identical schedule fields for preview and persistence.
   function calendarSchedulePayload() {
     const type = $("sched-cfg-schedule-type").value;
-    if (type === "interval") return { schedule_type: type, interval: $("sched-cfg-interval").value.trim() };
     return { schedule_type: type, cron_expression: schedulerPlanPresets()[type] || $("sched-cfg-cron").value.trim(), timezone: $("sched-cfg-timezone").value.trim() };
   }
 
@@ -4314,7 +4317,7 @@
       if (times.length !== 5) throw new Error(t("无法计算未来 5 次执行时间。"));
       const zone = payload.timezone || "Asia/Singapore";
       $("sched-cfg-next-runs").innerHTML = times.map((time) => `<li><time datetime="${escapeHtml(time)}">${escapeHtml(formatScheduleTime(time, zone))}</time></li>`).join("");
-      $("sched-cfg-preview-status").textContent = payload.schedule_type === "interval" ? formatDurationSecondsPreview(payload.interval) : describeTaskCron(payload.cron_expression) || payload.cron_expression;
+      $("sched-cfg-preview-status").textContent = describeTaskCron(payload.cron_expression) || payload.cron_expression;
       state.schedulerPreviewValid = true;
       updateSchedulerSaveButton();
     } catch (err) {
@@ -4323,9 +4326,6 @@
       $("sched-cfg-preview-status").classList.add("error");
     }
   }
-
-  // formatDurationSecondsPreview keeps a legacy draft readable without parsing it differently from the server.
-  function formatDurationSecondsPreview(interval) { return t`固定间隔 ${interval}`; }
 
   // schedulePreviewChanged debounces input while immediately invalidating an earlier response.
   function schedulePreviewChanged() {
@@ -4410,7 +4410,6 @@
       if (!chip) return;
       const input = $(group.dataset.target);
       if (input) input.value = chip.dataset.value || "";
-      if (input && group.dataset.target === "sched-cfg-interval") schedulePreviewChanged();
     });
   });
 
@@ -4648,7 +4647,7 @@
 
   if ($("sched-cfg-schedule-type")) $("sched-cfg-schedule-type").addEventListener("change", updateScheduleFields);
   if ($("sched-cfg-schedule-type")) $("sched-cfg-schedule-type").addEventListener("change", schedulePreviewChanged);
-  ["sched-cfg-cron", "sched-cfg-timezone", "sched-cfg-interval"].forEach((id) => {
+  ["sched-cfg-cron", "sched-cfg-timezone"].forEach((id) => {
     if ($(id)) $(id).addEventListener("input", schedulePreviewChanged);
   });
 
