@@ -1250,10 +1250,15 @@
   // getMemoryInstructionSnippet guides discovery, autonomous registration, and scoped memory use.
   function getMemoryInstructionSnippet() {
     return [
+      t("# 全局偏好（所有项目通用）"),
+      "",
+      t("绝大多数偏好和规范存放在 Engram 的置顶全局记忆里，按下面「Engram 共享记忆使用规范」读取。"),
+      "",
       t("## Engram 共享记忆使用规范"),
       "",
       t("如果当前会话已接入 `engram` MCP 工具，请按以下流程使用："),
       "",
+      t("0. **每个会话动手前第一件事：读置顶全局记忆。** 不论任务看起来多简单（哪怕只是读代码、回答问题），在第一次调用其他工具之前先调用 `memory_discover`，然后对 `global_index.pinned` 的**每一条**调用 `memory_read` 读完整正文。索引里的 `summary` 有截断，不能代替正文。置顶全局记忆就是用户的全局偏好与规范（沟通方式、文档写法、发版方式、工具偏好、git 签名、远程机器、浏览器等），与本文件同等效力。若 engram 工具仍在连接中，先用 ToolSearch 等它就绪；确实连不上时告诉用户，并只按本文件的兜底规则行事。"),
       t("1. **会话开始先识别项目**："),
       t("   - 获取当前仓库的 `git remote -v`（以及根目录或子目录 `.engram-project` 文件中的 UUID，如有），调用 `memory_discover` 获取 `project_context` 与范围索引。"),
       t("   - 注意：`workspace_path` 仅用于 Monorepo 子目录（相对于 Git 根目录），**不要传入本地绝对路径**；若当前不在 Git 仓库中且仅需全局记忆，传入 `allow_global_only: true`。"),
@@ -1262,10 +1267,12 @@
       t("   - 同一会话内复用返回的 `project_context`，无需重复调用 `memory_discover`。"),
       t("2. **先查索引，再按需检索与读取**："),
       t("   - 先浏览 `memory_discover` 返回的 `global_index` 与 `project_index`（如有）中的 `pinned`、`category_stats`、`recent`（含标题、标签与简短 `summary`）以及 `total_count` / `truncated`；若已命中目标，直接调用 `memory_read` 按需读取正文。"),
-      t("   - 若任一可读作用域的 `truncated` 为 `true`，可调用 `memory_query` 按关键词、`categories` 或 `tags` 缩小范围，或设置 `\"query\": \"\"`、`\"limit\": 100` 并跟随 `next_cursor` 分页补全目录（`global_only` 模式下仅传 `\"scopes\": [\"global\"]`），定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。"),
+      t("   - 若任一可读作用域的 `truncated` 为 `true`（`global_index` 最近条目最多 5 条、`project_index` 最多 50 条），可调用 `memory_query` 按关键词、`categories` 或 `tags` 缩小范围，或设置 `\"query\": \"\"`、`\"limit\": 100` 并跟随 `next_cursor` 分页补全目录（`global_only` 模式下仅传 `\"scopes\": [\"global\"]`），定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。"),
+      t("   - 涉及环境地址（生产、UAT、管理页）、排障经验或某个系统的既有结论时，先用 `memory_query` 搜项目记忆，再去翻代码或问用户。"),
       t("3. **任务过程中及时沉淀与更新**："),
       t("   - 调用 `memory_create`、`memory_update`、`memory_delete` 或 `memory_promote` 写入时，在顶层参数 `agent_name` 中填写当前 Agent 名称，例如 `Codex`、`Claude Code` 或自定义 `review-agent`。这是自报信息，权限仍由 Token 决定；使用同一 `idempotency_key` 重试时保持 `agent_name` 一致。"),
       t("   - 遇到有长期价值的架构约定、环境配置、排障结论或跨项目规范时，调用 `memory_create` / `memory_update` 沉淀或更新记忆（更新需传 `expected_version` 与唯一 `idempotency_key`），**严禁写入密码、Token、私钥等敏感凭据**。"),
+      t("   - 新增或修改用户的全局偏好时，写成置顶的全局记忆（`scope: global`、`is_pinned: true`），不要写回本文件。"),
     ].join("\n");
   }
 
