@@ -1338,6 +1338,33 @@ func TestV1AcceptanceSuite(t *testing.T) {
 		if discPinned.ProjectIndex.Pinned[0].Summary == "" {
 			t.Fatalf("expected compact summary on pinned index item, got %+v", discPinned.ProjectIndex.Pinned[0])
 		}
+
+		// Updating persisted index settings immediately applies to subsequent Discover calls.
+		newProjLimit := 100
+		zeroSummary := 0
+		updatedSettings, err := env.svc.UpdateIndexSettings(ctxA, memory.UpdateIndexSettingsRequest{
+			DiscoverProjectRecentLimit: &newProjLimit,
+			IndexSummaryMaxRunes:       &zeroSummary,
+		})
+		if err != nil {
+			t.Fatalf("update index settings: %v", err)
+		}
+		if updatedSettings.DiscoverProjectRecentLimit != 100 || updatedSettings.IndexSummaryMaxRunes != 0 || updatedSettings.UpdatedAt == nil {
+			t.Fatalf("unexpected updated index settings: %+v", updatedSettings)
+		}
+		discCustom, err := env.svc.Discover(ctxA, memory.DiscoverRequest{
+			Remotes: []project.RemoteInput{{Name: "origin", URL: "git@github.com:eagle/project-a2.git"}},
+		})
+		if err != nil {
+			t.Fatalf("discover after updating index settings: %v", err)
+		}
+		if discCustom.ProjectIndex == nil || len(discCustom.ProjectIndex.Recent) != 51 || !discCustom.ProjectIndex.Truncated {
+			t.Fatalf("expected all 51 non-pinned items with limit=100 (and 10/11 pinned so truncated=true), got %+v", discCustom.ProjectIndex)
+		}
+		if discCustom.ProjectIndex.Recent[0].Summary != "" || discCustom.ProjectIndex.Pinned[0].Summary != "" {
+			t.Fatalf("expected summaries omitted when index_summary_max_runes=0, got recent=%q pinned=%q",
+				discCustom.ProjectIndex.Recent[0].Summary, discCustom.ProjectIndex.Pinned[0].Summary)
+		}
 	})
 }
 

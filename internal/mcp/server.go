@@ -662,7 +662,7 @@ func toolDefinitions() []map[string]any {
 		projectRegisterDefinition(),
 		{
 			"name":        "memory_discover",
-			"description": "Resolve current repository/project identity and return project_context, permissions, scope indices (with titles, tags, brief summaries, total_count, and truncated flag; global_index returns up to 10 pinned and 5 recent items, and project_index returns up to 10 pinned and 50 recent items—use memory_query when truncated=true), and latest_cursor. Pass Git remotes (e.g. git remote -v) and/or project_marker (.engram-project UUID) to identify a project, or set allow_global_only=true when outside a registered project.",
+			"description": "Resolve current repository/project identity and return project_context, permissions, scope indices (global_index and project_index with titles, tags, optional brief summaries, total_count, and truncated flag; limits are configurable in Admin System Settings—use memory_query when truncated=true), and latest_cursor. Pass Git remotes (e.g. git remote -v) and/or project_marker (.engram-project UUID) to identify a project, or set allow_global_only=true when outside a registered project.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

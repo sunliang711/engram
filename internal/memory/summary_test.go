@@ -97,12 +97,12 @@ func TestSummarizeContent_QueryNotInBodyFallsBackCleanly(t *testing.T) {
 
 func TestSummarizeContent_IndexSummaryLimit(t *testing.T) {
 	longBody := strings.Repeat("架构规范与配置说明", 20)
-	got := summarizeContent(longBody, "", indexSummaryMaxRunes)
+	got := summarizeContent(longBody, "", DefaultIndexSummaryMaxRunes)
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("expected truncated index summary with ellipsis, got %q", got)
 	}
-	if len([]rune(got)) != indexSummaryMaxRunes+3 {
-		t.Fatalf("expected %d runes including ellipsis, got %d (%q)", indexSummaryMaxRunes+3, len([]rune(got)), got)
+	if len([]rune(got)) != DefaultIndexSummaryMaxRunes+3 {
+		t.Fatalf("expected %d runes including ellipsis, got %d (%q)", DefaultIndexSummaryMaxRunes+3, len([]rune(got)), got)
 	}
 }
 

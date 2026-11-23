@@ -188,12 +188,31 @@ test('index-first discovery and catalog fallback instructions translate cleanly'
 
   const decodedFallbackKey = JSON.parse(`"${fallbackLine}"`);
   const translatedFallback = ui.t(decodedFallbackKey);
-  assert.match(translatedFallback, /`global_index`/);
-  assert.match(translatedFallback, /`project_index`/);
+  assert.match(translatedFallback, /`truncated`/);
   assert.match(translatedFallback, /`memory_query`/);
   assert.match(translatedFallback, /`"limit": 100`/);
   assert.match(translatedFallback, /`next_cursor`/);
   assert.match(translatedFallback, /`global_only`/);
   assert.match(translatedFallback, /`"scopes": \["global"\]`/);
   assert.match(translatedFallback, /`memory_read`/);
+});
+
+test('memory index settings labels and audit actions translate cleanly', () => {
+  const { ui } = browser({ language: 'en' });
+  for (const key of [
+    '记忆索引',
+    '记忆索引与发现配置',
+    '默认配置',
+    '已自定义',
+    '项目最近记忆上限（条）',
+    '全局最近记忆上限（条）',
+    '置顶记忆上限（条）',
+    '索引摘要最大字数',
+    '恢复默认值',
+    '记忆索引配置已保存',
+    '更新记忆索引配置',
+  ]) {
+    assert.notEqual(ui.t(key), key, `expected English translation for ${key}`);
+  }
+  assert.equal(ui.t`最近更新于 ${'2026-11-23'}（对所有服务端实例即时生效）。`, 'Last updated 2026-11-23 (active immediately across all server instances).');
 });

@@ -60,6 +60,7 @@
     schedulerConfigOpener: null,
     schedulerHistoryOpener: null,
     safekeepSettings: null,
+    memoryIndexSettings: null,
     settingsTab: "backup",
   };
 
@@ -90,7 +91,7 @@
 
   // setSettingsTab updates accessible panels while preserving drafts and shareable URLs.
   function setSettingsTab(name, updateURL = true) {
-    const selected = ["backup", "appearance", "security"].includes(name) ? name : "backup";
+    const selected = ["backup", "memory", "appearance", "security"].includes(name) ? name : "backup";
     if (state.settingsTab === "backup" && selected !== "backup") {
       resetSecretField($("sk-api-key"));
       resetSecretField($("sk-backup-passphrase"));
@@ -387,6 +388,7 @@
           await loadSchedulerCenter();
         } else if (activeTab() === "tab-settings" || activeTab() === "tab-migration") {
           await loadSafekeepSettings();
+          if (activeTab() === "tab-settings") await loadMemoryIndexSettings();
         }
       }
       await loadRecentMemories();
@@ -1260,7 +1262,7 @@
       t("   - 同一会话内复用返回的 `project_context`，无需重复调用 `memory_discover`。"),
       t("2. **先查索引，再按需检索与读取**："),
       t("   - 先浏览 `memory_discover` 返回的 `global_index` 与 `project_index`（如有）中的 `pinned`、`category_stats`、`recent`（含标题、标签与简短 `summary`）以及 `total_count` / `truncated`；若已命中目标，直接调用 `memory_read` 按需读取正文。"),
-      t("   - 若任一可读作用域的 `truncated` 为 `true`（`global_index` 最近条目最多 5 条、`project_index` 最多 50 条），可调用 `memory_query` 按关键词、`categories` 或 `tags` 缩小范围，或设置 `\"query\": \"\"`、`\"limit\": 100` 并跟随 `next_cursor` 分页补全目录（`global_only` 模式下仅传 `\"scopes\": [\"global\"]`），定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。"),
+      t("   - 若任一可读作用域的 `truncated` 为 `true`，可调用 `memory_query` 按关键词、`categories` 或 `tags` 缩小范围，或设置 `\"query\": \"\"`、`\"limit\": 100` 并跟随 `next_cursor` 分页补全目录（`global_only` 模式下仅传 `\"scopes\": [\"global\"]`），定位到 `memory_id` 后再调用 `memory_read` 读取完整 Markdown 正文。"),
       t("3. **任务过程中及时沉淀与更新**："),
       t("   - 调用 `memory_create`、`memory_update`、`memory_delete` 或 `memory_promote` 写入时，在顶层参数 `agent_name` 中填写当前 Agent 名称，例如 `Codex`、`Claude Code` 或自定义 `review-agent`。这是自报信息，权限仍由 Token 决定；使用同一 `idempotency_key` 重试时保持 `agent_name` 一致。"),
       t("   - 遇到有长期价值的架构约定、环境配置、排障结论或跨项目规范时，调用 `memory_create` / `memory_update` 沉淀或更新记忆（更新需传 `expected_version` 与唯一 `idempotency_key`），**严禁写入密码、Token、私钥等敏感凭据**。"),
@@ -1505,7 +1507,10 @@
     if (tabId === "tab-audit" && state.locationReady) loadAuditCenter().catch((err) => showToast(err.message, true));
     if (tabId === "tab-scheduler" && state.locationReady) loadSchedulerCenter().catch((err) => showToast(err.message, true));
     if (tabId === "tab-settings") setSettingsTab(state.settingsTab, false);
-    if ((tabId === "tab-settings" || tabId === "tab-migration") && state.locationReady) loadSafekeepSettings().catch((err) => showToast(err.message, true));
+    if ((tabId === "tab-settings" || tabId === "tab-migration") && state.locationReady) {
+      loadSafekeepSettings().catch((err) => showToast(err.message, true));
+      if (tabId === "tab-settings") loadMemoryIndexSettings().catch((err) => showToast(err.message, true));
+    }
     if (updateURL) syncLocation(true);
   }
 
@@ -1614,7 +1619,7 @@
     $("tenant-forms-panel").classList.add("hidden");
     $("create-tenant-card").classList.add("hidden");
     $("project-forms-panel").classList.add("hidden");
-    if (tab === "tab-settings") state.settingsTab = ["appearance", "security"].includes(params.get("section")) ? params.get("section") : "backup";
+    if (tab === "tab-settings") state.settingsTab = ["memory", "appearance", "security"].includes(params.get("section")) ? params.get("section") : "backup";
     switchMainTab(allowed.includes(tab) ? tab : "tab-overview", false);
     const filterParams = tab === "tab-memories" ? params : new URLSearchParams();
     MEMORY_FILTERS.forEach(([key, id]) => {
@@ -3594,6 +3599,7 @@
     "audit.task_run": t("执行审计巡检任务"),
     "scheduler.task_run": t("执行定时任务"),
     "scheduler.task_update": t("修改定时任务配置"),
+    "settings.memory_index_update": t("更新记忆索引配置"),
   };
   const AUDIT_RESOURCE_TYPES = {
     memory: t("知识条目"),
@@ -3611,6 +3617,7 @@
     export: t("知识导出"),
     migration: t("迁移包"),
     integration: t("外部集成"),
+    settings: t("系统设置"),
     mcp: t("MCP 接口"),
     system: t("系统"),
     idempotency_request: t("幂等记录"),
@@ -4832,6 +4839,108 @@
         btn.disabled = false;
         btn.removeAttribute("aria-busy");
       }
+    });
+  }
+
+  const DEFAULT_MEMORY_INDEX_SETTINGS = {
+    discover_project_recent_limit: 50,
+    discover_global_recent_limit: 5,
+    discover_pinned_limit: 10,
+    index_summary_max_runes: 100,
+  };
+
+  function readMemoryIndexDraft() {
+    const parse = (id) => {
+      const raw = String($(id)?.value ?? "").trim();
+      if (!/^\d+$/.test(raw)) return NaN;
+      return Number(raw);
+    };
+    return {
+      discover_project_recent_limit: parse("mi-project-recent-limit"),
+      discover_global_recent_limit: parse("mi-global-recent-limit"),
+      discover_pinned_limit: parse("mi-pinned-limit"),
+      index_summary_max_runes: parse("mi-summary-max-runes"),
+    };
+  }
+
+  function isValidMemoryIndexDraft(d) {
+    return Number.isInteger(d.discover_project_recent_limit) && d.discover_project_recent_limit >= 1 && d.discover_project_recent_limit <= 500 &&
+      Number.isInteger(d.discover_global_recent_limit) && d.discover_global_recent_limit >= 1 && d.discover_global_recent_limit <= 200 &&
+      Number.isInteger(d.discover_pinned_limit) && d.discover_pinned_limit >= 1 && d.discover_pinned_limit <= 100 &&
+      Number.isInteger(d.index_summary_max_runes) && d.index_summary_max_runes >= 0 && d.index_summary_max_runes <= 500;
+  }
+
+  function isMemoryIndexDirty() {
+    const saved = state.memoryIndexSettings;
+    if (!saved) return false;
+    return String($("mi-project-recent-limit")?.value ?? "").trim() !== String(saved.discover_project_recent_limit) ||
+      String($("mi-global-recent-limit")?.value ?? "").trim() !== String(saved.discover_global_recent_limit) ||
+      String($("mi-pinned-limit")?.value ?? "").trim() !== String(saved.discover_pinned_limit) ||
+      String($("mi-summary-max-runes")?.value ?? "").trim() !== String(saved.index_summary_max_runes);
+  }
+
+  function canSaveMemoryIndexSettings() {
+    if (!isMemoryIndexDirty()) return false;
+    return isValidMemoryIndexDraft(readMemoryIndexDraft());
+  }
+
+  async function loadMemoryIndexSettings() {
+    if (!$("memory-index-settings-form")) return;
+    const data = await api("/api/admin/settings/memory-index");
+    const form = $("memory-index-settings-form");
+    if (state.memoryIndexSettings && (isMemoryIndexDirty() || form.contains(document.activeElement) || form.dataset.submitting === "true")) return;
+    state.memoryIndexSettings = data;
+    renderMemoryIndexSettings(data);
+  }
+
+  function renderMemoryIndexSettings(data) {
+    if (!data || !$("memory-index-settings-form")) return;
+    $("mi-project-recent-limit").value = data.discover_project_recent_limit ?? DEFAULT_MEMORY_INDEX_SETTINGS.discover_project_recent_limit;
+    $("mi-global-recent-limit").value = data.discover_global_recent_limit ?? DEFAULT_MEMORY_INDEX_SETTINGS.discover_global_recent_limit;
+    $("mi-pinned-limit").value = data.discover_pinned_limit ?? DEFAULT_MEMORY_INDEX_SETTINGS.discover_pinned_limit;
+    $("mi-summary-max-runes").value = data.index_summary_max_runes ?? DEFAULT_MEMORY_INDEX_SETTINGS.index_summary_max_runes;
+    $("btn-mi-save").disabled = true;
+
+    const customized = data.discover_project_recent_limit !== DEFAULT_MEMORY_INDEX_SETTINGS.discover_project_recent_limit ||
+      data.discover_global_recent_limit !== DEFAULT_MEMORY_INDEX_SETTINGS.discover_global_recent_limit ||
+      data.discover_pinned_limit !== DEFAULT_MEMORY_INDEX_SETTINGS.discover_pinned_limit ||
+      data.index_summary_max_runes !== DEFAULT_MEMORY_INDEX_SETTINGS.index_summary_max_runes;
+    const badge = $("mi-status-badge");
+    if (badge) {
+      badge.textContent = customized ? t("已自定义") : t("默认配置");
+      badge.className = "badge " + (customized ? "success" : "");
+    }
+    if ($("mi-updated-hint")) {
+      $("mi-updated-hint").textContent = data.updated_at
+        ? t`最近更新于 ${formatDate(data.updated_at)}（对所有服务端实例即时生效）。`
+        : t("当前使用内置默认值，修改后点击保存即可生效。");
+    }
+  }
+
+  if ($("memory-index-settings-form")) {
+    onSubmit("memory-index-settings-form", async (e) => {
+      e.preventDefault();
+      const payload = readMemoryIndexDraft();
+      const updated = await api("/api/admin/settings/memory-index", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      state.memoryIndexSettings = updated;
+      renderMemoryIndexSettings(updated);
+      showToast(t("记忆索引配置已保存"));
+    }, canSaveMemoryIndexSettings);
+  }
+
+  if ($("btn-mi-reset")) {
+    $("btn-mi-reset").addEventListener("click", () => {
+      const form = $("memory-index-settings-form");
+      if (!form) return;
+      clearFormErrors(form);
+      $("mi-project-recent-limit").value = DEFAULT_MEMORY_INDEX_SETTINGS.discover_project_recent_limit;
+      $("mi-global-recent-limit").value = DEFAULT_MEMORY_INDEX_SETTINGS.discover_global_recent_limit;
+      $("mi-pinned-limit").value = DEFAULT_MEMORY_INDEX_SETTINGS.discover_pinned_limit;
+      $("mi-summary-max-runes").value = DEFAULT_MEMORY_INDEX_SETTINGS.index_summary_max_runes;
+      $("btn-mi-save").disabled = !canSaveMemoryIndexSettings();
     });
   }
 

@@ -150,6 +150,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/integrations/safekeep/reveal", h.requireActiveAdmin(h.handleSafekeepReveal))
 	mux.HandleFunc("/api/admin/integrations/safekeep/test", h.requireActiveAdmin(h.handleSafekeepTest))
 	mux.HandleFunc("/api/admin/integrations/safekeep/backup", h.requireActiveAdmin(h.handleSafekeepBackupNow))
+	mux.HandleFunc("/api/admin/settings/memory-index", h.requireActiveAdmin(h.handleMemoryIndexSettings))
 }
 
 // isUIRoutePath matches Web UI SPA paths so browser refreshes and deep links serve index.html

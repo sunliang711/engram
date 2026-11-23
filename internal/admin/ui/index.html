@@ -1042,12 +1042,13 @@
           <div>
             <p class="eyebrow">外部集成与系统设置</p>
             <h1>系统设置</h1>
-            <p class="desc">管理备份存储、界面偏好与管理员账号安全。</p>
+            <p class="desc">管理记忆索引、备份存储、界面偏好与管理员账号安全。</p>
           </div>
         </div>
 
         <div class="settings-tabs" role="tablist" aria-label="设置分类">
           <button type="button" id="settings-tab-backup" role="tab" aria-selected="true" aria-controls="settings-panel-backup" data-settings-tab="backup">备份与存储</button>
+          <button type="button" id="settings-tab-memory" role="tab" aria-selected="false" aria-controls="settings-panel-memory" tabindex="-1" data-settings-tab="memory">记忆索引</button>
           <button type="button" id="settings-tab-appearance" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" tabindex="-1" data-settings-tab="appearance">界面偏好</button>
           <button type="button" id="settings-tab-security" role="tab" aria-selected="false" aria-controls="settings-panel-security" tabindex="-1" data-settings-tab="security">账号安全</button>
         </div>
@@ -1107,6 +1108,46 @@
                 <button type="button" id="btn-sk-test" class="secondary">测试连接</button>
               </div>
               <span id="sk-test-result" class="check-result" role="status" aria-live="polite"></span>
+            </form>
+          </div>
+        </div>
+        <div id="settings-panel-memory" role="tabpanel" aria-labelledby="settings-tab-memory" class="settings-grid hidden">
+          <div class="card">
+            <div class="section-heading">
+              <div class="operation-heading"><span class="operation-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h14"/><circle cx="18" cy="12" r="2"/></svg></span><div><h2>记忆索引与发现配置</h2><p class="operation-caption">控制 Agent 启动调用 memory_discover 时返回的索引条数与摘要长度</p></div></div>
+              <span id="mi-status-badge" class="badge">默认配置</span>
+            </div>
+            <p class="desc">保存后持久写入数据库并对所有服务端实例立即生效。超出上限的条目会标记为 truncated，引导 Agent 按需通过 memory_query 补全或检索。</p>
+            <form id="memory-index-settings-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="mi-project-recent-limit">项目最近记忆上限（条）</label>
+                  <input type="number" id="mi-project-recent-limit" min="1" max="500" step="1" value="50" required />
+                  <small class="field-hint">project_index.recent 返回的非置顶项目记忆条数上限（1–500，默认 50）。</small>
+                </div>
+                <div class="form-group">
+                  <label for="mi-global-recent-limit">全局最近记忆上限（条）</label>
+                  <input type="number" id="mi-global-recent-limit" min="1" max="200" step="1" value="5" required />
+                  <small class="field-hint">global_index.recent 返回的非置顶全局记忆条数上限（1–200，默认 5）。</small>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="mi-pinned-limit">置顶记忆上限（条）</label>
+                  <input type="number" id="mi-pinned-limit" min="1" max="100" step="1" value="10" required />
+                  <small class="field-hint">global_index 与 project_index 各自的 pinned 条数上限（1–100，默认 10）。</small>
+                </div>
+                <div class="form-group">
+                  <label for="mi-summary-max-runes">索引摘要最大字数</label>
+                  <input type="number" id="mi-summary-max-runes" min="0" max="500" step="1" value="100" required />
+                  <small class="field-hint">每条索引附带的简短 summary 字数（0–500，默认 100；设为 0 则不返回摘要）。</small>
+                </div>
+              </div>
+              <small class="field-hint" id="mi-updated-hint">当前使用内置默认值，修改后点击保存即可生效。</small>
+              <div class="button-row operation-actions">
+                <button type="submit" id="btn-mi-save" disabled>保存配置</button>
+                <button type="button" id="btn-mi-reset" class="secondary">恢复默认值</button>
+              </div>
             </form>
           </div>
         </div>

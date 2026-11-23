@@ -193,10 +193,18 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 		return nil, err
 	}
 
+	indexSettings := DefaultIndexSettings()
+	if auth.CanReadGlobal(p.TenantRole) || (mode == auth.ModeProject && projIDPtr != nil) {
+		indexSettings, err = s.GetIndexSettings(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	globalIdx := ScopeIndex{Pinned: []IndexItem{}, CategoryStats: map[string]int{}, Recent: []IndexItem{}}
 	// Do not expose global titles, categories, or pinned content to project-only members.
 	if auth.CanReadGlobal(p.TenantRole) {
-		globalIdx, err = s.buildScopeIndex(ctx, p.TenantID, "global", nil)
+		globalIdx, err = s.buildScopeIndex(ctx, p.TenantID, "global", nil, indexSettings)
 		if err != nil {
 			return nil, err
 		}
@@ -204,7 +212,7 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 
 	var projectIdx *ScopeIndex
 	if mode == auth.ModeProject && projIDPtr != nil {
-		idx, err := s.buildScopeIndex(ctx, p.TenantID, "project", projIDPtr)
+		idx, err := s.buildScopeIndex(ctx, p.TenantID, "project", projIDPtr, indexSettings)
 		if err != nil {
 			return nil, err
 		}
@@ -242,13 +250,7 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 	}, nil
 }
 
-const (
-	maxPinnedIndexItems   = 10
-	maxRecentGlobalItems  = 5
-	maxRecentProjectItems = 50
-	indexSummaryMaxRunes  = 100
-	indexContentMaxChars  = 8192
-)
+const indexContentMaxChars = 8192
 
 func scopeIndexFilter(scope string, tenantID uuid.UUID, projectID *uuid.UUID) (string, []any, error) {
 	switch scope {
@@ -267,7 +269,28 @@ func scopeIndexFilter(scope string, tenantID uuid.UUID, projectID *uuid.UUID) (s
 	}
 }
 
-func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope string, projectID *uuid.UUID) (ScopeIndex, error) {
+func resolveScopeIndexLimits(scope string, settings IndexSettings) (pinnedLimit, recentLimit, summaryRunes int) {
+	pinnedLimit = settings.DiscoverPinnedLimit
+	if pinnedLimit <= 0 {
+		pinnedLimit = DefaultDiscoverPinnedLimit
+	}
+	recentLimit = settings.DiscoverGlobalRecentLimit
+	if scope == "project" {
+		recentLimit = settings.DiscoverProjectRecentLimit
+		if recentLimit <= 0 {
+			recentLimit = DefaultDiscoverProjectRecentLimit
+		}
+	} else if recentLimit <= 0 {
+		recentLimit = DefaultDiscoverGlobalRecentLimit
+	}
+	summaryRunes = settings.IndexSummaryMaxRunes
+	if summaryRunes < 0 {
+		summaryRunes = 0
+	}
+	return pinnedLimit, recentLimit, summaryRunes
+}
+
+func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope string, projectID *uuid.UUID, settings IndexSettings) (ScopeIndex, error) {
 	idx := ScopeIndex{
 		Pinned:        []IndexItem{},
 		CategoryStats: map[string]int{},
@@ -278,6 +301,7 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 	if err != nil {
 		return idx, err
 	}
+	pinnedLimit, recentLimit, summaryRunes := resolveScopeIndexLimits(scope, settings)
 
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
 		IsoLevel:   pgx.RepeatableRead,
@@ -312,19 +336,15 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 		return idx, apperror.Wrap(apperror.CodeInternalError, "iterate category stats", err)
 	}
 
-	// 2. Pinned items (up to 10)
-	pinned, err := queryIndexItems(ctx, tx, scopeWhere, baseArgs, true, maxPinnedIndexItems)
+	// 2. Pinned items
+	pinned, err := queryIndexItems(ctx, tx, scopeWhere, baseArgs, true, pinnedLimit, summaryRunes)
 	if err != nil {
 		return idx, err
 	}
 	idx.Pinned = pinned
 
-	// 3. Recent non-pinned items (up to 5 for global, up to 50 for project)
-	recentLimit := maxRecentGlobalItems
-	if scope == "project" {
-		recentLimit = maxRecentProjectItems
-	}
-	recent, err := queryIndexItems(ctx, tx, scopeWhere, baseArgs, false, recentLimit)
+	// 3. Recent non-pinned items
+	recent, err := queryIndexItems(ctx, tx, scopeWhere, baseArgs, false, recentLimit, summaryRunes)
 	if err != nil {
 		return idx, err
 	}
@@ -334,20 +354,25 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 	return idx, nil
 }
 
-func queryIndexItems(ctx context.Context, tx pgx.Tx, scopeWhere string, baseArgs []any, pinned bool, limit int) ([]IndexItem, error) {
+func queryIndexItems(ctx context.Context, tx pgx.Tx, scopeWhere string, baseArgs []any, pinned bool, limit, summaryRunes int) ([]IndexItem, error) {
 	pinnedPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+1)
-	contentCapPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+2)
-	limitPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+3)
-	args := append(append([]any{}, baseArgs...), pinned, indexContentMaxChars, limit)
+	limitPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+2)
+	contentExpr := "''"
+	args := append(append([]any{}, baseArgs...), pinned, limit)
+	if summaryRunes > 0 {
+		contentPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+3)
+		contentExpr = fmt.Sprintf("left(content_md, %s)", contentPlaceholder)
+		args = append(args, indexContentMaxChars)
+	}
 
 	rows, err := tx.Query(ctx, fmt.Sprintf(`
-		SELECT id, category, title, left(content_md, %s), tags, updated_at
+		SELECT id, category, title, %s, tags, updated_at
 		FROM memories
 		WHERE %s
 		  AND is_pinned = %s
 		ORDER BY updated_at DESC, id ASC
 		LIMIT %s
-	`, contentCapPlaceholder, scopeWhere, pinnedPlaceholder, limitPlaceholder), args...)
+	`, contentExpr, scopeWhere, pinnedPlaceholder, limitPlaceholder), args...)
 	if err != nil {
 		return nil, apperror.Wrap(apperror.CodeInternalError, "query scope index items", err)
 	}
@@ -355,7 +380,7 @@ func queryIndexItems(ctx context.Context, tx pgx.Tx, scopeWhere string, baseArgs
 
 	items := []IndexItem{}
 	for rows.Next() {
-		item, err := scanIndexItem(rows)
+		item, err := scanIndexItem(rows, summaryRunes)
 		if err != nil {
 			return nil, err
 		}
@@ -2365,7 +2390,7 @@ func (s *Service) getLatestCursor(ctx context.Context, tenantID uuid.UUID, proje
 	return s.signer.SignCursor(tenantID, projectID, rev)
 }
 
-func scanIndexItem(rows pgx.Rows) (IndexItem, error) {
+func scanIndexItem(rows pgx.Rows, summaryRunes int) (IndexItem, error) {
 	var (
 		item    IndexItem
 		content string
@@ -2381,7 +2406,9 @@ func scanIndexItem(rows pgx.Rows) (IndexItem, error) {
 	if err != nil {
 		return item, apperror.Wrap(apperror.CodeInternalError, "scan index item", err)
 	}
-	item.Summary = summarizeContent(content, "", indexSummaryMaxRunes)
+	if summaryRunes > 0 {
+		item.Summary = summarizeContent(content, "", summaryRunes)
+	}
 	return item, nil
 }
 
