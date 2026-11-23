@@ -56,7 +56,7 @@ func TestScopedMemberPermissions(t *testing.T) {
 		if disc.Permissions.CanReadGlobal || disc.Permissions.CanWriteGlobal || !disc.Permissions.CanWriteProject || disc.Permissions.CanMaintainProject {
 			t.Fatalf("unexpected permissions: %+v", disc.Permissions)
 		}
-		if len(disc.GlobalIndex.Pinned)+len(disc.GlobalIndex.Recent)+len(disc.GlobalIndex.CategoryStats) != 0 {
+		if len(disc.GlobalIndex.Pinned)+len(disc.GlobalIndex.Recent)+len(disc.GlobalIndex.CategoryStats) != 0 || disc.GlobalIndex.TotalCount != 0 || disc.GlobalIndex.Truncated {
 			t.Fatalf("global index leaked: %+v", disc.GlobalIndex)
 		}
 		result, err := env.svc.Query(ctx, memory.QueryRequest{ProjectContext: disc.ProjectContext})

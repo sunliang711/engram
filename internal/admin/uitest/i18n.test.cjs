@@ -169,3 +169,31 @@ test('agent attribution labels and write instructions translate without changing
   assert.match(translated, /self-reported information/);
   assert.match(translated, /same `idempotency_key`/);
 });
+
+test('index-first discovery and catalog fallback instructions translate cleanly', () => {
+  const { ui } = browser({ language: 'en' });
+  const app = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
+  const reviewLine = app.match(/t\("(   - 先浏览 `memory_discover`[^"\n]+)"\)/)?.[1];
+  const fallbackLine = app.match(/t\("(   - 若任一可读作用域的 `truncated`[^\n]+)"\)/)?.[1];
+  assert.ok(reviewLine, 'missing index review instruction line');
+  assert.ok(fallbackLine, 'missing truncated catalog fallback instruction line');
+
+  const translatedReview = ui.t(reviewLine);
+  assert.match(translatedReview, /`global_index`/);
+  assert.match(translatedReview, /`project_index`/);
+  assert.match(translatedReview, /`summary`/);
+  assert.match(translatedReview, /`total_count`/);
+  assert.match(translatedReview, /`truncated`/);
+  assert.match(translatedReview, /`memory_read`/);
+
+  const decodedFallbackKey = JSON.parse(`"${fallbackLine}"`);
+  const translatedFallback = ui.t(decodedFallbackKey);
+  assert.match(translatedFallback, /`global_index`/);
+  assert.match(translatedFallback, /`project_index`/);
+  assert.match(translatedFallback, /`memory_query`/);
+  assert.match(translatedFallback, /`"limit": 100`/);
+  assert.match(translatedFallback, /`next_cursor`/);
+  assert.match(translatedFallback, /`global_only`/);
+  assert.match(translatedFallback, /`"scopes": \["global"\]`/);
+  assert.match(translatedFallback, /`memory_read`/);
+});

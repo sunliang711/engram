@@ -1184,6 +1184,161 @@ func TestV1AcceptanceSuite(t *testing.T) {
 			t.Fatalf("expected previous session to be invalidated after RESET_ADMIN")
 		}
 	})
+
+	t.Run("Discover_ProjectIndex_Catalog_And_Global_Truncation", func(t *testing.T) {
+		// Add 6 non-pinned global memories and 7 non-pinned project memories across categories
+		// so global_index truncates at 5 while project_index returns all 7 with summaries.
+		for i := 0; i < 6; i++ {
+			_, err := env.svc.Create(ctxA, memory.CreateRequest{
+				ProjectContext: discA2.ProjectContext,
+				Scope:          "global",
+				Category:       "workflow",
+				Title:          fmt.Sprintf("Global item %d", i),
+				Content:        fmt.Sprintf("---\ndescription: \"Global rule %d\"\n---\n\nDetails %d", i, i),
+				IdempotencyKey: fmt.Sprintf("idx-global-%d", i),
+			}, fmt.Sprintf("req-idx-g-%d", i))
+			if err != nil {
+				t.Fatalf("create global %d: %v", i, err)
+			}
+		}
+		for i := 0; i < 7; i++ {
+			cat := "architecture"
+			if i >= 5 {
+				cat = "configuration"
+			}
+			_, err := env.svc.Create(ctxA, memory.CreateRequest{
+				ProjectContext: discA2.ProjectContext,
+				Scope:          "project",
+				Category:       cat,
+				Title:          fmt.Sprintf("Project item %d", i),
+				Content:        fmt.Sprintf("---\ndescription: \"Project summary %d\"\n---\n\nFull body %d", i, i),
+				IdempotencyKey: fmt.Sprintf("idx-proj-%d", i),
+			}, fmt.Sprintf("req-idx-p-%d", i))
+			if err != nil {
+				t.Fatalf("create project %d: %v", i, err)
+			}
+		}
+
+		disc, err := env.svc.Discover(ctxA, memory.DiscoverRequest{
+			Remotes: []project.RemoteInput{{Name: "origin", URL: "git@github.com:eagle/project-a2.git"}},
+		})
+		if err != nil {
+			t.Fatalf("discover A2 after bulk create: %v", err)
+		}
+		if disc.GlobalIndex.TotalCount < 6 || len(disc.GlobalIndex.Recent) != 5 || !disc.GlobalIndex.Truncated {
+			t.Fatalf("expected truncated global_index with 5 recent items, got total=%d recent=%d truncated=%v",
+				disc.GlobalIndex.TotalCount, len(disc.GlobalIndex.Recent), disc.GlobalIndex.Truncated)
+		}
+		if disc.ProjectIndex == nil || disc.ProjectIndex.TotalCount != 7 || len(disc.ProjectIndex.Recent) != 7 || disc.ProjectIndex.Truncated {
+			t.Fatalf("expected complete project_index with 7 items and truncated=false, got %+v", disc.ProjectIndex)
+		}
+		if disc.ProjectIndex.Recent[0].Summary == "" {
+			t.Fatalf("expected compact summary in project_index item, got %+v", disc.ProjectIndex.Recent[0])
+		}
+
+		// global_only mode omits project_index while preserving global_index counts.
+		discGlobalOnly, err := env.svc.Discover(ctxA, memory.DiscoverRequest{AllowGlobalOnly: true})
+		if err != nil {
+			t.Fatalf("discover global_only: %v", err)
+		}
+		if discGlobalOnly.Mode != "global_only" || discGlobalOnly.ProjectIndex != nil || !discGlobalOnly.GlobalIndex.Truncated {
+			t.Fatalf("unexpected global_only discover response: %+v", discGlobalOnly)
+		}
+
+		// Non-active (deprecated/archived) and soft-deleted memories must be excluded from TotalCount and Truncated.
+		depCreated, err := env.svc.Create(ctxA, memory.CreateRequest{
+			ProjectContext: discA2.ProjectContext,
+			Scope:          "project",
+			Category:       "architecture",
+			Title:          "Deprecated project entry",
+			Content:        "Should not appear in active index",
+			IdempotencyKey: "idx-proj-dep",
+		}, "req-idx-dep")
+		if err != nil {
+			t.Fatalf("create deprecated candidate: %v", err)
+		}
+		depStatus := "deprecated"
+		if _, err := env.svc.Update(ctxA, memory.UpdateRequest{
+			ProjectContext:  discA2.ProjectContext,
+			MemoryID:        depCreated.Memory.ID.String(),
+			ExpectedVersion: 1,
+			Patch:           memory.MemoryPatch{Status: &depStatus},
+			IdempotencyKey:  "idx-proj-dep-upd",
+		}, "req-idx-dep-upd"); err != nil {
+			t.Fatalf("deprecate candidate: %v", err)
+		}
+		delCreated, err := env.svc.Create(ctxA, memory.CreateRequest{
+			ProjectContext: discA2.ProjectContext,
+			Scope:          "project",
+			Category:       "architecture",
+			Title:          "Deleted project entry",
+			Content:        "Should be soft deleted",
+			IdempotencyKey: "idx-proj-del",
+		}, "req-idx-del")
+		if err != nil {
+			t.Fatalf("create deleted candidate: %v", err)
+		}
+		if _, err := env.svc.Delete(ctxA, memory.DeleteRequest{
+			ProjectContext:  discA2.ProjectContext,
+			MemoryID:        delCreated.Memory.ID.String(),
+			ExpectedVersion: 1,
+			IdempotencyKey:  "idx-proj-del-op",
+		}, "req-idx-del-op"); err != nil {
+			t.Fatalf("delete candidate: %v", err)
+		}
+
+		// Exceed 50 recent items in project_index -> capped at 50 with Truncated=true.
+		for i := 7; i < 51; i++ {
+			_, err := env.svc.Create(ctxA, memory.CreateRequest{
+				ProjectContext: discA2.ProjectContext,
+				Scope:          "project",
+				Category:       "architecture",
+				Title:          fmt.Sprintf("Project item %d", i),
+				Content:        fmt.Sprintf("Body %d", i),
+				IdempotencyKey: fmt.Sprintf("idx-proj-%d", i),
+			}, fmt.Sprintf("req-idx-p-%d", i))
+			if err != nil {
+				t.Fatalf("create project %d: %v", i, err)
+			}
+		}
+		disc51, err := env.svc.Discover(ctxA, memory.DiscoverRequest{
+			Remotes: []project.RemoteInput{{Name: "origin", URL: "git@github.com:eagle/project-a2.git"}},
+		})
+		if err != nil {
+			t.Fatalf("discover A2 with 51 recent project memories: %v", err)
+		}
+		if disc51.ProjectIndex == nil || disc51.ProjectIndex.TotalCount != 51 || len(disc51.ProjectIndex.Recent) != 50 || !disc51.ProjectIndex.Truncated {
+			t.Fatalf("expected truncated project_index (total=51, recent=50), got %+v", disc51.ProjectIndex)
+		}
+
+		// Exceed 10 pinned items -> capped at 10 pinned with Summary populated and Truncated=true.
+		for i := 0; i < 11; i++ {
+			_, err := env.svc.Create(ctxA, memory.CreateRequest{
+				ProjectContext: discA2.ProjectContext,
+				Scope:          "project",
+				Category:       "architecture",
+				Title:          fmt.Sprintf("Pinned item %d", i),
+				Content:        fmt.Sprintf("---\ndescription: \"Pinned summary %d\"\n---\n\nPinned body %d", i, i),
+				IsPinned:       true,
+				IdempotencyKey: fmt.Sprintf("idx-proj-pin-%d", i),
+			}, fmt.Sprintf("req-idx-pin-%d", i))
+			if err != nil {
+				t.Fatalf("create pinned %d: %v", i, err)
+			}
+		}
+		discPinned, err := env.svc.Discover(ctxA, memory.DiscoverRequest{
+			Remotes: []project.RemoteInput{{Name: "origin", URL: "git@github.com:eagle/project-a2.git"}},
+		})
+		if err != nil {
+			t.Fatalf("discover A2 with 11 pinned memories: %v", err)
+		}
+		if discPinned.ProjectIndex == nil || discPinned.ProjectIndex.TotalCount != 62 || len(discPinned.ProjectIndex.Pinned) != 10 || len(discPinned.ProjectIndex.Recent) != 50 || !discPinned.ProjectIndex.Truncated {
+			t.Fatalf("expected pinned cap 10 + recent cap 50 (total=62, truncated=true), got %+v", discPinned.ProjectIndex)
+		}
+		if discPinned.ProjectIndex.Pinned[0].Summary == "" {
+			t.Fatalf("expected compact summary on pinned index item, got %+v", discPinned.ProjectIndex.Pinned[0])
+		}
+	})
 }
 
 func assertAppErrorCode(t *testing.T, err error, want apperror.Code) {

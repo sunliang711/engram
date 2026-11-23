@@ -242,6 +242,31 @@ func (s *Service) Discover(ctx context.Context, req DiscoverRequest) (*DiscoverR
 	}, nil
 }
 
+const (
+	maxPinnedIndexItems   = 10
+	maxRecentGlobalItems  = 5
+	maxRecentProjectItems = 50
+	indexSummaryMaxRunes  = 100
+	indexContentMaxChars  = 8192
+)
+
+func scopeIndexFilter(scope string, tenantID uuid.UUID, projectID *uuid.UUID) (string, []any, error) {
+	switch scope {
+	case "global":
+		if projectID != nil {
+			return "", nil, apperror.New(apperror.CodeInternalError, "global scope index cannot accept project_id")
+		}
+		return "tenant_id = $1 AND scope = 'global' AND project_id IS NULL AND status = 'active' AND deleted_at IS NULL", []any{tenantID}, nil
+	case "project":
+		if projectID == nil {
+			return "", nil, apperror.New(apperror.CodeInternalError, "project scope index requires project_id")
+		}
+		return "tenant_id = $1 AND scope = 'project' AND project_id = $2 AND status = 'active' AND deleted_at IS NULL", []any{tenantID, *projectID}, nil
+	default:
+		return "", nil, apperror.New(apperror.CodeInternalError, "invalid scope for index")
+	}
+}
+
 func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope string, projectID *uuid.UUID) (ScopeIndex, error) {
 	idx := ScopeIndex{
 		Pinned:        []IndexItem{},
@@ -249,17 +274,27 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 		Recent:        []IndexItem{},
 	}
 
+	scopeWhere, baseArgs, err := scopeIndexFilter(scope, tenantID, projectID)
+	if err != nil {
+		return idx, err
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return idx, apperror.Wrap(apperror.CodeInternalError, "begin scope index tx", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	// 1. Category counts
-	catRows, err := s.pool.Query(ctx, `
+	catRows, err := tx.Query(ctx, fmt.Sprintf(`
 		SELECT category, count(*)::int
 		FROM memories
-		WHERE tenant_id = $1
-		  AND scope = $2
-		  AND ($3::uuid IS NULL OR project_id = $3)
-		  AND status = 'active'
-		  AND deleted_at IS NULL
+		WHERE %s
 		GROUP BY category
-	`, tenantID, scope, projectID)
+	`, scopeWhere), baseArgs...)
 	if err != nil {
 		return idx, apperror.Wrap(apperror.CodeInternalError, "query category stats", err)
 	}
@@ -271,68 +306,65 @@ func (s *Service) buildScopeIndex(ctx context.Context, tenantID uuid.UUID, scope
 			return idx, apperror.Wrap(apperror.CodeInternalError, "scan category stats", err)
 		}
 		idx.CategoryStats[cat] = cnt
+		idx.TotalCount += cnt
 	}
 	if err := catRows.Err(); err != nil {
 		return idx, apperror.Wrap(apperror.CodeInternalError, "iterate category stats", err)
 	}
 
 	// 2. Pinned items (up to 10)
-	pinnedRows, err := s.pool.Query(ctx, `
-		SELECT id, category, title, tags, updated_at
-		FROM memories
-		WHERE tenant_id = $1
-		  AND scope = $2
-		  AND ($3::uuid IS NULL OR project_id = $3)
-		  AND status = 'active'
-		  AND is_pinned = true
-		  AND deleted_at IS NULL
-		ORDER BY updated_at DESC, id ASC
-		LIMIT 10
-	`, tenantID, scope, projectID)
+	pinned, err := queryIndexItems(ctx, tx, scopeWhere, baseArgs, true, maxPinnedIndexItems)
 	if err != nil {
-		return idx, apperror.Wrap(apperror.CodeInternalError, "query pinned memories", err)
+		return idx, err
 	}
-	defer pinnedRows.Close()
-	for pinnedRows.Next() {
-		item, err := scanIndexItem(pinnedRows)
-		if err != nil {
-			return idx, err
-		}
-		idx.Pinned = append(idx.Pinned, item)
-	}
-	if err := pinnedRows.Err(); err != nil {
-		return idx, apperror.Wrap(apperror.CodeInternalError, "iterate pinned memories", err)
-	}
+	idx.Pinned = pinned
 
-	// 3. Recent non-pinned items (up to 5, avoiding duplication with pinned)
-	recentRows, err := s.pool.Query(ctx, `
-		SELECT id, category, title, tags, updated_at
-		FROM memories
-		WHERE tenant_id = $1
-		  AND scope = $2
-		  AND ($3::uuid IS NULL OR project_id = $3)
-		  AND status = 'active'
-		  AND is_pinned = false
-		  AND deleted_at IS NULL
-		ORDER BY updated_at DESC, id ASC
-		LIMIT 5
-	`, tenantID, scope, projectID)
+	// 3. Recent non-pinned items (up to 5 for global, up to 50 for project)
+	recentLimit := maxRecentGlobalItems
+	if scope == "project" {
+		recentLimit = maxRecentProjectItems
+	}
+	recent, err := queryIndexItems(ctx, tx, scopeWhere, baseArgs, false, recentLimit)
 	if err != nil {
-		return idx, apperror.Wrap(apperror.CodeInternalError, "query recent memories", err)
+		return idx, err
 	}
-	defer recentRows.Close()
-	for recentRows.Next() {
-		item, err := scanIndexItem(recentRows)
-		if err != nil {
-			return idx, err
-		}
-		idx.Recent = append(idx.Recent, item)
-	}
-	if err := recentRows.Err(); err != nil {
-		return idx, apperror.Wrap(apperror.CodeInternalError, "iterate recent memories", err)
-	}
+	idx.Recent = recent
+	idx.Truncated = len(idx.Pinned)+len(idx.Recent) < idx.TotalCount
 
 	return idx, nil
+}
+
+func queryIndexItems(ctx context.Context, tx pgx.Tx, scopeWhere string, baseArgs []any, pinned bool, limit int) ([]IndexItem, error) {
+	pinnedPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+1)
+	contentCapPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+2)
+	limitPlaceholder := fmt.Sprintf("$%d", len(baseArgs)+3)
+	args := append(append([]any{}, baseArgs...), pinned, indexContentMaxChars, limit)
+
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+		SELECT id, category, title, left(content_md, %s), tags, updated_at
+		FROM memories
+		WHERE %s
+		  AND is_pinned = %s
+		ORDER BY updated_at DESC, id ASC
+		LIMIT %s
+	`, contentCapPlaceholder, scopeWhere, pinnedPlaceholder, limitPlaceholder), args...)
+	if err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "query scope index items", err)
+	}
+	defer rows.Close()
+
+	items := []IndexItem{}
+	for rows.Next() {
+		item, err := scanIndexItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperror.Wrap(apperror.CodeInternalError, "iterate scope index items", err)
+	}
+	return items, nil
 }
 
 // Query implements Section 7.2 memory_query and Section 11 Search Design.
@@ -2334,17 +2366,22 @@ func (s *Service) getLatestCursor(ctx context.Context, tenantID uuid.UUID, proje
 }
 
 func scanIndexItem(rows pgx.Rows) (IndexItem, error) {
-	var item IndexItem
+	var (
+		item    IndexItem
+		content string
+	)
 	err := rows.Scan(
 		&item.ID,
 		&item.Category,
 		&item.Title,
+		&content,
 		&item.Tags,
 		&item.UpdatedAt,
 	)
 	if err != nil {
 		return item, apperror.Wrap(apperror.CodeInternalError, "scan index item", err)
 	}
+	item.Summary = summarizeContent(content, "", indexSummaryMaxRunes)
 	return item, nil
 }
 

@@ -336,3 +336,16 @@ test('closing configuration finds the replacement key action when a refresh remo
   h.context.closeClientGuides();
   assert.equal(h.document.activeElement, replacement);
 });
+
+test('memory instruction snippet covers index fields, truncated pagination, and global_only mode in zh-CN and en', () => {
+  for (const language of ['zh-CN', 'en']) {
+    const h = harness({ tokens: [token('A')], language });
+    const snippet = h.context.getMemoryInstructionSnippet();
+    for (const tokenText of ['`global_index`', '`project_index`', '`summary`', '`total_count`', '`truncated`', '`"limit": 100`', '`next_cursor`', '`global_only`', '`"scopes": ["global"]`', '`memory_read`']) {
+      assert.ok(snippet.includes(tokenText), `expected ${tokenText} in ${language} snippet`);
+    }
+    if (language === 'en') {
+      assert.doesNotMatch(snippet, /[\u4e00-\u9fff]/, 'expected fully translated English instructions');
+    }
+  }
+});

@@ -45,6 +45,7 @@ type IndexItem struct {
 	ID        uuid.UUID `json:"id"`
 	Category  string    `json:"category"`
 	Title     string    `json:"title"`
+	Summary   string    `json:"summary,omitempty"`
 	Tags      []string  `json:"tags,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -90,6 +91,8 @@ type ScopeIndex struct {
 	Pinned        []IndexItem    `json:"pinned"`
 	CategoryStats map[string]int `json:"category_stats"`
 	Recent        []IndexItem    `json:"recent"`
+	TotalCount    int            `json:"total_count"`
+	Truncated     bool           `json:"truncated"`
 }
 
 // 7.1 memory_discover

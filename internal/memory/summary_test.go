@@ -3,6 +3,8 @@ package memory
 import (
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestSummarizeContent_StripsYAMLFrontmatter(t *testing.T) {
@@ -90,5 +92,41 @@ func TestSummarizeContent_QueryNotInBodyFallsBackCleanly(t *testing.T) {
 	}
 	if !strings.Contains(got, "仅在标题或标签命中的记录") || !strings.Contains(got, "日常巡检流程") {
 		t.Fatalf("unexpected fallback summary: %q", got)
+	}
+}
+
+func TestSummarizeContent_IndexSummaryLimit(t *testing.T) {
+	longBody := strings.Repeat("架构规范与配置说明", 20)
+	got := summarizeContent(longBody, "", indexSummaryMaxRunes)
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected truncated index summary with ellipsis, got %q", got)
+	}
+	if len([]rune(got)) != indexSummaryMaxRunes+3 {
+		t.Fatalf("expected %d runes including ellipsis, got %d (%q)", indexSummaryMaxRunes+3, len([]rune(got)), got)
+	}
+}
+
+func TestScopeIndexFilter_GuardsScopeAndProjectID(t *testing.T) {
+	tenantID := uuid.New()
+	projectID := uuid.New()
+
+	where, args, err := scopeIndexFilter("global", tenantID, nil)
+	if err != nil || !strings.Contains(where, "scope = 'global' AND project_id IS NULL") || len(args) != 1 {
+		t.Fatalf("unexpected global filter: where=%q args=%v err=%v", where, args, err)
+	}
+
+	where, args, err = scopeIndexFilter("project", tenantID, &projectID)
+	if err != nil || !strings.Contains(where, "scope = 'project' AND project_id = $2") || len(args) != 2 {
+		t.Fatalf("unexpected project filter: where=%q args=%v err=%v", where, args, err)
+	}
+
+	if _, _, err := scopeIndexFilter("global", tenantID, &projectID); err == nil {
+		t.Fatal("expected error when passing project_id to global scope index")
+	}
+	if _, _, err := scopeIndexFilter("project", tenantID, nil); err == nil {
+		t.Fatal("expected error when omitting project_id for project scope index")
+	}
+	if _, _, err := scopeIndexFilter("invalid", tenantID, nil); err == nil {
+		t.Fatal("expected error for invalid scope")
 	}
 }
