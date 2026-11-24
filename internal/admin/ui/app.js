@@ -62,6 +62,11 @@
     safekeepSettings: null,
     memoryIndexSettings: null,
     settingsTab: "backup",
+    reauthPromise: null,
+    reauthResolve: null,
+    reauthReject: null,
+    reauthOpener: null,
+    reauthSeq: 0,
   };
 
   function $(id) {
@@ -191,6 +196,7 @@
 
   // showToast keeps the latest message visible for its complete display interval.
   function showToast(msg, isError) {
+    if (isError && $("login-view") && !$("login-view").classList.contains("hidden")) return;
     const el = $("toast");
     el.textContent = msg;
     el.className = isError ? "toast error" : "toast";
@@ -200,23 +206,164 @@
     }, isError ? 7000 : 3800);
   }
 
+  function isConsoleSessionActive() {
+    const appVisible = $("app-view") && !$("app-view").classList.contains("hidden");
+    const pwdVisible = $("force-password-view") && !$("force-password-view").classList.contains("hidden");
+    return appVisible || pwdVisible;
+  }
+
+  function isSessionExpiredFailure(path, resp, data) {
+    if (!resp || resp.status !== 401) return false;
+    if (typeof path !== "string" || !path.startsWith("/api/admin/")) return false;
+    if (path === "/api/admin/login" || path === "/api/admin/logout" || path === "/api/admin/session") return false;
+    const raw = (data && (data.message || data.error)) || "";
+    if (path === "/api/admin/change-password" && /current password is incorrect/i.test(raw)) return false;
+    return isConsoleSessionActive();
+  }
+
+  async function readResponseText(resp) {
+    if (Object.prototype.hasOwnProperty.call(resp, "_cachedText")) return resp._cachedText;
+    const text = await resp.text();
+    try { resp._cachedText = text; } catch (_) {}
+    return text;
+  }
+
+  function parseResponseData(text) {
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return { message: text };
+    }
+  }
+
+  function formatApiError(resp, data, fallbackMessage) {
+    const raw = (data && (data.message || data.error)) || "";
+    return ERROR_CODES[data && data.code] || translateError(raw) || raw || fallbackMessage || t`请求失败（${resp.status}），请重试。`;
+  }
+
+  // promptReauth opens a temporary login modal once for concurrent 401 responses and resolves after re-authentication.
+  function promptReauth() {
+    if (state.reauthPromise) return state.reauthPromise;
+    const modal = $("reauth-modal");
+    if (!modal) return Promise.reject(new Error(ERROR_CODES.UNAUTHENTICATED));
+    state.reauthSeq = (state.reauthSeq || 0) + 1;
+    state.reauthOpener = document.activeElement;
+    if ($("reauth-form")) clearFormErrors($("reauth-form"));
+    if ($("reauth-username")) {
+      const activeUser = $("current-admin-user") && $("current-admin-user").textContent ? $("current-admin-user").textContent.trim() : "";
+      $("reauth-username").value = activeUser || $("reauth-username").value || "admin";
+    }
+    if ($("reauth-password")) resetSecretField($("reauth-password"), true);
+    modal.classList.remove("hidden");
+    if ($("reauth-password")) $("reauth-password").focus();
+    state.reauthPromise = new Promise((resolve, reject) => {
+      state.reauthResolve = resolve;
+      state.reauthReject = reject;
+    });
+    return state.reauthPromise;
+  }
+
+  function closeReauthModal({ silent = false, restoreFocus = true, reason = null } = {}) {
+    const modal = $("reauth-modal");
+    if (modal) modal.classList.add("hidden");
+    if ($("reauth-form")) clearFormErrors($("reauth-form"));
+    if ($("reauth-password")) resetSecretField($("reauth-password"), true);
+    const opener = state.reauthOpener;
+    const reject = state.reauthReject;
+    state.reauthPromise = null;
+    state.reauthResolve = null;
+    state.reauthReject = null;
+    state.reauthOpener = null;
+    if (restoreFocus && opener && opener.isConnected) opener.focus({ preventScroll: true });
+    if (reject) {
+      const err = reason || new Error(ERROR_CODES.UNAUTHENTICATED);
+      if (silent) err.reauthDismissed = true;
+      reject(err);
+    }
+  }
+
+  function resolveReauthModal(sessionState) {
+    const modal = $("reauth-modal");
+    if (modal) modal.classList.add("hidden");
+    if ($("reauth-form")) clearFormErrors($("reauth-form"));
+    if ($("reauth-password")) resetSecretField($("reauth-password"), true);
+    const opener = state.reauthOpener;
+    const resolve = state.reauthResolve;
+    state.reauthPromise = null;
+    state.reauthResolve = null;
+    state.reauthReject = null;
+    state.reauthOpener = null;
+    if (opener && opener.isConnected) opener.focus({ preventScroll: true });
+    if (resolve) resolve(sessionState);
+  }
+
+  function closeConsoleOverlays() {
+    closeMemoryDetail(false, false);
+    closeClientGuides(false);
+    if (state.confirmResolve) state.confirmResolve(false);
+    [
+      "rename-modal",
+      "remote-edit-modal",
+      "memory-create-modal",
+      "purge-modal",
+      "glossary-modal",
+      "audit-detail-modal",
+      "audit-cleanup-modal",
+      "create-tenant-card",
+      "tenant-forms-panel",
+      "project-forms-panel",
+    ].forEach((id) => { if ($(id)) $(id).classList.add("hidden"); });
+    if (typeof closeSchedulerHistory === "function") closeSchedulerHistory(false);
+    if (typeof closeSchedulerConfig === "function") closeSchedulerConfig(false);
+  }
+
+  function dismissReauthToLogin() {
+    state.reauthSeq = (state.reauthSeq || 0) + 1;
+    resetSecretVisibility(true);
+    state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+    state.latestToken = "";
+    state.clientConfigTokenID = "";
+    state.revealedTokens = {};
+    if ($("guide-token-hint")) $("guide-token-hint").textContent = "";
+    if ($("guide-token-input")) $("guide-token-input").value = "";
+    renderClientGuides();
+    closeConsoleOverlays();
+    if ($("client-guides-card")) $("client-guides-card").open = false;
+    const accountMenu = document.querySelector(".account-menu");
+    if (accountMenu) accountMenu.open = false;
+    closeReauthModal({ silent: true, restoreFocus: false });
+    renderView({ authenticated: false });
+  }
+
+  // adminFetch attaches same-origin credentials and opens the temporary re-login modal on session expiry.
+  async function adminFetch(path, options = {}) {
+    const fetchOpts = Object.assign({ credentials: "same-origin" }, options);
+    delete fetchOpts.skipReauth;
+    delete fetchOpts._reauthRetried;
+    const resp = await fetch(path, fetchOpts);
+    if (resp.status === 401 && !options.skipReauth && !options._reauthRetried && typeof path === "string" && path.startsWith("/api/admin/")) {
+      let data = null;
+      try {
+        const text = typeof resp.clone === "function" ? await resp.clone().text() : await readResponseText(resp);
+        data = parseResponseData(text);
+      } catch (_) {}
+      if (isSessionExpiredFailure(path, resp, data)) {
+        await promptReauth();
+        return adminFetch(path, Object.assign({}, options, { _reauthRetried: true }));
+      }
+    }
+    return resp;
+  }
+
   // api decodes management responses and translates common failures for the console.
   async function api(path, options = {}) {
     const headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
-    const resp = await fetch(path, Object.assign({}, options, { headers, credentials: "same-origin" }));
-    let data = null;
-    const text = await resp.text();
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch (_) {
-        data = { message: text };
-      }
-    }
+    const resp = await adminFetch(path, Object.assign({}, options, { headers, credentials: "same-origin" }));
+    const text = await readResponseText(resp);
+    const data = parseResponseData(text);
     if (!resp.ok) {
-      const raw = (data && (data.message || data.error)) || "";
-      const msg = ERROR_CODES[data && data.code] || translateError(raw) || raw || t`请求失败（${resp.status}），请重试。`;
-      throw new Error(msg);
+      throw new Error(formatApiError(resp, data));
     }
     return data;
   }
@@ -278,9 +425,7 @@
   }
 
   // renderView separates first activation from an authenticated administration session.
-  function renderView(sessionState) {
-    resetSecretVisibility(!sessionState || !sessionState.authenticated);
-    if (!sessionState || !sessionState.authenticated) state.visibleTokens = {};
+  function syncSessionHeader(sessionState) {
     if (sessionState && sessionState.version) {
       state.appVersion = String(sessionState.version).trim();
     }
@@ -292,15 +437,34 @@
     }
 
     const banner = $("reset-admin-banner");
-    if (sessionState && sessionState.reset_admin_env_active) {
-      banner.classList.remove("hidden");
-    } else {
-      banner.classList.add("hidden");
+    if (banner) {
+      if (sessionState && sessionState.reset_admin_env_active) {
+        banner.classList.remove("hidden");
+      } else {
+        banner.classList.add("hidden");
+      }
     }
+
+    if (sessionState && sessionState.authenticated && !sessionState.must_change_password) {
+      const username = sessionState.username || "admin";
+      $("current-admin-user").textContent = username;
+      $("settings-admin-user").textContent = username;
+      if ($("sidebar-admin-user")) $("sidebar-admin-user").textContent = username;
+      if ($("sidebar-user-avatar")) $("sidebar-user-avatar").textContent = username.slice(0, 1).toUpperCase();
+    }
+  }
+
+  function renderView(sessionState) {
+    resetSecretVisibility(!sessionState || !sessionState.authenticated);
+    if (!sessionState || !sessionState.authenticated) state.visibleTokens = {};
+    syncSessionHeader(sessionState);
 
     $("login-view").classList.add("hidden");
     $("force-password-view").classList.add("hidden");
     $("app-view").classList.add("hidden");
+    if ($("reauth-modal") && (!sessionState || !sessionState.authenticated || sessionState.must_change_password)) {
+      $("reauth-modal").classList.add("hidden");
+    }
 
     if (!sessionState || !sessionState.authenticated) {
       $("login-view").classList.remove("hidden");
@@ -317,11 +481,6 @@
       return;
     }
 
-    const username = sessionState.username || "admin";
-    $("current-admin-user").textContent = username;
-    $("settings-admin-user").textContent = username;
-    if ($("sidebar-admin-user")) $("sidebar-admin-user").textContent = username;
-    if ($("sidebar-user-avatar")) $("sidebar-user-avatar").textContent = username.slice(0, 1).toUpperCase();
     $("app-view").classList.remove("hidden");
     refreshAllData();
   }
@@ -398,13 +557,14 @@
         refreshBtn.title = `${t("重新加载所有数据")} (${t("已更新 ").trim()} ${refreshedAt})`;
       }
     } catch (err) {
+      if (err && err.reauthDismissed) return;
       showToast(err.message, true);
     }
   }
 
   // refreshIfStale reloads quietly when the console has been idle longer than maxAge.
   function refreshIfStale(maxAge) {
-    if (!state.locationReady || $("app-view").classList.contains("hidden")) return;
+    if (!state.locationReady || $("app-view").classList.contains("hidden") || state.reauthPromise) return;
     if (Date.now() - state.lastRefresh >= maxAge) refreshAllData({ quiet: true });
   }
 
@@ -1756,6 +1916,7 @@
 
   // showFormError places the failure next to the field or submit button that caused it.
   function showFormError(form, err) {
+    if (err && err.reauthDismissed) return;
     const message = (err && err.message) || t("操作失败，请重试。");
     const field = err && err.field ? $(err.field) : null;
     if (field) {
@@ -1954,6 +2115,7 @@
     e.preventDefault();
     const s = await api("/api/admin/login", {
       method: "POST",
+      skipReauth: true,
       body: JSON.stringify({
         username: $("login-username").value,
         password: $("login-password").value,
@@ -1962,6 +2124,37 @@
     $("login-password").value = "";
     renderView(s);
   });
+
+  if ($("reauth-form")) {
+    onSubmit("reauth-form", async (e) => {
+      e.preventDefault();
+      const seq = state.reauthSeq;
+      const s = await api("/api/admin/login", {
+        method: "POST",
+        skipReauth: true,
+        body: JSON.stringify({
+          username: $("reauth-username").value,
+          password: $("reauth-password").value,
+        }),
+      });
+      if (seq !== state.reauthSeq || !state.reauthPromise) return;
+      if (s && s.must_change_password) {
+        closeReauthModal({ silent: true, restoreFocus: false });
+        renderView(s);
+        return;
+      }
+      syncSessionHeader(s);
+      resolveReauthModal(s);
+      showToast(t("已重新登录"));
+    });
+  }
+
+  if ($("btn-close-reauth")) {
+    $("btn-close-reauth").addEventListener("click", () => closeReauthModal());
+  }
+  if ($("btn-reauth-logout")) {
+    $("btn-reauth-logout").addEventListener("click", dismissReauthToLogin);
+  }
 
   onSubmit("force-password-form", async (e) => {
     e.preventDefault();
@@ -2020,6 +2213,7 @@
     renderClientGuides();
     closeMemoryDetail(false, false);
     closeClientGuides(false);
+    if (typeof closeConsoleOverlays === "function") closeConsoleOverlays();
     $("client-guides-card").open = false;
     document.querySelector(".account-menu").open = false;
     renderView({ authenticated: false });
@@ -2946,6 +3140,7 @@
     }
   });
   document.addEventListener("keydown", (e) => {
+    const reauthOpen = $("reauth-modal") && !$("reauth-modal").classList.contains("hidden");
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
     const renameOpen = $("rename-modal") && !$("rename-modal").classList.contains("hidden");
     const remoteEditOpen = $("remote-edit-modal") && !$("remote-edit-modal").classList.contains("hidden");
@@ -2962,7 +3157,8 @@
     const clientConfigOpen = !$("client-config-modal").classList.contains("hidden");
     const detailOpen = !$("memory-detail-card").classList.contains("hidden");
     if (e.key === "Escape") {
-      if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
+      if (reauthOpen) closeReauthModal();
+      else if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
       else if (renameOpen) closeRenameModal();
       else if (remoteEditOpen) closeRemoteEditModal();
       else if (memCreateOpen) closeCreateMemoryModal();
@@ -2984,15 +3180,15 @@
         document.querySelector(".account-menu summary").focus();
       }
     }
-    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && detailOpen && !state.memoryEditMode && !confirmOpen) {
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && detailOpen && !state.memoryEditMode && !confirmOpen && !reauthOpen) {
       const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
       if (tag !== "input" && tag !== "textarea" && tag !== "select") {
         const btn = $(e.key === "ArrowLeft" ? "btn-detail-prev" : "btn-detail-next");
         if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
       }
     }
-    if (e.key === "Tab" && (confirmOpen || renameOpen || remoteEditOpen || memCreateOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
-      const dialog = $(confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : remoteEditOpen ? "remote-edit-modal" : memCreateOpen ? "memory-create-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
+    if (e.key === "Tab" && (reauthOpen || confirmOpen || renameOpen || remoteEditOpen || memCreateOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
+      const dialog = $(reauthOpen ? "reauth-modal" : confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : remoteEditOpen ? "remote-edit-modal" : memCreateOpen ? "memory-create-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
       if (!first || !last) return;
@@ -3045,14 +3241,10 @@
   if ($("btn-download-export-zip")) {
     $("btn-download-export-zip").addEventListener("click", async () => {
       try {
-        const resp = await fetch("/api/admin/export/archive", { credentials: "same-origin" });
+        const resp = await adminFetch("/api/admin/export/archive", { credentials: "same-origin" });
         if (!resp.ok) {
-          let msg = `HTTP ${resp.status}`;
-          try {
-            const errData = await resp.json();
-            if (errData && errData.message) msg = errData.message;
-          } catch (_) {}
-          throw new Error(msg);
+          const data = parseResponseData(await readResponseText(resp));
+          throw new Error(formatApiError(resp, data, `HTTP ${resp.status}`));
         }
         const blob = await resp.blob();
         const cnt = resp.headers.get("X-Exported-Count");
@@ -3156,11 +3348,10 @@
   // runPurge saves the backup first and only then asks the server to remove what it contains.
   async function runPurge(selection) {
     const body = { tenant_id: selection.tenant.id, scope: selection.scope || "", project_id: selection.project ? selection.project.id : "", memory_id: selection.memory ? selection.memory.id : "", mode: selection.mode };
-    const resp = await fetch("/api/admin/memories/purge/backup", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const resp = await adminFetch("/api/admin/memories/purge/backup", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!resp.ok) {
-      let message = t`备份失败（${resp.status}），本次没有删除任何知识。`;
-      try { const data = await resp.json(); message = ERROR_CODES[data.code] || translateError(data.message || "") || data.message || message; } catch (_) {}
-      throw new Error(message);
+      const data = parseResponseData(await readResponseText(resp));
+      throw new Error(formatApiError(resp, data, t`备份失败（${resp.status}），本次没有删除任何知识。`));
     }
     const token = resp.headers.get("X-Purge-Token");
     const count = Number(resp.headers.get("X-Purge-Count") || 0);
@@ -3347,20 +3538,14 @@
     const fd = new FormData();
     fd.append("file", file);
     fd.append("passphrase", $("mig-import-passphrase") ? $("mig-import-passphrase").value : "");
-    const resp = await fetch("/api/admin/migration/inspect", {
+    const resp = await adminFetch("/api/admin/migration/inspect", {
       method: "POST",
       credentials: "same-origin",
       body: fd,
     });
-    const text = await resp.text();
-    let data = null;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch (_) {
-      data = { message: text };
-    }
+    const data = parseResponseData(await readResponseText(resp));
     if (!resp.ok) {
-      throw new Error((data && (data.message || data.error)) || `HTTP ${resp.status}`);
+      throw new Error(formatApiError(resp, data, `HTTP ${resp.status}`));
     }
     data.fileKey = migrationFileKey(file);
     state.migInspect = data;
@@ -3431,19 +3616,15 @@
         payload.tenant_ids = selectedTenants;
         payload.include_deleted = $("mig-export-include-deleted") ? $("mig-export-include-deleted").checked : true;
       }
-      const resp = await fetch("/api/admin/migration/export", {
+      const resp = await adminFetch("/api/admin/migration/export", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try {
-          const errData = await resp.json();
-          if (errData && errData.message) msg = errData.message;
-        } catch (_) {}
-        throw new Error(msg);
+        const data = parseResponseData(await readResponseText(resp));
+        throw new Error(formatApiError(resp, data, `HTTP ${resp.status}`));
       }
       const blob = await resp.blob();
       const fallbackName = mode === "knowledge" ? "engram-knowledge-bundle.zip" : "engram-system-snapshot.zip";
@@ -3497,20 +3678,14 @@
         fd.append("confirm_replace", $("mig-import-confirm") && $("mig-import-confirm").checked ? "true" : "false");
       }
 
-      const resp = await fetch("/api/admin/migration/import", {
+      const resp = await adminFetch("/api/admin/migration/import", {
         method: "POST",
         credentials: "same-origin",
         body: fd,
       });
-      const text = await resp.text();
-      let data = null;
-      try {
-        data = text ? JSON.parse(text) : null;
-      } catch (_) {
-        data = { message: text };
-      }
+      const data = parseResponseData(await readResponseText(resp));
       if (!resp.ok) {
-        throw new Error((data && (data.message || data.error)) || `HTTP ${resp.status}`);
+        throw new Error(formatApiError(resp, data, `HTTP ${resp.status}`));
       }
       state.revealedTokens = {};
       if ($("mig-import-result") && $("mig-import-result-box")) {
@@ -4506,8 +4681,11 @@
   if ($("btn-audit-export")) {
     $("btn-audit-export").addEventListener("click", async () => {
       try {
-        const resp = await fetch("/api/admin/audit/logs/export?" + buildAuditFilterParams(false).toString(), { credentials: "same-origin" });
-        if (!resp.ok) throw new Error(t`请求失败（${resp.status}），请重试。`);
+        const resp = await adminFetch("/api/admin/audit/logs/export?" + buildAuditFilterParams(false).toString(), { credentials: "same-origin" });
+        if (!resp.ok) {
+          const data = parseResponseData(await readResponseText(resp));
+          throw new Error(formatApiError(resp, data));
+        }
         const blob = await resp.blob();
         const filename = parseDownloadFilename(resp, "engram-audit-logs.json");
         if (await saveBlobToLocal(blob, filename)) {

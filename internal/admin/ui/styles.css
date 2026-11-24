@@ -1187,6 +1187,10 @@ mark { background: rgba(245, 158, 11, 0.25); color: var(--text-warning-strong); 
 .confirm-card p { color: var(--text-secondary); font-size: 14px; line-height: 1.6; }
 .confirm-actions { justify-content: flex-end; margin-top: 22px; }
 .modal-backdrop#confirm-modal { z-index: 1100; }
+.modal-backdrop#reauth-modal { z-index: 1200; }
+.reauth-card { max-width: 440px; }
+.reauth-card .modal-header { margin-bottom: 12px; }
+.reauth-card .desc { margin-bottom: 16px; }
 /* Long prose blocks (usage rules, CLI commands) wrap so nothing is cut off at the card edge. */
 pre[id$="-rules"], #guide-claude-cli, #mig-import-result-box { white-space: pre-wrap; overflow-wrap: anywhere; }
 .check-result { display: block; margin-top: 10px; font-size: 13px; color: var(--text-muted); }

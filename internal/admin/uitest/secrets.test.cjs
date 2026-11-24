@@ -35,7 +35,7 @@ function secretHarness(reveal = async () => ({ value: 'saved-test-key' })) {
 
 test('every password, saved secret and client key input has an individual reveal button', () => {
   const fields = [...html.matchAll(/<input type="password" id="([^"]+)"[^>]*data-secret-input/g)];
-  assert.equal(fields.length, 9);
+  assert.equal(fields.length, 10);
   for (const [, id] of fields) assert.ok(html.includes(`data-secret-toggle="${id}"`), id);
   assert.doesNotMatch(html, /id="show-admin-passwords"/);
 });

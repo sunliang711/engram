@@ -1218,7 +1218,13 @@
     "所属项目": "Project",
     "来源 IP": "Client IP",
     "请求编号": "Request ID",
-    "错误信息": "Error"
+    "错误信息": "Error",
+    "登录已过期": "Session expired",
+    "当前会话已过期，请重新输入密码继续操作，页面上未保存的内容会保留。": "Your session has expired. Sign in again to continue without losing unsaved changes on this page.",
+    "请输入管理员密码": "Enter admin password",
+    "返回登录页": "Back to sign-in",
+    "重新登录": "Sign in again",
+    "已重新登录": "Signed in again"
   };
 
   const languageKey = "engram.language";

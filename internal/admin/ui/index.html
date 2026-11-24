@@ -1581,6 +1581,36 @@
     </div>
   </div>
 
+  <div id="reauth-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="reauth-title" aria-describedby="reauth-subtitle">
+    <div class="modal-card confirm-card reauth-card">
+      <div class="modal-header">
+        <div class="auth-brand" style="margin-bottom: 0;">
+          <img src="/ui/favicon.svg" alt="" class="brand-logo" width="28" height="28" />
+          <h2 id="reauth-title">登录已过期</h2>
+        </div>
+        <button type="button" class="secondary small" id="btn-close-reauth">取消</button>
+      </div>
+      <p class="desc" id="reauth-subtitle">当前会话已过期，请重新输入密码继续操作，页面上未保存的内容会保留。</p>
+      <form id="reauth-form">
+        <div class="form-group">
+          <label for="reauth-username">管理员账号</label>
+          <input type="text" id="reauth-username" autocomplete="username" value="admin" required />
+        </div>
+        <div class="form-group">
+          <label for="reauth-password">密码</label>
+          <div class="secret-input">
+            <input type="password" id="reauth-password" autocomplete="current-password" placeholder="请输入管理员密码" required data-secret-input />
+            <button type="button" id="btn-secret-reauth-password" class="secondary small" data-secret-toggle="reauth-password" aria-controls="reauth-password" aria-pressed="false">显示明文</button>
+          </div>
+        </div>
+        <div class="button-row confirm-actions">
+          <button type="button" class="secondary" id="btn-reauth-logout">返回登录页</button>
+          <button type="submit" id="btn-reauth-submit">重新登录</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
   <script src="/ui/markdown.js"></script>
   <script src="/ui/app.js"></script>
