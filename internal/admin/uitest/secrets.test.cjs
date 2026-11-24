@@ -81,14 +81,25 @@ test('cancel, page reset, logout and user edits defeat late reveal responses', a
   }
 });
 
-test('login passwords toggle locally, reset to hidden, and reveal errors keep saved masks', async () => {
+test('login passwords toggle locally with icon markup, reset to hidden, and reveal errors keep saved masks', async () => {
   const h = secretHarness(async () => { throw new Error('cannot decrypt'); });
   const password = h.nodes.get('login-password');
+  const loginToggle = h.nodes.get('btn-secret-login-password');
+  loginToggle.setAttribute('data-secret-icon', 'true');
   password.value = 'typed-password';
   await h.context.toggleSecretField(password);
   assert.equal(password.type, 'text');
+  assert.equal(loginToggle.getAttribute('aria-label'), '隐藏明文');
+  assert.equal(loginToggle.getAttribute('title'), '隐藏明文');
+  assert.equal(loginToggle.getAttribute('aria-pressed'), 'true');
+  assert.match(loginToggle.innerHTML, /<svg\b/);
+  assert.equal(loginToggle.textContent, undefined);
   h.context.resetSecretVisibility();
   assert.equal(password.type, 'password');
+  assert.equal(loginToggle.getAttribute('aria-label'), '显示明文');
+  assert.equal(loginToggle.getAttribute('title'), '显示明文');
+  assert.equal(loginToggle.getAttribute('aria-pressed'), 'false');
+  assert.match(loginToggle.innerHTML, /<svg\b/);
   assert.equal(password.value, 'typed-password');
   h.context.renderStoredSecret('sk-api-key', true);
   await h.context.toggleSecretField(h.input);
@@ -97,4 +108,10 @@ test('login passwords toggle locally, reset to hidden, and reveal errors keep sa
   assert.deepEqual(h.errors, ['cannot decrypt']);
   h.context.resetSecretVisibility(true);
   assert.equal(password.value, '');
+});
+
+test('login password button in HTML uses icon toggle with accessible labels', () => {
+  assert.match(html, /id="btn-secret-login-password"[^>]*data-secret-icon="true"/);
+  assert.match(html, /id="btn-secret-login-password"[^>]*aria-label="显示明文"/);
+  assert.match(html, /id="btn-secret-login-password"[\s\S]*?<svg class="secret-icon"/);
 });

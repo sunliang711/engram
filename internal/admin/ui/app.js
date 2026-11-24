@@ -112,11 +112,22 @@
   }
 
   // Secret fields keep saved masks separate from editable values and cancel stale reveals.
+  const secretEyeIcon = '<svg class="secret-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.2 10s2.8-5 7.8-5 7.8 5 7.8 5-2.8 5-7.8 5-7.8-5-7.8-5Z"/><circle cx="10" cy="10" r="2.5"/></svg>';
+  const secretEyeOffIcon = '<svg class="secret-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l14 14"/><path d="M8.5 5.2A7.8 7.8 0 0 1 10 5c5 0 7.8 5 7.8 5a13.4 13.4 0 0 1-2.3 2.9"/><path d="M12.2 14.4A7.6 7.6 0 0 1 10 15c-5 0-7.8-5-7.8-5a13.5 13.5 0 0 1 3.3-3.6"/><path d="M8.2 8.2a2.5 2.5 0 0 0 3.6 3.6"/></svg>';
+
   function setSecretVisibility(input, visible) {
     input.type = visible ? "text" : "password";
     const button = $("btn-secret-" + input.id);
     if (button) {
-      button.textContent = visible ? t("隐藏明文") : t("显示明文");
+      const label = visible ? t("隐藏明文") : t("显示明文");
+      const isIconToggle = (button.dataset && button.dataset.secretIcon === "true") || (typeof button.getAttribute === "function" && button.getAttribute("data-secret-icon") === "true");
+      if (isIconToggle) {
+        button.innerHTML = visible ? secretEyeOffIcon : secretEyeIcon;
+        button.setAttribute("aria-label", label);
+        button.setAttribute("title", label);
+      } else {
+        button.textContent = label;
+      }
       button.setAttribute("aria-pressed", String(visible));
       button.removeAttribute("aria-busy");
     }

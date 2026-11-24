@@ -717,6 +717,54 @@ textarea {
   white-space: nowrap;
 }
 
+.secret-input-inline {
+  position: relative;
+}
+
+.secret-input-inline input {
+  padding-right: 42px;
+}
+
+button.secret-icon-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+
+button.secret-icon-btn:hover:not(:disabled) {
+  background: var(--bg-panel);
+  color: var(--text);
+  transform: translateY(-50%);
+  box-shadow: none;
+}
+
+button.secret-icon-btn:active:not(:disabled) {
+  transform: translateY(-50%);
+}
+
+button.secret-icon-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.secret-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
 select {
   appearance: none;
   -webkit-appearance: none;

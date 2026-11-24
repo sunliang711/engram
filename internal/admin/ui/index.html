@@ -33,9 +33,11 @@
         </div>
         <div class="form-group">
           <label for="login-password">密码</label>
-          <div class="secret-input">
+          <div class="secret-input secret-input-inline">
             <input type="password" id="login-password" autocomplete="current-password" placeholder="输入临时密码或管理员密码" required autofocus data-secret-input />
-            <button type="button" id="btn-secret-login-password" class="secondary small" data-secret-toggle="login-password" aria-controls="login-password" aria-pressed="false">显示明文</button>
+            <button type="button" id="btn-secret-login-password" class="secret-icon-btn" data-secret-toggle="login-password" data-secret-icon="true" aria-controls="login-password" aria-pressed="false" aria-label="显示明文" title="显示明文">
+              <svg class="secret-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.2 10s2.8-5 7.8-5 7.8 5 7.8 5-2.8 5-7.8 5-7.8-5-7.8-5Z"/><circle cx="10" cy="10" r="2.5"/></svg>
+            </button>
           </div>
         </div>
         <button type="submit" style="width:100%; margin-top:8px;">登 录</button>
