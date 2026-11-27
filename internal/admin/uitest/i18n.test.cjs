@@ -216,3 +216,19 @@ test('memory index settings labels and audit actions translate cleanly', () => {
   }
   assert.equal(ui.t`最近更新于 ${'2026-11-23'}（对所有服务端实例即时生效）。`, 'Last updated 2026-11-23 (active immediately across all server instances).');
 });
+
+test('scheduler preset options translate cleanly in English', () => {
+  const { ui } = browser({ language: 'en' });
+  for (const key of [
+    '每分钟 (* * * * *)',
+    '每 5 分钟 (*/5 * * * *)',
+    '每 10 分钟 (*/10 * * * *)',
+    '每小时 (0 * * * *)',
+    '每天 00:00 (0 0 * * *)',
+    '每周一 00:00 (0 0 * * 1)',
+    '每月 1 日 00:00 (0 0 1 * *)',
+    '自定义',
+  ]) {
+    assert.notEqual(ui.t(key), key, `expected English translation for ${key}`);
+  }
+});

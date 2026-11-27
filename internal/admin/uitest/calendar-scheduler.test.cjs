@@ -46,18 +46,31 @@ function calendarHarness(tasks = [], preview = async () => ({ next_runs: times }
   return { $, context, calls, state: context.state, document };
 }
 
-const task = (name = 'backup', overrides = {}) => ({ name, display_name: name, schedule_type: 'daily', cron_expression: '0 4 * * *', timezone: 'Asia/Singapore', interval_seconds: 3600, timeout_seconds: 600, ...overrides });
+const task = (name = 'backup', overrides = {}) => ({ name, display_name: name, schedule_type: 'daily', cron_expression: '0 0 * * *', timezone: 'Asia/Singapore', interval_seconds: 3600, timeout_seconds: 600, ...overrides });
 
-test('presets match the reference project and only custom schedules expose Cron input without interval controls', () => {
+test('presets match configured tiers and only custom schedules expose Cron input without interval controls', () => {
   const h = calendarHarness();
   h.$('sched-cfg-timezone').value = 'UTC';
-  for (const [kind, expression] of [['hourly', '0 * * * *'], ['daily', '0 4 * * *'], ['weekly', '0 5 * * 1'], ['monthly', '0 4 1 * *']]) {
+  const expectedPresets = [
+    ['every_minute', '* * * * *'],
+    ['every_5_minutes', '*/5 * * * *'],
+    ['every_10_minutes', '*/10 * * * *'],
+    ['hourly', '0 * * * *'],
+    ['daily', '0 0 * * *'],
+    ['weekly', '0 0 * * 1'],
+    ['monthly', '0 0 1 * *'],
+  ];
+  for (const [kind, expression] of expectedPresets) {
     h.$('sched-cfg-schedule-type').value = kind;
     h.context.updateScheduleFields();
     assert.equal(h.context.calendarSchedulePayload().cron_expression, expression);
     assert.equal(h.$('sched-cfg-cron').required, false);
     assert.equal(h.$('sched-cfg-cron-group').classList.contains('hidden'), true);
   }
+  const selectMatch = html.match(/<select id="sched-cfg-schedule-type">([\s\S]*?)<\/select>/);
+  assert.ok(selectMatch);
+  const optionValues = [...selectMatch[1].matchAll(/<option value="([^"]+)"/g)].map(m => m[1]);
+  assert.deepEqual(optionValues, [...expectedPresets.map(([kind]) => kind), 'cron']);
   h.$('sched-cfg-schedule-type').value = 'cron';
   h.context.updateScheduleFields();
   h.$('sched-cfg-cron').value = '*/15 9-17 * * 1-5';
@@ -69,7 +82,11 @@ test('presets match the reference project and only custom schedules expose Cron 
 });
 
 test('editing preserves existing custom dates, time zones, timeouts and upgrades legacy intervals to calendar presets', async () => {
-  const tasks = [task('monthly', { schedule_type: 'monthly', cron_expression: '5 8 31 * *', timezone: 'UTC', timeout_seconds: 120 }), task('legacy', { schedule_type: 'interval', cron_expression: '', interval_seconds: 604800 })];
+  const tasks = [
+    task('monthly', { schedule_type: 'monthly', cron_expression: '5 8 31 * *', timezone: 'UTC', timeout_seconds: 120 }),
+    task('legacy-weekly', { schedule_type: 'interval', cron_expression: '', interval_seconds: 604800 }),
+    task('legacy-5m', { schedule_type: 'interval', cron_expression: '', interval_seconds: 300 }),
+  ];
   const h = calendarHarness(tasks);
   await h.context.openSchedulerConfigModal('monthly');
   assert.equal(h.$('sched-cfg-schedule-type').value, 'cron');
@@ -84,9 +101,13 @@ test('editing preserves existing custom dates, time zones, timeouts and upgrades
   h.$('sched-cfg-timeout').value = 120;
   h.context.updateSchedulerSaveButton();
   assert.equal(h.$('btn-save-scheduler-config').disabled, true);
-  await h.context.openSchedulerConfigModal('legacy');
+  await h.context.openSchedulerConfigModal('legacy-weekly');
   assert.equal(h.$('sched-cfg-schedule-type').value, 'weekly');
-  assert.equal(h.context.calendarSchedulePayload().cron_expression, '0 5 * * 1');
+  assert.equal(h.context.calendarSchedulePayload().cron_expression, '0 0 * * 1');
+  assert.equal(h.$('btn-save-scheduler-config').disabled, false);
+  await h.context.openSchedulerConfigModal('legacy-5m');
+  assert.equal(h.$('sched-cfg-schedule-type').value, 'every_5_minutes');
+  assert.equal(h.context.calendarSchedulePayload().cron_expression, '*/5 * * * *');
   assert.equal(h.$('btn-save-scheduler-config').disabled, false);
   assert.match(html, /class="scheduler-drawer"/);
   assert.match(html, /id="scheduler-history-modal"/);

@@ -1372,10 +1372,13 @@
         <div class="form-group">
           <label for="sched-cfg-schedule-type">计划</label>
           <select id="sched-cfg-schedule-type">
+            <option value="every_minute">每分钟 (* * * * *)</option>
+            <option value="every_5_minutes">每 5 分钟 (*/5 * * * *)</option>
+            <option value="every_10_minutes">每 10 分钟 (*/10 * * * *)</option>
             <option value="hourly">每小时 (0 * * * *)</option>
-            <option value="daily">每天 (0 4 * * *)</option>
-            <option value="weekly">每周 (0 5 * * 1)</option>
-            <option value="monthly">每月 (0 4 1 * *)</option>
+            <option value="daily">每天 00:00 (0 0 * * *)</option>
+            <option value="weekly">每周一 00:00 (0 0 * * 1)</option>
+            <option value="monthly">每月 1 日 00:00 (0 0 1 * *)</option>
             <option value="cron">自定义</option>
           </select>
         </div>

@@ -4384,11 +4384,18 @@
     const presets = schedulerPlanPresets();
     const isLegacyInterval = !task.schedule_type || task.schedule_type === "interval";
     const selected = Object.keys(presets).find((kind) => presets[kind] === task.cron_expression);
-    const fallbackPreset = task.interval_seconds >= 604800 ? "weekly" : task.interval_seconds <= 3600 ? "hourly" : "daily";
+    const intervalSeconds = Number(task.interval_seconds) || 3600;
+    const fallbackPreset = intervalSeconds >= 2592000 ? "monthly"
+      : intervalSeconds >= 604800 ? "weekly"
+      : intervalSeconds > 3600 ? "daily"
+      : intervalSeconds > 600 ? "hourly"
+      : intervalSeconds > 300 ? "every_10_minutes"
+      : intervalSeconds > 60 ? "every_5_minutes"
+      : "every_minute";
     const scheduleType = isLegacyInterval ? (selected || fallbackPreset) : (selected || "cron");
     $("sched-cfg-schedule-type").value = scheduleType;
     $("sched-cfg-timezone").value = task.timezone || "Asia/Singapore";
-    $("sched-cfg-cron").value = presets[scheduleType] || task.cron_expression || "0 4 * * *";
+    $("sched-cfg-cron").value = presets[scheduleType] || task.cron_expression || "0 0 * * *";
     $("sched-cfg-timeout").value = task.timeout_seconds || 600;
     updateScheduleFields();
     const cfg = task.config || {};
@@ -4470,9 +4477,17 @@
     $("btn-save-scheduler-config").disabled = $("scheduler-config-form").dataset.submitting === "true" || !canSaveSchedulerConfig();
   }
 
-  // schedulerPlanPresets matches the reference project's preset expressions exactly.
+  // schedulerPlanPresets defines the built-in schedule dropdown presets.
   function schedulerPlanPresets() {
-    return { hourly: "0 * * * *", daily: "0 4 * * *", weekly: "0 5 * * 1", monthly: "0 4 1 * *" };
+    return {
+      every_minute: "* * * * *",
+      every_5_minutes: "*/5 * * * *",
+      every_10_minutes: "*/10 * * * *",
+      hourly: "0 * * * *",
+      daily: "0 0 * * *",
+      weekly: "0 0 * * 1",
+      monthly: "0 0 1 * *",
+    };
   }
 
   // updateScheduleFields exposes raw Cron only for custom rules.

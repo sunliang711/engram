@@ -16,7 +16,11 @@ func TestNextScheduledRun(t *testing.T) {
 	cases := []struct {
 		name, kind, expression, zone, after, want string
 	}{
+		{"every_minute", "every_minute", "* * * * *", "Asia/Singapore", "2026-11-20T03:00:00Z", "2026-11-20T03:01:00Z"},
+		{"every_5_minutes", "every_5_minutes", "*/5 * * * *", "Asia/Singapore", "2026-11-20T03:01:00Z", "2026-11-20T03:05:00Z"},
+		{"every_10_minutes", "every_10_minutes", "*/10 * * * *", "Asia/Singapore", "2026-11-20T03:01:00Z", "2026-11-20T03:10:00Z"},
 		{"hourly", "hourly", "30 * * * *", "Asia/Singapore", "2026-11-20T03:00:00Z", "2026-11-20T03:30:00Z"},
+		{"daily midnight", "daily", "0 0 * * *", "Asia/Singapore", "2026-11-20T03:00:00Z", "2026-11-20T16:00:00Z"},
 		{"daily", "daily", "0 2 * * *", "Asia/Singapore", "2026-11-20T03:00:00Z", "2026-11-20T18:00:00Z"},
 		{"weekly", "weekly", "0 2 * * 1", "Asia/Singapore", "2026-11-20T03:00:00Z", "2026-11-22T18:00:00Z"},
 		{"short month", "monthly", "0 2 31 * *", "Asia/Singapore", "2027-01-31T03:00:00Z", "2027-03-30T18:00:00Z"},
@@ -47,6 +51,8 @@ func TestCalendarScheduleValidation(t *testing.T) {
 		{"cron", "0 0 0 * * *", "UTC"}, {"cron", "60 2 * * *", "UTC"},
 		{"cron", "0 2 * * *", "bad/zone"}, {"cron", "0 2 * * *", "Local"},
 		{"cron", "0 0 31 2 *", "UTC"}, {"cron", "@hourly", "UTC"},
+		{"every_minute", "*/5 * * * *", "UTC"}, {"every_5_minutes", "*/10 * * * *", "UTC"},
+		{"every_10_minutes", "0 * * * *", "UTC"},
 		{"daily", "0 2 * * 1", "UTC"}, {"monthly", "0 2 */2 * *", "UTC"},
 		{"unknown", "0 2 * * *", "UTC"},
 	} {

@@ -16,7 +16,13 @@ func TestSchedulerPreviewHandler(t *testing.T) {
 		body string
 		want int
 	}{
-		{`{"schedule_type":"daily","cron_expression":"0 4 * * *","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"every_minute","cron_expression":"* * * * *","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"every_5_minutes","cron_expression":"*/5 * * * *","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"every_10_minutes","cron_expression":"*/10 * * * *","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"daily","cron_expression":"0 0 * * *","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"weekly","cron_expression":"0 0 * * 1","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"monthly","cron_expression":"0 0 1 * *","timezone":"Asia/Singapore"}`, http.StatusOK},
+		{`{"schedule_type":"every_5_minutes","cron_expression":"* * * * *","timezone":"Asia/Singapore"}`, http.StatusBadRequest},
 		{`{"schedule_type":"interval","interval":"30m"}`, http.StatusOK},
 		{`{"schedule_type":"cron","cron_expression":"bad"}`, http.StatusBadRequest},
 		{`{"cron_expression":"0 4 * * *","timezone":"bad/zone"}`, http.StatusBadRequest},

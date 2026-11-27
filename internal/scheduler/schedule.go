@@ -67,6 +67,12 @@ func nextScheduledRun(scheduleType, expression, timezone string, intervalSeconds
 	// Presets use a restricted shape so the UI label always matches the stored rule.
 	validShape := false
 	switch scheduleType {
+	case "every_minute":
+		validShape = strings.Join(fields, " ") == "* * * * *"
+	case "every_5_minutes":
+		validShape = strings.Join(fields, " ") == "*/5 * * * *"
+	case "every_10_minutes":
+		validShape = strings.Join(fields, " ") == "*/10 * * * *"
 	case "hourly":
 		validShape = strings.Join(fields[1:], " ") == "* * * *" && isCronNumber(fields[0])
 	case "daily":
