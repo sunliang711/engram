@@ -18,6 +18,7 @@ import (
 
 	"engram/internal/apperror"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -30,6 +31,7 @@ const (
 
 // AdminSessionClaims is the payload signed inside the admin session cookie/token.
 type AdminSessionClaims struct {
+	SessionID       string `json:"sid,omitempty"`
 	Username        string `json:"u"`
 	PasswordVersion int64  `json:"pv"`
 	IssuedAt        int64  `json:"iat"`
@@ -40,6 +42,8 @@ type AdminSessionClaims struct {
 type AdminState struct {
 	Authenticated       bool   `json:"authenticated"`
 	Username            string `json:"username,omitempty"`
+	Role                string `json:"role,omitempty"`
+	SessionID           string `json:"session_id,omitempty"`
 	MustChangePassword  bool   `json:"must_change_password"`
 	ResetAdminEnvActive bool   `json:"reset_admin_env_active"`
 	Version             string `json:"version,omitempty"`
@@ -185,12 +189,17 @@ func (m *AuthManager) Bootstrap(ctx context.Context, out io.Writer) (string, err
 			UPDATE admin_accounts
 			SET password_hash = $1,
 			    must_change_password = true,
+			    role = 'admin',
+			    disabled = false,
 			    password_version = password_version + 1,
 			    updated_at = $2
 			WHERE username = $3
 		`, passHash, now, AdminUsername)
 		if err != nil {
 			return "", fmt.Errorf("reset admin account password: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM admin_sessions WHERE username = $1`, AdminUsername); err != nil {
+			return "", fmt.Errorf("revoke reset admin sessions: %w", err)
 		}
 	}
 
@@ -214,7 +223,7 @@ func (m *AuthManager) Bootstrap(ctx context.Context, out io.Writer) (string, err
 }
 
 // Login verifies admin credentials and returns a signed session token and live AdminState.
-func (m *AuthManager) Login(ctx context.Context, username, password string) (string, AdminState, error) {
+func (m *AuthManager) Login(ctx context.Context, username, password string, metadata ...SessionMetadata) (string, AdminState, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		username = AdminUsername
@@ -223,12 +232,20 @@ func (m *AuthManager) Login(ctx context.Context, username, password string) (str
 		storedHash string
 		mustChange bool
 		pwdVersion int64
+		role       string
+		disabled   bool
 	)
-	err := m.pool.QueryRow(ctx, `
-		SELECT password_hash, must_change_password, password_version
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "begin admin login", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	err = tx.QueryRow(ctx, `
+		SELECT password_hash, must_change_password, password_version, role, disabled
 		FROM admin_accounts
 		WHERE username = $1
-	`, username).Scan(&storedHash, &mustChange, &pwdVersion)
+		FOR UPDATE
+	`, username).Scan(&storedHash, &mustChange, &pwdVersion, &role, &disabled)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", AdminState{}, apperror.New(apperror.CodeUnauthenticated, "invalid username or password")
@@ -236,18 +253,26 @@ func (m *AuthManager) Login(ctx context.Context, username, password string) (str
 		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "query admin account", err)
 	}
 
-	if !verifyPassword(password, storedHash) {
+	if !verifyPassword(password, storedHash) || disabled {
 		return "", AdminState{}, apperror.New(apperror.CodeUnauthenticated, "invalid username or password")
 	}
 
-	token, err := m.signSession(username, pwdVersion)
+	token, sessionID, err := m.createSession(ctx, tx, username, pwdVersion, metadata)
 	if err != nil {
 		return "", AdminState{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE admin_accounts SET last_login_at = now() WHERE username = $1`, username); err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "update admin login time", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "commit admin login", err)
 	}
 
 	return token, AdminState{
 		Authenticated:       true,
 		Username:            username,
+		Role:                role,
+		SessionID:           sessionID,
 		MustChangePassword:  mustChange,
 		ResetAdminEnvActive: m.resetAdmin,
 	}, nil
@@ -262,23 +287,31 @@ func (m *AuthManager) VerifySession(ctx context.Context, token string) (AdminSta
 
 	var (
 		mustChange bool
-		pwdVersion int64
+		role       string
 	)
 	err = m.pool.QueryRow(ctx, `
-		SELECT must_change_password, password_version
-		FROM admin_accounts
-		WHERE username = $1
-	`, claims.Username).Scan(&mustChange, &pwdVersion)
+		SELECT a.must_change_password, a.role
+		FROM admin_accounts a JOIN admin_sessions s ON s.username = a.username
+		WHERE s.id = $1 AND a.username = $2 AND a.password_version = $3
+		  AND s.password_version = a.password_version AND NOT a.disabled AND s.expires_at > now()
+	`, claims.SessionID, claims.Username, claims.PasswordVersion).Scan(&mustChange, &role)
 	if err != nil {
-		return AdminState{ResetAdminEnvActive: m.resetAdmin}, apperror.New(apperror.CodeUnauthenticated, "admin account not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AdminState{ResetAdminEnvActive: m.resetAdmin}, apperror.New(apperror.CodeUnauthenticated, "admin session expired or revoked")
+		}
+		return AdminState{}, apperror.Wrap(apperror.CodeInternalError, "verify admin session", err)
 	}
-	if pwdVersion != claims.PasswordVersion {
-		return AdminState{ResetAdminEnvActive: m.resetAdmin}, apperror.New(apperror.CodeUnauthenticated, "admin session expired due to password change")
+	// 最近活动最多每分钟写入一次，撤销后只更新已有记录，禁止恢复会话。
+	if _, err := m.pool.Exec(ctx, `UPDATE admin_sessions SET last_seen_at = now()
+		WHERE id = $1 AND last_seen_at < now() - interval '1 minute'`, claims.SessionID); err != nil {
+		return AdminState{}, apperror.Wrap(apperror.CodeInternalError, "touch admin session", err)
 	}
 
 	return AdminState{
 		Authenticated:       true,
 		Username:            claims.Username,
+		Role:                role,
+		SessionID:           claims.SessionID,
 		MustChangePassword:  mustChange,
 		ResetAdminEnvActive: m.resetAdmin,
 	}, nil
@@ -287,7 +320,7 @@ func (m *AuthManager) VerifySession(ctx context.Context, token string) (AdminSta
 // ChangePassword updates the admin password, clears must_change_password, increments password_version,
 // and returns a fresh session token and updated AdminState.
 // When must_change_password is false (voluntary change), currentPassword must be verified.
-func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassword, newPassword string) (string, AdminState, error) {
+func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassword, newPassword string, metadata ...SessionMetadata) (string, AdminState, error) {
 	newPassword = strings.TrimSpace(newPassword)
 	if len(newPassword) < 8 {
 		return "", AdminState{}, apperror.New(apperror.CodeInvalidArgument, "new password must be at least 8 characters")
@@ -299,12 +332,19 @@ func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassw
 	var (
 		storedHash string
 		mustChange bool
+		role       string
 	)
-	err := m.pool.QueryRow(ctx, `
-		SELECT password_hash, must_change_password
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "begin admin password change", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	err = tx.QueryRow(ctx, `
+		SELECT password_hash, must_change_password, role
 		FROM admin_accounts
-		WHERE username = $1
-	`, username).Scan(&storedHash, &mustChange)
+		WHERE username = $1 AND NOT disabled
+		FOR UPDATE
+	`, username).Scan(&storedHash, &mustChange, &role)
 	if err != nil {
 		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "query admin account", err)
 	}
@@ -321,7 +361,7 @@ func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassw
 	}
 
 	var newVersion int64
-	err = m.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		UPDATE admin_accounts
 		SET password_hash = $1,
 		    must_change_password = false,
@@ -334,14 +374,22 @@ func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassw
 		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "update admin password", err)
 	}
 
-	token, err := m.signSession(username, newVersion)
+	if _, err := tx.Exec(ctx, `DELETE FROM admin_sessions WHERE username = $1`, username); err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "revoke admin sessions", err)
+	}
+	token, sessionID, err := m.createSession(ctx, tx, username, newVersion, metadata)
 	if err != nil {
 		return "", AdminState{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", AdminState{}, apperror.Wrap(apperror.CodeInternalError, "commit admin password change", err)
 	}
 
 	return token, AdminState{
 		Authenticated:       true,
 		Username:            username,
+		Role:                role,
+		SessionID:           sessionID,
 		MustChangePassword:  false,
 		ResetAdminEnvActive: m.resetAdmin,
 	}, nil
@@ -350,6 +398,7 @@ func (m *AuthManager) ChangePassword(ctx context.Context, username, currentPassw
 func (m *AuthManager) signSession(username string, pwdVersion int64) (string, error) {
 	now := time.Now().UTC()
 	claims := AdminSessionClaims{
+		SessionID:       uuid.NewString(),
 		Username:        username,
 		PasswordVersion: pwdVersion,
 		IssuedAt:        now.Unix(),
@@ -389,7 +438,11 @@ func (m *AuthManager) verifySessionToken(token string) (*AdminSessionClaims, err
 	if err := json.Unmarshal(raw, &claims); err != nil {
 		return nil, apperror.New(apperror.CodeUnauthenticated, "invalid admin session claims")
 	}
-	if time.Now().UTC().Unix() > claims.ExpiresAt {
+	// 无独立编号的旧凭证必须重新登录，避免被撤销后再次登记。
+	if _, err := uuid.Parse(claims.SessionID); err != nil || claims.Username == "" || claims.PasswordVersion < 1 {
+		return nil, apperror.New(apperror.CodeUnauthenticated, "invalid admin session claims")
+	}
+	if time.Now().UTC().Unix() >= claims.ExpiresAt {
 		return nil, apperror.New(apperror.CodeUnauthenticated, "admin session expired")
 	}
 	return &claims, nil

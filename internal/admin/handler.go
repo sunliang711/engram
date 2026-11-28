@@ -107,6 +107,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/admin/login", h.withSafety(h.handleLogin))
 	mux.HandleFunc("/api/admin/logout", h.withSafety(h.handleLogout))
 	mux.HandleFunc("/api/admin/change-password", h.withSafety(h.handleChangePassword))
+	mux.HandleFunc("/api/admin/sessions", h.requireActiveAdmin(h.handleSessions))
+	mux.HandleFunc("/api/admin/sessions/", h.requireActiveAdmin(h.handleSessions))
+	mux.HandleFunc("/api/admin/accounts", h.requireActiveAdmin(h.handleAccounts))
+	mux.HandleFunc("/api/admin/accounts/", h.requireActiveAdmin(h.handleAccounts))
 
 	// Protected Management APIs (require authenticated session with must_change_password == false)
 	mux.HandleFunc("/api/admin/overview", h.requireActiveAdmin(h.handleOverview))
@@ -260,6 +264,7 @@ func (h *Handler) requireActiveAdminMultipart(maxBytes int64, next http.HandlerF
 }
 
 type adminUserCtxKey struct{}
+type adminStateCtxKey struct{}
 
 func adminActorFromRequest(r *http.Request) string {
 	if r == nil {
@@ -315,7 +320,12 @@ func (h *Handler) requireActiveAdminCore(next http.HandlerFunc) http.HandlerFunc
 			writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "admin password change required before accessing management console"))
 			return
 		}
+		if !canAccessConsole(state.Role, r.Method, r.URL.Path) {
+			writeJSONError(w, apperror.New(apperror.CodeUnauthorized, "read-only console account cannot perform this operation"))
+			return
+		}
 		ctx := context.WithValue(r.Context(), adminUserCtxKey{}, state.Username)
+		ctx = context.WithValue(ctx, adminStateCtxKey{}, state)
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -326,6 +336,7 @@ func withSessionVersion(state AdminState) AdminState {
 }
 
 func (h *Handler) handleSession(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -372,7 +383,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, apperror.New(apperror.CodeInvalidArgument, "invalid json body"))
 		return
 	}
-	token, state, err := h.authMgr.Login(r.Context(), req.Username, req.Password)
+	token, state, err := h.authMgr.Login(r.Context(), req.Username, req.Password, sessionMetadata(r))
 	if err != nil {
 		appErr := apperror.AsError(err, "")
 		h.recordAdminAudit(r, audit.Entry{
@@ -404,6 +415,13 @@ func (h *Handler) handleLogout(w http.ResponseWriter, r *http.Request) {
 	username := "admin"
 	if state, err := h.authMgr.VerifySession(r.Context(), h.extractSessionToken(r)); err == nil && state.Authenticated && state.Username != "" {
 		username = state.Username
+		if err := h.authMgr.RevokeSession(r.Context(), state, state.SessionID); err != nil {
+			writeJSONError(w, err)
+			return
+		}
+	} else if err != nil && apperror.AsError(err, "").Code == apperror.CodeInternalError {
+		writeJSONError(w, err)
+		return
 	}
 	h.clearSessionCookie(w, r)
 	h.recordAdminAudit(r, audit.Entry{
@@ -436,7 +454,7 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newToken, newState, err := h.authMgr.ChangePassword(r.Context(), state.Username, req.CurrentPassword, req.NewPassword)
+	newToken, newState, err := h.authMgr.ChangePassword(r.Context(), state.Username, req.CurrentPassword, req.NewPassword, sessionMetadata(r))
 	if err != nil {
 		appErr := apperror.AsError(err, "")
 		h.recordAdminAudit(r, audit.Entry{

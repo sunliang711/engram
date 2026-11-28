@@ -1608,6 +1608,15 @@ body:has(.modal-backdrop:not(.hidden)) { overflow: hidden; }
 .settings-tabs [aria-selected="true"]::after { content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: var(--primary); }
 .settings-tabs [role="tab"]:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
 #tab-settings > .settings-grid { max-width: 860px; }
+.active-sessions { display: grid; gap: 12px; }
+.active-session { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); }
+.active-session-info { min-width: 0; }
+.active-session-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.active-session-agent { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; margin: 6px 0; }
+.active-session > button { flex-shrink: 0; }
+#console-accounts-table .row-actions { flex-wrap: wrap; }
+:root[data-console-role="viewer"] :is(#create-tenant-card, #tenant-forms-panel, #project-forms-panel, #member-token-form, #member-role-form, #add-project-remote-form, #add-project-member-form, #member-projects-table select, #project-members-table select, #btn-new-tenant, #btn-add-member, #btn-new-project, #btn-new-memory, #btn-rename-tenant, #btn-rename-member, #btn-rename-project, #btn-remove-member-tenant, #btn-save-all-member-projects, #btn-member-projects-all-writer, #btn-member-projects-all-reader, #btn-member-projects-all-none, #btn-download-export-zip, #btn-edit-memory, #btn-pin-memory, #btn-restore-memory, #btn-sk-save, #btn-sk-test, #btn-mi-save, #btn-mi-reset, [data-tab="tab-migration"], #app-view .danger, #app-view .danger-outline, .btn-edit-mem-row, .btn-edit-remote, .btn-delete-remote, .btn-save-member-project, .btn-save-proj-member-inline, .btn-sched-toggle, .btn-sched-config, .btn-sched-run, .btn-run-audit-task, .btn-apply-token, .btn-toggle-token, .btn-copy-token) { display: none !important; }
+:root[data-console-role="viewer"] :is(#safekeep-settings-form, #memory-index-settings-form) { opacity: .8; }
 .settings-preference-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 22px 0; border-top: 1px solid var(--border); }
 .settings-preference-row:last-child { padding-bottom: 0; }
 .settings-preference-row label, .settings-preference-row .field-label { margin-bottom: 5px; color: var(--text); }

@@ -17,6 +17,9 @@ function renderHarness(language = 'zh-CN') {
       title: '',
       value: '',
       required: false,
+      setAttribute() {},
+      removeAttribute() {},
+      querySelector() { return this.child ||= makeNode(); },
       classList: {
         add: name => classes.add(name),
         remove: name => classes.delete(name),

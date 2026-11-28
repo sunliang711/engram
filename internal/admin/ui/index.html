@@ -28,13 +28,13 @@
       <p class="subtitle">登录以管理共享知识、项目与客户端。</p>
       <form id="login-form">
         <div class="form-group">
-          <label for="login-username">管理员账号</label>
+          <label for="login-username">控制台账号</label>
           <input type="text" id="login-username" autocomplete="username" value="admin" required />
         </div>
         <div class="form-group">
           <label for="login-password">密码</label>
           <div class="secret-input secret-input-inline">
-            <input type="password" id="login-password" autocomplete="current-password" placeholder="输入临时密码或管理员密码" required autofocus data-secret-input />
+            <input type="password" id="login-password" autocomplete="current-password" placeholder="输入登录密码" required autofocus data-secret-input />
             <button type="button" id="btn-secret-login-password" class="secret-icon-btn" data-secret-toggle="login-password" data-secret-icon="true" aria-controls="login-password" aria-pressed="false" aria-label="显示明文" title="显示明文">
               <svg class="secret-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.2 10s2.8-5 7.8-5 7.8 5 7.8 5-2.8 5-7.8 5-7.8-5-7.8-5Z"/><circle cx="10" cy="10" r="2.5"/></svg>
             </button>
@@ -62,7 +62,7 @@
         <div class="form-group hidden" id="current-admin-password-group">
           <label for="current-admin-password">当前密码</label>
           <div class="secret-input">
-            <input type="password" id="current-admin-password" autocomplete="current-password" placeholder="请输入当前管理员密码" data-secret-input />
+            <input type="password" id="current-admin-password" autocomplete="current-password" placeholder="请输入登录密码" data-secret-input />
             <button type="button" id="btn-secret-current-admin-password" class="secondary small" data-secret-toggle="current-admin-password" aria-controls="current-admin-password" aria-pressed="false">显示明文</button>
           </div>
         </div>
@@ -121,7 +121,7 @@
         <div class="sidebar-user-avatar" id="sidebar-user-avatar" aria-hidden="true">A</div>
         <div class="sidebar-user-info">
           <div class="sidebar-user-name" id="sidebar-admin-user">admin</div>
-          <div class="sidebar-user-role">管理员</div>
+          <div class="sidebar-user-role" id="sidebar-account-role">管理员</div>
         </div>
         <button type="button" id="btn-sidebar-logout" class="sidebar-logout-btn" title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" width="16" height="16" aria-hidden="true"><path d="M8 3H4.5A1.5 1.5 0 0 0 3 4.5v11A1.5 1.5 0 0 0 4.5 17H8M13 14l4-4-4-4M17 10H8"/></svg></button>
       </div>
@@ -146,6 +146,7 @@
             <div class="account-actions">
               <button class="secondary small" id="btn-open-glossary">使用说明</button>
               <button class="secondary small" id="btn-open-change-pwd">修改密码</button>
+              <button class="secondary small" id="btn-open-accounts">账号与会话</button>
               <button class="secondary small" id="btn-logout">退出登录</button>
             </div>
           </details>
@@ -1052,7 +1053,7 @@
           <button type="button" id="settings-tab-backup" role="tab" aria-selected="true" aria-controls="settings-panel-backup" data-settings-tab="backup">备份与存储</button>
           <button type="button" id="settings-tab-memory" role="tab" aria-selected="false" aria-controls="settings-panel-memory" tabindex="-1" data-settings-tab="memory">记忆索引</button>
           <button type="button" id="settings-tab-appearance" role="tab" aria-selected="false" aria-controls="settings-panel-appearance" tabindex="-1" data-settings-tab="appearance">界面偏好</button>
-          <button type="button" id="settings-tab-security" role="tab" aria-selected="false" aria-controls="settings-panel-security" tabindex="-1" data-settings-tab="security">账号安全</button>
+          <button type="button" id="settings-tab-security" role="tab" aria-selected="false" aria-controls="settings-panel-security" tabindex="-1" data-settings-tab="security">账号与会话</button>
         </div>
         <div id="settings-panel-backup" role="tabpanel" aria-labelledby="settings-tab-backup" class="grid-2 settings-grid">
           <div class="card">
@@ -1173,16 +1174,31 @@
         </div>
         <div id="settings-panel-security" role="tabpanel" aria-labelledby="settings-tab-security" class="settings-grid hidden">
           <div class="card">
-            <h2>管理员账号</h2>
-            <p class="desc">管理当前管理员的登录凭据。</p>
+            <h2>当前账号</h2>
+            <p class="desc">管理当前账号的登录凭据与各设备会话。</p>
             <div class="settings-preference-row">
               <div><span class="field-label">当前账号</span><strong id="settings-admin-user">admin</strong></div>
-              <span class="badge">管理员</span>
+              <span id="settings-account-role" class="badge">管理员</span>
             </div>
             <div class="settings-preference-row">
               <div><span class="field-label">登录密码</span><p class="field-hint">修改后，其他已登录会话将失效。</p></div>
               <button type="button" id="btn-settings-change-password" class="secondary">修改密码</button>
             </div>
+            <p id="console-readonly-notice" class="field-hint hidden">当前为只读账号，可查看管理数据、修改自己的密码及注销自己的会话。</p>
+          </div>
+          <div class="card">
+            <div class="section-heading"><h2>活跃会话</h2><button type="button" id="btn-refresh-sessions" class="secondary small">刷新</button></div>
+            <p class="desc">查看当前账号的登录设备，注销后该设备需要重新登录。</p>
+            <p id="account-security-status" class="field-hint" role="status" aria-live="polite"></p>
+            <div id="active-sessions" class="active-sessions"></div>
+          </div>
+          <div id="console-accounts-card" class="card hidden">
+            <div class="section-heading"><h2>管理员与只读账号</h2><button type="button" id="btn-create-console-account" class="small">新增账号</button></div>
+            <p class="desc">管理员拥有完整管理权限；只读账号可查看数据。账号变更需要验证你的当前密码。</p>
+            <table id="console-accounts-table">
+              <thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>最近登录</th><th>操作</th></tr></thead>
+              <tbody></tbody>
+            </table>
           </div>
         </div>
       </section>
@@ -1191,6 +1207,20 @@
       <span>Engram · 让每一次协作都有共享记忆</span>
       <span>MCP 共享记忆 · 统一管理控制台</span>
     </footer>
+    </div>
+  </div>
+
+  <div id="console-account-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="console-account-title">
+    <div class="modal-card">
+      <div class="modal-header"><h2 id="console-account-title">新增控制台账号</h2><button type="button" id="btn-close-console-account" class="secondary small">关闭</button></div>
+      <p id="console-account-description" class="desc"></p>
+      <form id="console-account-form" autocomplete="off">
+        <div id="console-account-username-group" class="form-group"><label for="console-account-username">用户名（3 ~ 64 位）</label><input id="console-account-username" type="text" minlength="3" maxlength="64" pattern="[A-Za-z0-9._-]+" autocomplete="off" /><p class="field-hint">仅支持英文字母、数字、点、下划线和连字符。</p></div>
+        <div id="console-account-role-group" class="form-group"><label for="console-account-role">角色</label><select id="console-account-role"><option value="viewer">只读运维</option><option value="admin">管理员</option></select></div>
+        <div id="console-account-password-group" class="form-group"><label for="console-account-password">新密码（8 ~ 72 位）</label><div class="secret-input"><input id="console-account-password" type="password" minlength="8" maxlength="72" autocomplete="new-password" data-secret-input /><button type="button" id="btn-secret-console-account-password" class="secondary small" data-secret-toggle="console-account-password" aria-controls="console-account-password" aria-pressed="false">显示明文</button></div></div>
+        <div class="form-group"><label for="console-actor-password">你的当前密码（二次验证）</label><div class="secret-input"><input id="console-actor-password" type="password" required autocomplete="current-password" data-secret-input /><button type="button" id="btn-secret-console-actor-password" class="secondary small" data-secret-toggle="console-actor-password" aria-controls="console-actor-password" aria-pressed="false">显示明文</button></div></div>
+        <div class="button-row confirm-actions"><button type="button" id="btn-cancel-console-account" class="secondary">取消</button><button type="submit">确认</button></div>
+      </form>
     </div>
   </div>
 
@@ -1598,13 +1628,13 @@
       <p class="desc" id="reauth-subtitle">当前会话已过期，请重新输入密码继续操作，页面上未保存的内容会保留。</p>
       <form id="reauth-form">
         <div class="form-group">
-          <label for="reauth-username">管理员账号</label>
+          <label for="reauth-username">控制台账号</label>
           <input type="text" id="reauth-username" autocomplete="username" value="admin" required />
         </div>
         <div class="form-group">
           <label for="reauth-password">密码</label>
           <div class="secret-input">
-            <input type="password" id="reauth-password" autocomplete="current-password" placeholder="请输入管理员密码" required data-secret-input />
+            <input type="password" id="reauth-password" autocomplete="current-password" placeholder="请输入登录密码" required data-secret-input />
             <button type="button" id="btn-secret-reauth-password" class="secondary small" data-secret-toggle="reauth-password" aria-controls="reauth-password" aria-pressed="false">显示明文</button>
           </div>
         </div>

@@ -62,6 +62,12 @@
     safekeepSettings: null,
     memoryIndexSettings: null,
     settingsTab: "backup",
+    consoleRole: "",
+    consoleUsername: "",
+    activeSessions: [],
+    consoleAccounts: [],
+    accountSecurityRequest: 0,
+    accountAction: null,
     reauthPromise: null,
     reauthResolve: null,
     reauthReject: null,
@@ -109,6 +115,7 @@
       $("settings-panel-" + button.dataset.settingsTab).classList.toggle("hidden", !active);
     });
     if (updateURL && state.locationReady) syncLocation(true);
+    if (selected === "security" && state.consoleRole) loadAccountSecurity();
   }
 
   // Secret fields keep saved masks separate from editable values and cancel stale reveals.
@@ -324,6 +331,7 @@
       "create-tenant-card",
       "tenant-forms-panel",
       "project-forms-panel",
+      "console-account-modal",
     ].forEach((id) => { if ($(id)) $(id).classList.add("hidden"); });
     if (typeof closeSchedulerHistory === "function") closeSchedulerHistory(false);
     if (typeof closeSchedulerConfig === "function") closeSchedulerConfig(false);
@@ -349,6 +357,11 @@
 
   // adminFetch attaches same-origin credentials and opens the temporary re-login modal on session expiry.
   async function adminFetch(path, options = {}) {
+    if (state.consoleRole === "viewer" && typeof path === "string" && path.startsWith("/api/admin/")) {
+      const method = (options.method || "GET").toUpperCase();
+      const ownAccount = path === "/api/admin/change-password" || path === "/api/admin/logout" || path === "/api/admin/login" || path.startsWith("/api/admin/sessions/");
+      if (!ownAccount && method !== "GET") throw new Error(t("只读账号无法执行此操作。"));
+    }
     const fetchOpts = Object.assign({ credentials: "same-origin" }, options);
     delete fetchOpts.skipReauth;
     delete fetchOpts._reauthRetried;
@@ -390,6 +403,12 @@
 
   // ERROR_MESSAGES translates validation messages the management API returns in English.
   const ERROR_MESSAGES = [
+    [/^current password verification failed/i, t("当前密码验证失败，请重新输入。")],
+    [/^cannot remove the last active administrator/i, t("必须保留至少一个启用的管理员账号。")],
+    [/^cannot disable your current account/i, t("不能停用当前登录账号。")],
+    [/^console username already exists/i, t("用户名已存在，请使用其他名称。")],
+    [/^username must be/i, t("用户名需为 3 ~ 64 位英文字母、数字、点、下划线或连字符。")],
+    [/^password must be 8-72 bytes/i, t("密码长度需为 8 ~ 72 字节。")],
     [/^SafeKeep upload settings are managed in system settings$/, t("请在系统设置中修改 SafeKeep 上传配置。")],
     [/^(invalid remote url|remote host cannot be empty|invalid repository path)/i, t("仓库地址格式不正确，请填写 SSH 或 HTTPS 形式的 Git 地址。")],
     [/^(path must be relative|relative path must not contain)/i, t("子目录请填写相对仓库根目录的路径，不能以 / 开头，也不能包含 . 或 ..。")],
@@ -437,6 +456,47 @@
 
   // renderView separates first activation from an authenticated administration session.
   function syncSessionHeader(sessionState) {
+    const identityChanged = state.consoleUsername && sessionState && sessionState.authenticated &&
+      (state.consoleUsername !== sessionState.username || state.consoleRole !== (sessionState.role || "admin"));
+    if (identityChanged) {
+      resetSecretVisibility(true);
+      state.latestToken = "";
+      state.clientConfigTokenID = "";
+      state.visibleTokens = {};
+      state.revealedTokens = {};
+      state.clientConfigRequest = (state.clientConfigRequest || 0) + 1;
+      if (typeof closeConsoleOverlays === "function") closeConsoleOverlays();
+      state.accountSecurityRequest = (state.accountSecurityRequest || 0) + 1;
+      state.activeSessions = [];
+      state.consoleAccounts = [];
+      if (typeof closeConsoleAccount === "function" && state.accountAction) closeConsoleAccount();
+      if ($("active-sessions")) $("active-sessions").textContent = "";
+      if ($("console-accounts-table")?.querySelector("tbody")) $("console-accounts-table").querySelector("tbody").textContent = "";
+      if ($("btn-refresh-sessions")) { $("btn-refresh-sessions").disabled = false; $("btn-refresh-sessions").removeAttribute("aria-busy"); }
+      if ($("account-security-status")) $("account-security-status").textContent = "";
+    }
+    if (sessionState && sessionState.authenticated) {
+      state.consoleRole = sessionState.role || "admin";
+      state.consoleUsername = sessionState.username || "admin";
+    } else {
+      state.consoleRole = "";
+      state.consoleUsername = "";
+      state.accountSecurityRequest = (state.accountSecurityRequest || 0) + 1;
+      state.activeSessions = [];
+      state.consoleAccounts = [];
+      if ($("active-sessions")) $("active-sessions").textContent = "";
+      if ($("console-accounts-table")?.querySelector("tbody")) $("console-accounts-table").querySelector("tbody").textContent = "";
+    }
+    document.documentElement.dataset.consoleRole = state.consoleRole;
+    if ($("console-accounts-card")) $("console-accounts-card").classList.toggle("hidden", state.consoleRole !== "admin");
+    if ($("settings-account-role")) $("settings-account-role").textContent = state.consoleRole === "viewer" ? t("只读运维") : t("管理员");
+    if ($("sidebar-account-role")) $("sidebar-account-role").textContent = state.consoleRole === "viewer" ? t("只读运维") : t("管理员");
+    if ($("console-readonly-notice")) $("console-readonly-notice").classList.toggle("hidden", state.consoleRole !== "viewer");
+    ["safekeep-settings-form", "memory-index-settings-form"].forEach((id) => {
+      if (!$(id)) return;
+      if (state.consoleRole === "viewer") $(id).setAttribute("inert", "");
+      else $(id).removeAttribute("inert");
+    });
     if (sessionState && sessionState.version) {
       state.appVersion = String(sessionState.version).trim();
     }
@@ -463,6 +523,7 @@
       if ($("sidebar-admin-user")) $("sidebar-admin-user").textContent = username;
       if ($("sidebar-user-avatar")) $("sidebar-user-avatar").textContent = username.slice(0, 1).toUpperCase();
     }
+    if (identityChanged && state.settingsTab === "security" && typeof loadAccountSecurity === "function") loadAccountSecurity();
   }
 
   function renderView(sessionState) {
@@ -559,6 +620,7 @@
         } else if (activeTab() === "tab-settings" || activeTab() === "tab-migration") {
           await loadSafekeepSettings();
           if (activeTab() === "tab-settings") await loadMemoryIndexSettings();
+          if (activeTab() === "tab-settings" && state.settingsTab === "security") await loadAccountSecurity();
         }
       }
       await loadRecentMemories();
@@ -2050,6 +2112,128 @@
     }
   });
 
+  // 账号与会话仅按当前登录身份加载，迟到响应不能覆盖切换后的身份。
+  async function loadAccountSecurity() {
+    if (!$("active-sessions") || !state.consoleRole) return;
+    const request = ++state.accountSecurityRequest;
+    const username = state.consoleUsername;
+    const button = $("btn-refresh-sessions");
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    $("account-security-status").textContent = t("正在加载账号与会话…");
+    try {
+      const [sessions, accounts] = await Promise.all([
+        api("/api/admin/sessions"),
+        state.consoleRole === "admin" ? api("/api/admin/accounts") : Promise.resolve({ accounts: [] }),
+      ]);
+      if (request !== state.accountSecurityRequest || username !== state.consoleUsername) return;
+      state.activeSessions = sessions.sessions || [];
+      state.consoleAccounts = accounts.accounts || [];
+      renderAccountSecurity();
+      $("account-security-status").textContent = "";
+    } catch (err) {
+      if (request === state.accountSecurityRequest) $("account-security-status").textContent = err.message;
+    } finally {
+      if (request === state.accountSecurityRequest) { button.disabled = false; button.removeAttribute("aria-busy"); }
+    }
+  }
+
+  function renderAccountSecurity() {
+    $("active-sessions").innerHTML = state.activeSessions.length ? state.activeSessions.map((session) => `
+      <div class="active-session">
+        <div class="active-session-info"><div class="active-session-heading"><strong>${escapeHtml(session.client_ip || "—")}</strong>${session.current ? `<span class="badge success">${t("当前会话")}</span>` : ""}</div>
+          <p class="active-session-agent">${escapeHtml(session.user_agent || t("未知设备"))}</p>
+          <p class="field-hint">${t("登录时间")}：${escapeHtml(formatDate(session.created_at))}</p>
+          <p class="field-hint">${t("最近活动")}：${escapeHtml(formatDate(session.last_seen_at))} · ${t("过期时间")}：${escapeHtml(formatDate(session.expires_at))}</p>
+        </div><button type="button" class="secondary small" data-session-id="${escapeHtml(session.id)}">${t("注销")}</button>
+      </div>`).join("") : `<div class="empty-state">${t("无活跃会话")}</div>`;
+    $("console-accounts-table").querySelector("tbody").innerHTML = state.consoleAccounts.map((account) => `<tr>
+      <td>${escapeHtml(account.username)}</td><td><span class="badge">${account.role === "admin" ? t("管理员") : t("只读运维")}</span></td>
+      <td><span class="badge ${account.disabled ? "warning" : "success"}">${account.disabled ? t("已停用") : t("已启用")}</span></td>
+      <td class="date-cell">${account.last_login_at ? escapeHtml(formatDate(account.last_login_at)) : "—"}</td>
+      <td><div class="row-actions"><button type="button" class="secondary small" data-account-id="${escapeHtml(account.id)}" data-account-action="role">${account.role === "admin" ? t("设为只读") : t("设为管理员")}</button>
+        <button type="button" class="secondary small" data-account-id="${escapeHtml(account.id)}" data-account-action="reset-password">${t("重置密码")}</button>
+        <button type="button" class="secondary small" data-account-id="${escapeHtml(account.id)}" data-account-action="${account.disabled ? "enable" : "disable"}"${!account.disabled && account.username === state.consoleUsername ? " disabled" : ""}>${account.disabled ? t("启用") : t("停用")}</button></div></td>
+    </tr>`).join("");
+  }
+
+  async function revokeConsoleSession(session, button) {
+    button.disabled = true;
+    try {
+      if (session.current && !await confirmDialog({ title: t("注销当前会话"), message: t("注销当前会话将立即退出登录，确认继续吗？"), confirmText: t("确认注销") })) return;
+      await api("/api/admin/sessions/" + encodeURIComponent(session.id), { method: "DELETE" });
+      if (session.current) { dismissReauthToLogin(); return; }
+      showToast(t("会话已注销"));
+      await loadAccountSecurity();
+    } catch (err) { showToast(err.message, true); }
+    finally { button.disabled = false; }
+  }
+
+  function closeConsoleAccount() {
+    $("console-account-modal").classList.add("hidden");
+    resetSecretField($("console-account-password"), true);
+    resetSecretField($("console-actor-password"), true);
+    state.accountAction = null;
+    if (state.accountActionOpener && state.accountActionOpener.isConnected) state.accountActionOpener.focus();
+  }
+
+  function openConsoleAccount(action, account = null) {
+    if (state.consoleRole !== "admin" || $("console-account-form").dataset.submitting === "true") return;
+    state.accountAction = { action, account };
+    state.accountActionOpener = document.activeElement;
+    clearFormErrors($("console-account-form"));
+    resetSecretField($("console-account-password"), true);
+    resetSecretField($("console-actor-password"), true);
+    const titles = { create: t("新增控制台账号"), role: t("修改账号角色"), "reset-password": t("重置账号密码"), enable: t("启用账号"), disable: t("停用账号") };
+    $("console-account-title").textContent = titles[action];
+    $("console-account-description").textContent = account ? t`操作账号：${account.username}。角色变更或停用会注销该账号的全部会话；重置密码会注销其他设备会话。` : t("创建管理员或只读账号，请输入你的当前密码完成二次验证。");
+    $("console-account-username-group").classList.toggle("hidden", action !== "create");
+    $("console-account-username").required = action === "create";
+    $("console-account-username").value = "";
+    $("console-account-role-group").classList.toggle("hidden", action !== "create" && action !== "role");
+    $("console-account-role").value = action === "role" && account.role === "viewer" ? "admin" : "viewer";
+    $("console-account-password-group").classList.toggle("hidden", action !== "create" && action !== "reset-password");
+    $("console-account-password").required = action === "create" || action === "reset-password";
+    $("console-account-modal").classList.remove("hidden");
+    $(action === "create" ? "console-account-username" : "console-actor-password").focus();
+  }
+
+  if ($("btn-open-accounts")) $("btn-open-accounts").addEventListener("click", () => {
+    document.querySelector(".account-menu").open = false;
+    state.settingsTab = "security";
+    switchMainTab("tab-settings");
+  });
+  if ($("btn-refresh-sessions")) $("btn-refresh-sessions").addEventListener("click", loadAccountSecurity);
+  if ($("active-sessions")) $("active-sessions").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-session-id]");
+    if (!button || button.disabled) return;
+    const session = state.activeSessions.find((item) => item.id === button.dataset.sessionId);
+    if (session) revokeConsoleSession(session, button);
+  });
+  if ($("btn-create-console-account")) $("btn-create-console-account").addEventListener("click", () => openConsoleAccount("create"));
+  if ($("console-accounts-table")) $("console-accounts-table").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-account-id]");
+    if (!button || button.disabled) return;
+    const account = state.consoleAccounts.find((item) => item.id === button.dataset.accountId);
+    if (account) openConsoleAccount(button.dataset.accountAction, account);
+  });
+  ["btn-close-console-account", "btn-cancel-console-account"].forEach((id) => { if ($(id)) $(id).addEventListener("click", closeConsoleAccount); });
+  if ($("console-account-modal")) $("console-account-modal").addEventListener("click", (event) => { if (event.target === $("console-account-modal")) closeConsoleAccount(); });
+  if ($("console-account-form")) onSubmit("console-account-form", async (event) => {
+    event.preventDefault();
+    if (!state.accountAction) return;
+    const { action, account } = state.accountAction;
+    const body = { current_password: $("console-actor-password").value };
+    if (action === "create") { body.username = $("console-account-username").value; body.password = $("console-account-password").value; }
+    if (action === "create" || action === "role") body.role = $("console-account-role").value;
+    if (action === "reset-password") body.new_password = $("console-account-password").value;
+    await api("/api/admin/accounts" + (account ? "/" + encodeURIComponent(account.id) + "/" + action : ""), { method: "POST", body: JSON.stringify(body) });
+    closeConsoleAccount();
+    showToast(t("账号设置已更新"));
+    if (action === "role" && account.username === state.consoleUsername) { dismissReauthToLogin(); return; }
+    await loadAccountSecurity();
+  });
+
   // Settings navigation supports the standard tab-list keyboard controls.
   document.querySelectorAll("[data-settings-tab]").forEach((button) => {
     button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab));
@@ -2183,15 +2367,15 @@
     $("current-admin-password").value = "";
     $("new-admin-password").value = "";
     $("confirm-admin-password").value = "";
-    showToast(t("管理员密码已更新！"));
+    showToast(t("登录密码已更新！"));
     renderView(s);
   }, () => !!$("new-admin-password").value || !!$("confirm-admin-password").value);
 
   $("btn-open-change-pwd").addEventListener("click", () => {
     resetSecretVisibility();
     document.querySelector(".account-menu").open = false;
-    $("pwd-view-title").textContent = t("修改管理员密码");
-    $("pwd-view-subtitle").textContent = t("请输入当前密码，再设置新的管理员密码。修改后其他会话需要重新登录。");
+    $("pwd-view-title").textContent = t("修改当前账号密码");
+    $("pwd-view-subtitle").textContent = t("请输入当前密码，再设置新的登录密码。修改后其他会话需要重新登录。");
     $("app-view").classList.add("hidden");
     $("current-admin-password-group").classList.remove("hidden");
     $("current-admin-password").required = true;
@@ -3151,6 +3335,7 @@
     }
   });
   document.addEventListener("keydown", (e) => {
+    const accountOpen = $("console-account-modal") && !$("console-account-modal").classList.contains("hidden");
     const reauthOpen = $("reauth-modal") && !$("reauth-modal").classList.contains("hidden");
     const confirmOpen = !$("confirm-modal").classList.contains("hidden");
     const renameOpen = $("rename-modal") && !$("rename-modal").classList.contains("hidden");
@@ -3170,6 +3355,7 @@
     if (e.key === "Escape") {
       if (reauthOpen) closeReauthModal();
       else if (confirmOpen) state.confirmResolve && state.confirmResolve(false);
+      else if (accountOpen) closeConsoleAccount();
       else if (renameOpen) closeRenameModal();
       else if (remoteEditOpen) closeRemoteEditModal();
       else if (memCreateOpen) closeCreateMemoryModal();
@@ -3198,8 +3384,8 @@
         if (btn && !btn.disabled) { e.preventDefault(); btn.click(); }
       }
     }
-    if (e.key === "Tab" && (reauthOpen || confirmOpen || renameOpen || remoteEditOpen || memCreateOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
-      const dialog = $(reauthOpen ? "reauth-modal" : confirmOpen ? "confirm-modal" : renameOpen ? "rename-modal" : remoteEditOpen ? "remote-edit-modal" : memCreateOpen ? "memory-create-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
+    if (e.key === "Tab" && (reauthOpen || confirmOpen || accountOpen || renameOpen || remoteEditOpen || memCreateOpen || purgeOpen || glossaryOpen || clientConfigOpen || detailOpen || schedConfigOpen || schedHistoryOpen)) {
+      const dialog = $(reauthOpen ? "reauth-modal" : confirmOpen ? "confirm-modal" : accountOpen ? "console-account-modal" : renameOpen ? "rename-modal" : remoteEditOpen ? "remote-edit-modal" : memCreateOpen ? "memory-create-modal" : purgeOpen ? "purge-modal" : schedHistoryOpen ? "scheduler-history-modal" : schedConfigOpen ? "scheduler-config-modal" : glossaryOpen ? "glossary-modal" : clientConfigOpen ? "client-config-modal" : "memory-detail-card");
       const targets = Array.from(dialog.querySelectorAll('button:not([disabled]), a[href], input, select, textarea, summary, [tabindex="0"]')).filter((el) => el.getClientRects().length);
       const first = targets[0], last = targets[targets.length - 1];
       if (!first || !last) return;
@@ -3757,6 +3943,12 @@
     "admin.login": t("登录控制台"),
     "admin.logout": t("退出控制台"),
     "admin.password_change": t("修改管理员密码"),
+    "admin.session_revoke": t("注销登录会话"),
+    "admin.account_create": t("创建控制台账号"),
+    "admin.account_role": t("修改账号角色"),
+    "admin.account_reset_password": t("重置账号密码"),
+    "admin.account_enable": t("启用账号"),
+    "admin.account_disable": t("停用账号"),
     "tenant.create": t("创建租户"),
     "tenant.update": t("更新租户"),
     "tenant.delete": t("删除租户"),
